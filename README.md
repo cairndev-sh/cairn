@@ -128,7 +128,6 @@ The same governed core is driven from four places:
 cairn is in **early access** and under active development. The API and command
 surface may still change between releases.
 
-The source opens here at release; a license is being finalized before a
-formal open-source release — until a `LICENSE` file lands, all rights are
-reserved. Interested in early access or a say in what ships next?
-**[Join the waitlist](https://cairndev.sh).**
+The source opens here at release under the **Apache License 2.0** — see
+[`LICENSE`](./LICENSE). Interested in early access or a say in what ships
+next? **[Join the waitlist](https://cairndev.sh).**
