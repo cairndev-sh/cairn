@@ -5,7 +5,7 @@
 <h1 align="center">cairn</h1>
 
 <p align="center">
-  <b>A self-hosted control plane for governed ModelOps.</b><br>
+  <b>An open-source control plane for governed ModelOps.</b><br>
   Fine-tune, evaluate, promote, and serve models as single governed commands —
   cost-capped before the GPU spins up, policy-gated, and audited end to end.
 </p>
@@ -40,8 +40,10 @@ never imports a pack — that one-way dependency is what lets the same machinery
 run fine-tuning, dataset checks, model evaluation, or incident response, and
 lets any operator inherit the budget, policy gate, and audit for free.
 
-Everything is **self-hosted**: your keys, your GPUs, your logs. Nothing leaves
-your perimeter.
+cairn is **open source** (Apache 2.0) and **self-hosted by default**: your
+keys, your GPUs, your logs — nothing leaves your perimeter. A **managed
+cloud** is in private beta for teams who would rather not run it themselves;
+the engine is the same either way.
 
 ## Why governed?
 
