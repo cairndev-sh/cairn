@@ -64,28 +64,19 @@ work runs behind deterministic guardrails you can inspect afterward:
 
 ## Quickstart
 
-cairn is a Python project managed with [`uv`](https://docs.astral.sh/uv/)
-(Python 3.12+).
+cairn is in **early access** — the source opens here shortly. Until then, the
+docs cover the full CLI, architecture, and governance model:
 
-```bash
-git clone https://github.com/cairndev-sh/cairn.git
-cd cairn
-uv sync --extra dev          # engine + workspace operators + dev deps
+- [Installation](https://docs.cairndev.sh/installation/) — extras (RAG, Temporal, Postgres, PII, telemetry) and the container image
+- [CLI reference](https://docs.cairndev.sh/reference/cli/) — every command
+- **[Join the waitlist](https://cairndev.sh)** for access
 
-uv run cairn doctor          # preflight: packs, bindings, env, services
-uv run cairn ls              # what's installed
-```
-
-Preflight a workflow for a side-effect-free ready/blocked verdict, then run it:
+Once released, a governed run looks like this:
 
 ```bash
 uv run cairn preflight training/finetune -i job.json   # cost, gates, blockers — no spend
 uv run cairn run training/finetune --input job.json    # the governed run
 ```
-
-See the [installation guide](https://docs.cairndev.sh/installation/) for
-optional extras (RAG, Temporal, Postgres, PII, telemetry) and the container
-image.
 
 ## The ModelOps lifecycle
 
@@ -137,6 +128,7 @@ The same governed core is driven from four places:
 cairn is in **early access** and under active development. The API and command
 surface may still change between releases.
 
-The source lives here; a license is being finalized before a formal open-source
-release — until a `LICENSE` file lands, all rights are reserved. Interested in
-early access or a say in what ships next? **[Join the waitlist](https://cairndev.sh).**
+The source opens here at release; a license is being finalized before a
+formal open-source release — until a `LICENSE` file lands, all rights are
+reserved. Interested in early access or a say in what ships next?
+**[Join the waitlist](https://cairndev.sh).**
