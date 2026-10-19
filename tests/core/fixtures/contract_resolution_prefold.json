@@ -1,0 +1,760 @@
+{
+ "definitions": [
+  {
+   "digest": "d0859b1321a9ce43b03f4d60ee0e1fc6167ec4a9f34e40baba2a6eef3f5777a3",
+   "distribution": "cairn-contracts-artifact",
+   "id": "artifact.promote",
+   "kind": "capability",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "888616dea4f9842d76bdccfe21555ec6c6e037e168e31117d8d9a3296c8d642e",
+   "distribution": "cairn-contracts-artifact",
+   "id": "artifact.promote.configuration",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "94110adbb9d4aaca74859d49e219ae60a49e83d150fd28e44e88752ae693f641",
+   "distribution": "cairn-contracts-artifact",
+   "id": "artifact.promote.input",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "1d4acf9fc837d1fbf27522c2a3101319b52cc29a44bcd4bb95c447678e981477",
+   "distribution": "cairn-contracts-artifact",
+   "id": "artifact.promote.output",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "11fb6459e82574576c78150c60ba951e1971511ed327d7c44cbac9a74c324b30",
+   "distribution": "cairn-contracts-audit",
+   "id": "audit.sink",
+   "kind": "capability",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "d23374c59c0c4a9371af21df8465a160e16be839dd79033f6a6ff71b1b5f5dff",
+   "distribution": "cairn-contracts-audit",
+   "id": "audit.sink.configuration",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "0cfc81c5ecc42e52fb666b95acd31365eb005a1d3e4e1f3a803abf7880c3ccdf",
+   "distribution": "cairn-contracts-audit",
+   "id": "audit.sink.input",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "985b5e8ae1219b9fb32d242ef203950bcb5688b6427f68a8b778d88214c1ab6b",
+   "distribution": "cairn-contracts-audit",
+   "id": "audit.sink.output",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "cb89c1133dd6cd758409edfb728112efbd73b94f039787887c00f983fd428137",
+   "distribution": "cairn-contracts-data",
+   "id": "data.profile",
+   "kind": "capability",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "cfb592d9eaa862717e6ff7dcc14c8b4e621f92daacfc00f813b2e72472b5fbc0",
+   "distribution": "cairn-contracts-data",
+   "id": "data.profile.configuration",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "98781d03d14770cda29485759eeade0cb528a4239cef74a6a0a5a80732baa7c9",
+   "distribution": "cairn-contracts-data",
+   "id": "data.profile.input",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "0a93bed6cc7947260c30310d79ee20131a650f307252ce5da175664a6f40d0fd",
+   "distribution": "cairn-contracts-data",
+   "id": "data.profile.output",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "1add954799949a72c0943374169ac7b972e8ce032cb285257e07ec83ce266bdb",
+   "distribution": "cairn-contracts-dataflow",
+   "id": "dataflow.run",
+   "kind": "capability",
+   "revision": "1.0.0",
+   "version": "1.1.0"
+  },
+  {
+   "digest": "4675c3c0442a4c4b9c71eefbc46fe5ec94a825600a2fce246d956123bc65fc52",
+   "distribution": "cairn-contracts-dataflow",
+   "id": "dataflow.run.configuration",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.1.0"
+  },
+  {
+   "digest": "21e87e3940ac6b62d157b3e979c2ab5bc90c4eb2a714ce36fa96e0056169cadb",
+   "distribution": "cairn-contracts-dataflow",
+   "id": "dataflow.run.input",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.1.0"
+  },
+  {
+   "digest": "3a9388c3df464acb3e816e3361a7d425a6cead3d59f194a7248dce7e1c5f0345",
+   "distribution": "cairn-contracts-dataflow",
+   "id": "dataflow.run.output",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.1.0"
+  },
+  {
+   "digest": "ade24aefc7ee3676a14c5d00533d7a74429fae949e3db0335e428a44c6dbc23c",
+   "distribution": "cairn-contracts-dataflow",
+   "id": "ml.run",
+   "kind": "capability",
+   "revision": "1.0.0",
+   "version": "1.1.0"
+  },
+  {
+   "digest": "f1043ced61d9f6cb58fc56c00173dcec253bb51760b632d38e0d19883d9d9944",
+   "distribution": "cairn-contracts-dataflow",
+   "id": "ml.run.configuration",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.1.0"
+  },
+  {
+   "digest": "8b81a1aa20bd47280d5af26e15d6b8bd11edef911bc406dc57ca2f373063e358",
+   "distribution": "cairn-contracts-dataflow",
+   "id": "ml.run.input",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.1.0"
+  },
+  {
+   "digest": "c9536acf4f3b41c2da3f0bc0bb45172de8c9d698632bf2200986d1fb96802b5b",
+   "distribution": "cairn-contracts-dataflow",
+   "id": "ml.run.output",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.1.0"
+  },
+  {
+   "digest": "b6a9e4b51854eaa49dc26f81ed616f096ff147cdf6707a2c2fc49a4a81947af4",
+   "distribution": "cairn-contracts-mcp",
+   "id": "mcp.call",
+   "kind": "capability",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "5186418bba15027b34ea94a7eb468b16abc912bee8499cd72dd7d48493724997",
+   "distribution": "cairn-contracts-mcp",
+   "id": "mcp.call.configuration",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "693fae556084e4f84d4dcf3fdc04ec52bf56b992af19b9aaee6514e36777879d",
+   "distribution": "cairn-contracts-mcp",
+   "id": "mcp.call.input",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "4b1cc0aa87a56ccd58d412fe0bde1a42c0c745473fa7dad6123585ee37d5d1e2",
+   "distribution": "cairn-contracts-mcp",
+   "id": "mcp.call.output",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "b6db0776ccd0431e3253c751b50f251ec1b6031766ad8b1c27e5bf420fca48e6",
+   "distribution": "cairn-contracts-memory",
+   "id": "memory.search",
+   "kind": "capability",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "6ef66f14782cb5fe623d9ccff0925b2d6ef20015fdc22d1dc0cafa0721d0a377",
+   "distribution": "cairn-contracts-memory",
+   "id": "memory.search.configuration",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "2774467525a22ae1df6fecbc1b4381543fc21f54fec253002be1cf95478b9c64",
+   "distribution": "cairn-contracts-memory",
+   "id": "memory.search.input",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "679ce0132ab45bd79d3c86a5eeb4cb3019ef2e8915608b64bb6a559e44150f36",
+   "distribution": "cairn-contracts-memory",
+   "id": "memory.search.output",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "0f63be611cd2139b0d677a01d742a6a346e17f5fd02922b7b5e0cd5078f7a773",
+   "distribution": "cairn-contracts-memory",
+   "id": "memory.write",
+   "kind": "capability",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "04e0479e2bf5bb4faa3de1c1f2e3a594d2ea80316b69778d5c445e7d997d3bf5",
+   "distribution": "cairn-contracts-memory",
+   "id": "memory.write.configuration",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "4e534d578d8d761c90f5c1bf7c2c1cbc0f48c5bc3adeaa364a0e0fe31a7dcd56",
+   "distribution": "cairn-contracts-memory",
+   "id": "memory.write.input",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "1ebd1a78bc165f68392cadc25c21dc1c5dd7654c2f6b3ea1559691138c292438",
+   "distribution": "cairn-contracts-memory",
+   "id": "memory.write.output",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "22164bcc6a33bf6e6b2315d7fa77ce583ab84e6ba8d7442a0afa28dc8f1f276f",
+   "distribution": "cairn-contracts-monitor",
+   "id": "monitor.dispatch",
+   "kind": "capability",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "90b62a0719b65cdbffab0fd3c00b5aa74f17eb09f3a3de36a6ebf7cda8784766",
+   "distribution": "cairn-contracts-monitor",
+   "id": "monitor.dispatch.configuration",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "7c7a387659c7ce3d081fe264b968055b84eec62ab5462b06ea2d86f7e7be1de2",
+   "distribution": "cairn-contracts-monitor",
+   "id": "monitor.dispatch.input",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "b588ce3fbab64796050c8ca963caf0fa709f144990ffb2d681d960147b66d240",
+   "distribution": "cairn-contracts-monitor",
+   "id": "monitor.dispatch.output",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "ccd6a1f9c88c81798098e99d9763b1107a324cad6bde45c5ee820cc43ffd5149",
+   "distribution": "cairn-contracts-monitor",
+   "id": "monitor.propose",
+   "kind": "capability",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "20cfb493a2d165d41d7e1a1997d3945e74baf61ab8b77a1abe4b2c5d784cbbe7",
+   "distribution": "cairn-contracts-monitor",
+   "id": "monitor.propose.configuration",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "ebeb1c71d491edfe41d9bb083d8a76335e108add95fbc3c96c6e67b72352c9de",
+   "distribution": "cairn-contracts-monitor",
+   "id": "monitor.propose.input",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "28314ada6d8f936a125a91f119d4d4e75709f86e93505f6428f522ddd9fd96fd",
+   "distribution": "cairn-contracts-monitor",
+   "id": "monitor.propose.output",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "bb895c095a2ef3652ec684815d5713d3514eeafafeca1859f5e2ae63b46a6375",
+   "distribution": "cairn-contracts-monitor",
+   "id": "monitor.threshold",
+   "kind": "capability",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "ea7c1a333a166075d1f83ab47c0743034443eee26143f20581c1fa168fec3f9b",
+   "distribution": "cairn-contracts-monitor",
+   "id": "monitor.threshold.configuration",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "698112d46f2fa63a8c80c8ab7a50f1b41c1fa52475cb84f8a39ac5737d2140bf",
+   "distribution": "cairn-contracts-monitor",
+   "id": "monitor.threshold.input",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "7837661686cb8619ad5f3e9a0ba56540de7e52064e94bbdb93657591a66ad20b",
+   "distribution": "cairn-contracts-monitor",
+   "id": "monitor.threshold.output",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "88347242ca2ea56324cdc5ff33291a315367a6d2159be4fc78da80ba658b7b95",
+   "distribution": "cairn-contracts-rag",
+   "id": "rag.fetch",
+   "kind": "capability",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "38975ad1ea1790a7a76d6b6bc9a68d1e5c5ba25b8d65c780432a5c774a442f1a",
+   "distribution": "cairn-contracts-rag",
+   "id": "rag.fetch.configuration",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "db6a51642b0159a75e0b113880332562fe71266b3eb07c035a3c34a484620471",
+   "distribution": "cairn-contracts-rag",
+   "id": "rag.fetch.input",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "9e61786178a2550b90c22f4af25fe098ed371648e05acff4575d93e99cf252b1",
+   "distribution": "cairn-contracts-rag",
+   "id": "rag.fetch.output",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "a301b7c1ad444a556d149df2b19c2897cb8b51320f3952e2625a7e04f8393cb2",
+   "distribution": "cairn-contracts-rag",
+   "id": "rag.rerank",
+   "kind": "capability",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "ba9614e3a3f42d1a74f2435154d18cba575d8fa7a412559e6f599917110991de",
+   "distribution": "cairn-contracts-rag",
+   "id": "rag.rerank.configuration",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "3178218c8a94e89e0a92166b69e57c5fa0d0611639db1fe576fe48a3db16bb30",
+   "distribution": "cairn-contracts-rag",
+   "id": "rag.rerank.input",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "336a68de60a08c00ad38ad2577ac3177d1bd1cd15dc61a5c0eb9c007cc7dbd7d",
+   "distribution": "cairn-contracts-rag",
+   "id": "rag.rerank.output",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "abce02c45409d228eaaab520e49286a410a7cc1ea757d2ff6257c6eb4469fe52",
+   "distribution": "cairn-contracts-rag",
+   "id": "rag.search",
+   "kind": "capability",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "220ee6614a37654f478fb570eb87cba0ca7d7734dcf0f803b1b13d77d6e9eb7c",
+   "distribution": "cairn-contracts-rag",
+   "id": "rag.search.configuration",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "a0e92b3717656036fef3a280d879863652a65c555d1ec6d40d0e0eda02046fa0",
+   "distribution": "cairn-contracts-rag",
+   "id": "rag.search.input",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "7f2da4250c1ec634799f82d72b73fff32a17c9a3db8b977a439fe4c856abf6b7",
+   "distribution": "cairn-contracts-rag",
+   "id": "rag.search.output",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "37c2efa3c3b93ef781495645e9132d923b67c8af4dd64e186dd48bc4d84dd9c7",
+   "distribution": "cairn-contracts-redact",
+   "id": "redact.text",
+   "kind": "capability",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "c4dd7c98e134def4fb871eaca255c579ef19c2cee2d1a1bba6814f696d536209",
+   "distribution": "cairn-contracts-redact",
+   "id": "redact.text.configuration",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "70203b65d01165140930b145eb46b1880539827bb90cb9da73c7bd8caadc65f7",
+   "distribution": "cairn-contracts-redact",
+   "id": "redact.text.input",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "ada5552e3b412a6230d39c3c2f569c49b6f700594a14891256865eaadc8aa780",
+   "distribution": "cairn-contracts-redact",
+   "id": "redact.text.output",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "eb9b49c13a4ba8267c29124b4fe93e91c4da4fe1f9b60dc694ead274dd30dd81",
+   "distribution": "cairn-contracts-remote",
+   "id": "remote.exec",
+   "kind": "capability",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "2fcd85dfcaa3e30552578d44986ff57d386991e4aab52b4a498aa6b7c1acc163",
+   "distribution": "cairn-contracts-remote",
+   "id": "remote.exec.configuration",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "475c27ae19b6254ac15ea62204189bfbb3534a33f41f32e82aebef5deb0ab25c",
+   "distribution": "cairn-contracts-remote",
+   "id": "remote.exec.input",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "6a8288a890bfd96aa1b2f5ed19f06bba4a96414653ba61a20a4f00dba6c7e269",
+   "distribution": "cairn-contracts-remote",
+   "id": "remote.exec.output",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "7ac01c6dfb755c1328e0aa8bd3ee6de4f846e2ff795d65cbfd7700dbd4f14635",
+   "distribution": "cairn-contracts-secrets",
+   "id": "secrets.store",
+   "kind": "capability",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "88b9b0480b42016734d5c998033be48fa45a82f2d9d568504da8d8bed3db3115",
+   "distribution": "cairn-contracts-secrets",
+   "id": "secrets.store.configuration",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "ca67cd0f4592f258880b9d6a0e6fb0d833af67ef378dd5d950ad53608b44c024",
+   "distribution": "cairn-contracts-secrets",
+   "id": "secrets.store.input",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "a7d7ccde82011e4fceef920d4240e0d1de17ad113c0226482626f30d7cae3835",
+   "distribution": "cairn-contracts-secrets",
+   "id": "secrets.store.output",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "6db08f08e0eeafc867a2d734ef5b7a307654a646b5101e26e797e5e4f43e2c22",
+   "distribution": "cairn-contracts-storage",
+   "id": "storage.get",
+   "kind": "capability",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "d6b2716555c42af61fe2318874576bcc2e08e2e1928403a16097fc84aac1ff1a",
+   "distribution": "cairn-contracts-storage",
+   "id": "storage.get.configuration",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "ba4d89b53df951addab0707311d61de1155ec5ca9cbba0b1ea04e1e5b1405a89",
+   "distribution": "cairn-contracts-storage",
+   "id": "storage.get.input",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "e38fe21f503554c07ddc4ef3b5d3cc352dd5cade41df6eca0e3f9223e1795c90",
+   "distribution": "cairn-contracts-storage",
+   "id": "storage.get.output",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "e829eb589350051fbf9d6e339418c08556f4d0f1274c780580ff794769851402",
+   "distribution": "cairn-contracts-storage",
+   "id": "storage.put",
+   "kind": "capability",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "efde120d25e03b5bce9604ec61e070666403020e92db7fe2a2136bf59ec34a96",
+   "distribution": "cairn-contracts-storage",
+   "id": "storage.put.configuration",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "4649216d7cc9771233ab02632bc25c994fc174a26128ee41e7ee26533ebb93fe",
+   "distribution": "cairn-contracts-storage",
+   "id": "storage.put.input",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "5a06cde540761ec2ee09d5078b915f98432736caf1cf096f218b10ca8a5990cd",
+   "distribution": "cairn-contracts-storage",
+   "id": "storage.put.output",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "d8fc495b423faa7853d8fdfdda818ac9f3bbf6cd1c6f7c65e4d26d4b351fff2a",
+   "distribution": "cairn-contracts-train",
+   "id": "train.eval_loss",
+   "kind": "capability",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "d8ddff87751a5297c5e40e24598d4d3c9d3f1c7bc43a994e5dd8976de372a0b0",
+   "distribution": "cairn-contracts-train",
+   "id": "train.eval_loss.configuration",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "51e1ba3453b41a4832567fae867bdfc0ff31f92caf138c879ca41a8045244e3a",
+   "distribution": "cairn-contracts-train",
+   "id": "train.eval_loss.input",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "103116c534b52b2e745aad8e7afb9554765df270e1575fd66ca350437904926f",
+   "distribution": "cairn-contracts-train",
+   "id": "train.eval_loss.output",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "3f63d84c7310ae02db5a88ec28ac384a726046893a667c217b0b83a8d9826efc",
+   "distribution": "cairn-contracts-train",
+   "id": "train.eval_loss.report",
+   "kind": "report",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "38c75f4c8be669b2b48793d27db0959abea4d563319778b516b3bd543e75de30",
+   "distribution": "cairn-contracts-train",
+   "id": "train.finetune",
+   "kind": "capability",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "9feb86df28518af7fc58d0b4e9ee67552cb72d67c145aa2506fbcf89c5b3e34a",
+   "distribution": "cairn-contracts-train",
+   "id": "train.finetune.configuration",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "212e75631265bd21649f7974a52849961e9c73a2b83e113f2d68f663d90b9783",
+   "distribution": "cairn-contracts-train",
+   "id": "train.finetune.input",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "88d19cdc26ba5f267a6e5902d6611c2f6f7838f1b24ce5132841aba478dd25f2",
+   "distribution": "cairn-contracts-train",
+   "id": "train.finetune.output",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "8b108ae6daf2ac9f3549dbdd4a772f906b5cdee09be4f1caa15a8612139bd606",
+   "distribution": "cairn-contracts-train",
+   "id": "train.finetune.report",
+   "kind": "report",
+   "revision": "1.0.0",
+   "version": "1.0.0"
+  }
+ ],
+ "distributions": [
+  {
+   "digest": "ecb02bfd8e9385e26c9c88c95c5c2853668d97db58992e91d708b64042b94947",
+   "name": "cairn-contracts-artifact",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "bdf0ac6b784914152effe83f005273e6af731fe14653bbab9c2d008d0d0e167b",
+   "name": "cairn-contracts-audit",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "c52d8218a74786fe2c0dcc13c4115512e7dcfbf0cf27c91178c7ced2e4873ca3",
+   "name": "cairn-contracts-data",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "083ceb2837e078b7520d208cc97c5ee7417d15f49db06c03391ac71e49abd726",
+   "name": "cairn-contracts-dataflow",
+   "version": "1.1.0"
+  },
+  {
+   "digest": "c47bf1c83e02809ce351636a3a3048bf08ae20eeb5480e6afb18e454080ab72d",
+   "name": "cairn-contracts-mcp",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "4aa1c17e77d726d2136a82b8da8a77bf6ca09cfc8a4b416295277bde080d6752",
+   "name": "cairn-contracts-memory",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "9531eed509ea09cc06ff0cc25ffd9918d3609a75d9d72d57b9759a019766170f",
+   "name": "cairn-contracts-monitor",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "2e6b87543a35eda68a9223205595b1b86b2e81856d228e98d71af3ef671cfc29",
+   "name": "cairn-contracts-rag",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "2a4da34ec85915140ad5663271cf7ce53071a35017f67d1ac9f21cad9d10bc35",
+   "name": "cairn-contracts-redact",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "ad3694b2b4dda073cf8f6439f8cbee9ff430cc512c5785871cd7ed5f276e3f6d",
+   "name": "cairn-contracts-remote",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "77fbe7b08a2df9f4238f55035fcfec1d7137ef1811090742ab70ab29f117642c",
+   "name": "cairn-contracts-secrets",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "63e0bd2e0e8c64f542ca526c37161decfb9ef7c7517fb49d3d5d737cce57f45c",
+   "name": "cairn-contracts-storage",
+   "version": "1.0.0"
+  },
+  {
+   "digest": "34b550bcfdc74562fce58bd65121ef3b83a2fc1939b9fc4d5331587c5be55d60",
+   "name": "cairn-contracts-train",
+   "version": "1.0.0"
+  }
+ ],
+ "format": "cairn.resolution/1"
+}
