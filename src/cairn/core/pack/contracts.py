@@ -188,19 +188,22 @@ def _discover(distributions: Iterable[Distribution] | None
     engine_hosts = 0
     for dist in installed_distributions() if distributions is None else distributions:
         try:
-            inventory = {str(path) for path in (dist.files or ())}
-            descriptors = _descriptors(inventory)
-            if not descriptors:
-                continue
-            host = _string(dist.metadata.get("Name"))
-            hosted = canonicalize_name(host) == ENGINE_DISTRIBUTION
+            raw_name = dist.metadata.get("Name")
+            hosted = isinstance(raw_name, str) and canonicalize_name(raw_name) == ENGINE_DISTRIBUTION
             if hosted:
                 # One engine is the only host (owner decision 2a): a second dist-info named after it
                 # (a shadowed install on another sys.path entry) never hosts packages of its own.
+                # Counted before its inventory is read: a stale engine that carries no contracts
+                # still makes "which engine hosts them" ambiguous (PR1 review N1b).
                 engine_hosts += 1
                 if engine_hosts > 1:
                     raise ContractDiscoveryError(
                         f"more than one {ENGINE_DISTRIBUTION} distribution is installed: remove the stale one")
+            inventory = {str(path) for path in (dist.files or ())}
+            descriptors = _descriptors(inventory)
+            if not descriptors:
+                continue
+            host = _string(raw_name)
             if not hosted and len(descriptors) != 1:
                 raise ContractDiscoveryError("contract distribution must inventory exactly one descriptor")
             for descriptor in descriptors:

@@ -926,6 +926,38 @@ def test_a_second_engine_named_distribution_never_hosts(tmp_path):
         resolve(host(tmp_path, [hosted_alpha()]), host(tmp_path, [hosted_alpha()], version='0.2.0'))
 
 
+def test_a_second_engine_hosting_other_packages_is_refused_too(tmp_path):
+    """PR1 review N1: the refusal is the engine count, not the duplicate-package rule — two
+    ``cairndev`` dist-infos hosting DISJOINT packages are refused as well."""
+    first = host(tmp_path, [hosted_alpha()])
+    second = host(tmp_path, [hosted_beta()], version='0.2.0')
+    with pytest.raises(ContractDiscoveryError, match='more than one cairndev distribution'):
+        resolve(first, second)
+
+
+@pytest.mark.parametrize('stale_first', [True, False])
+def test_a_stale_engine_without_contracts_still_counts(tmp_path, stale_first):
+    """PR1 review N1b: a second ``cairndev`` dist-info that carries no ``cairn_contracts/`` (an
+    older engine on another sys.path entry) is counted before its inventory is read, so it
+    cannot leave which engine hosts the packages ambiguous — in either order."""
+    hosting = engine(tmp_path)
+    stale = host(tmp_path, [], version='0.0.9')
+    order = (stale, hosting) if stale_first else (hosting, stale)
+    with pytest.raises(ContractDiscoveryError, match='more than one cairndev distribution'):
+        resolve(*order)
+
+
+def test_a_distribution_without_a_name_and_without_contracts_is_skipped(tmp_path):
+    """Counting engines reads every distribution's name; one with broken metadata that carries
+    no contracts must stay skipped, as before."""
+    info = tmp_path / 'broken-1.0.dist-info'
+    info.mkdir()
+    (info / 'METADATA').write_text('Metadata-Version: 2.1\nVersion: 1.0\n')
+    (info / 'RECORD').write_text('')
+    assert [d.name for d in resolve(PathDistribution(info), engine(tmp_path))] == [
+        'alpha-contracts', 'beta-contracts']
+
+
 def test_a_non_engine_distribution_with_two_descriptors_refuses(tmp_path):
     with pytest.raises(ContractDiscoveryError, match='exactly one descriptor'):
         resolve(engine(tmp_path, name='other-engine'))
