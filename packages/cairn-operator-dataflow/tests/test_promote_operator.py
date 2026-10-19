@@ -7,6 +7,9 @@ report a move that didn't happen."""
 from __future__ import annotations
 
 import asyncio
+from importlib.metadata import PackageNotFoundError, distribution
+
+import pytest
 
 from cairn.core.operator import OperationContext, default_registry, load_all_operators
 from cairn.core.storage.artifacts import ArtifactDescriptor, SqliteArtifactStore
@@ -67,6 +70,17 @@ def test_mock_never_promotes():
     assert out.promoted is False
 
 
+def _installed(name: str) -> bool:
+    try:
+        distribution(name)
+    except PackageNotFoundError:
+        return False
+    return True
+
+
+@pytest.mark.skipif(not _installed("cairn-pack-dataset-readiness"),
+                    reason="the template is cairn/packs/dataset_readiness/flows/promote.md, shipped by the "
+                           "platform-only cairn-pack-dataset-readiness, which is not installed")
 def test_promote_template_compiles_gated():
     """The template binds the operator; the gate flag makes the compiled graph
     checkpointed so the run can durably pause and resume."""

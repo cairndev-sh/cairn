@@ -4,7 +4,7 @@ entry point. Evidence beside the stage's own stats; the control plane folds it
 into the version's check map."""
 from __future__ import annotations
 
-from importlib.metadata import entry_points
+from importlib.metadata import PackageNotFoundError, distribution, entry_points
 from pathlib import Path
 
 import pytest
@@ -22,10 +22,24 @@ def _noop_dist_version() -> str:
     return ep.dist.version
 
 
+def _installed(name: str) -> bool:
+    try:
+        distribution(name)
+    except PackageNotFoundError:
+        return False
+    return True
+
+
 def test_every_registered_kernel_has_a_distribution_version():
     versions = stage_versions()
     assert versions["noop"] == _noop_dist_version()
-    assert "ingest.normalize" in versions          # the dataset-checks kernels register their own distribution
+
+
+@pytest.mark.skipif(not _installed("cairn-operator-dataset-checks"),
+                    reason="`ingest.normalize` is registered by the platform-only "
+                           "cairn-operator-dataset-checks, which is not installed")
+def test_the_dataset_checks_kernels_register_their_own_distribution():
+    assert "ingest.normalize" in stage_versions()
 
 
 def test_the_runner_stamps_the_kernel_version_on_each_stage(tmp_path: Path):

@@ -183,7 +183,15 @@ def test_the_sdist_keeps_every_path_the_wheel_takes():
 
 
 def test_no_folded_directory_builds():
-    for d in FOLDED:
+    """Independent of ``FOLDED`` (which IS the no-build-system predicate): the directories the
+    root wheel takes sources from (its ``packages`` and ``force-include``) are the folded ones,
+    and none of them builds on its own."""
+    taken = {REPO.joinpath(*PurePosixPath(p).parts[:2])
+             for p in [*HATCH["wheel"]["packages"], *HATCH["wheel"]["force-include"]]
+             if PurePosixPath(p).parts[0] == "packages"}
+    assert len(taken) == 27, sorted(d.name for d in taken)
+    assert taken == set(FOLDED), sorted(d.name for d in taken ^ set(FOLDED))
+    for d in taken:
         text = (d / "pyproject.toml").read_text()
         assert "build-system" not in tomllib.loads(text), d.name
         assert "FOLDED INTO cairndev (ADR-0137" in text, f"{d.name}: no header saying where it went"
