@@ -19,6 +19,7 @@ keeps this file from arming that landmine for the whole suite.
 from __future__ import annotations
 
 import json
+from importlib.metadata import packages_distributions
 
 import typer
 from typer.testing import CliRunner
@@ -50,7 +51,9 @@ def test_it_answers_what_runs_a_kernel(example_pack):
     The name-matched operator half is pinned on an official pack in
     tests/packs/test_cli_on_shipped_packs.py."""
     row = next(r for r in _rows() if "noop" in r["kernels"])
-    assert row["distribution"] == "cairn-operator-dataflow"
+    # the distribution that ships the builtin dataflow pack, whatever this layout names it
+    # (`cairndev` since the fold, ADR-0137; its own wheel before)
+    assert [row["distribution"]] == packages_distributions()["operator_dataflow"]
     assert any(u.startswith("hello-cairn/") for u in row["used_by"]), row
 
 

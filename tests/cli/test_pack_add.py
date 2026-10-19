@@ -93,8 +93,9 @@ def test_the_new_lines_land_inside_the_right_sections():
     assert "packs/mypack" in data["tool"]["uv"]["workspace"]["members"]
     assert "mypack" in data["project"]["dependencies"]
     assert data["tool"]["uv"]["sources"]["mypack"] == {"workspace": True}
-    # and it is wired the same way the shipped packs are (a builtin: every tree has it)
-    assert data["tool"]["uv"]["sources"]["cairn-operator-mcp"] == {"workspace": True}
+    # and it is wired the same way the shipped members are (the client: every tree builds it
+    # beside the engine; the builtin packs are inside the engine wheel, ADR-0137)
+    assert data["tool"]["uv"]["sources"]["cairn-client"] == {"workspace": True}
 
 
 def test_comments_survive():
@@ -118,7 +119,7 @@ def test_editing_twice_is_a_no_op():
 
 def test_an_already_shipped_pack_is_recognised_as_wired():
     _, changes = pack_mod.wire_pack_into_pyproject(
-        ROOT_PYPROJECT, member="packages/cairn-operator-mcp", dist="cairn-operator-mcp")
+        ROOT_PYPROJECT, member="packages/cairn-client", dist="cairn-client")
     assert changes == []
 
 
