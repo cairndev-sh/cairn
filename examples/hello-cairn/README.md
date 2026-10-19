@@ -137,8 +137,8 @@ infisical`, and `INFISICAL_CLIENT_ID`, `INFISICAL_CLIENT_SECRET`, `INFISICAL_PRO
 
 **tiny-finetune**
 
-Needs the builtin train-local pack and its training stack on the engine's box:
-`cairn-operator-train-local[train]` (torch, transformers, peft, datasets; CPU is enough;
+Needs the builtin train-local pack (inside `cairndev`) and its training stack on the engine's
+box: `cairndev[train]` (torch, transformers, peft, datasets; CPU is enough;
 there is no torch wheel for Intel macOS).
 
 ```bash

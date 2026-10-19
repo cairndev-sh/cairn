@@ -5,4 +5,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ## [Unreleased]
 
 ### Added
-- First public release of the engine (`cairndev`), the builtin operator packs, the core contracts, `cairn-client` (2026-10-20).
+- 0.1.1, the first complete public release: the engine `cairndev`, `cairn-client`, the optional Metaflow and SkyPilot dataflow engines (`cairn-operator-dataflow-metaflow`, `cairn-operator-dataflow-skypilot`) and the example pack `cairn-pack-hello`.
+
+### Changed
+- The builtin operator packs and the core contracts ship inside the `cairndev` wheel (ADR-0137): they are no longer distributions of their own, and their extras are `cairndev` extras (`ssh`, `train`, `infisical`, `dataflow-engine`, `rerank-cross-encoder`, `rerank-cohere`).

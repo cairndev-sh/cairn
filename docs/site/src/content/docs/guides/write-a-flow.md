@@ -11,9 +11,10 @@ pack from [Write a pipeline](/guides/write-a-pipeline/) is registered.
 ## 1. Pick the stages
 
 A data flow is an ordered list of **stages**. Each stage is a function that an
-installed package registers. These ship with cairn:
+installed package registers. These ship inside the `cairndev` wheel (the pack is
+its directory under `packages/`):
 
-| Stage | Package | Does |
+| Stage | Pack | Does |
 |---|---|---|
 | `noop` | `cairn-operator-dataflow` | nothing to the data; with `register:` and `source:` it records `source`'s content as a version of the dataset `register` names |
 | `noop.slow` | `cairn-operator-dataflow` | sleeps `seconds:` (default 30), for testing long legs and cancellation |

@@ -178,7 +178,7 @@ is the shortest path in `uv.lock` from a cairn distribution.
 
 | Name | Version | Licence | Pulled in by | Note |
 |---|---|---|---|---|
-| asyncssh | 2.23.1 | EPL-2.0 OR GPL-2.0-or-later | cairn-operator-remote[ssh] → asyncssh | Elect EPL-2.0. Used unmodified through import. Not in the base install (#2419): the root's `[ssh]` extra (`cairn-operator-remote[ssh]` / `cairn-operator-serving[ssh]`), which the engine image installs. |
+| asyncssh | 2.23.1 | EPL-2.0 OR GPL-2.0-or-later | cairndev[ssh] → asyncssh | Elect EPL-2.0. Used unmodified through import. Not in the base install (#2419): the root's `[ssh]` extra (the builtin remote pack's, carried by `cairndev`, ADR-0137; the platform's `cairn-operator-serving[ssh]`), which the engine image installs. |
 | psycopg | 3.3.4 | LGPL-3.0-only | cairn[runtime-dbos] → dbos → psycopg | Engine image. Used unmodified through import; the image redistributes the wheel, so ship the LGPL-3.0 text and point at https://github.com/psycopg/psycopg. |
 | psycopg-binary | 3.3.4 | LGPL-3.0-only | cairn[runtime-dbos] → dbos → psycopg[binary] → psycopg-binary | As psycopg (bundles libpq; see its own notices). |
 | psycopg-pool | 3.3.1 | LGPL-3.0-only | cairn[runtime-postgres] → langgraph-checkpoint-postgres → psycopg-pool | As psycopg. |

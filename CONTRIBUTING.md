@@ -76,6 +76,12 @@ npm run build --prefix console     # console typecheck + bundle
 npm run lint  --prefix console     # oxlint
 ```
 
+The builtin operator packs and the core contracts are part of the `cairndev`
+project (ADR-0137). An editable install reads the packs' code and `pack.toml`
+from `packages/`, but holds COPIES of the contract definitions
+(`packages/cairn-contracts-*/definitions`). After editing a contract, refresh
+them: `uv sync --reinstall-package cairndev` (with the extras you use).
+
 Prefer `.venv/bin/pytest` over `uv run pytest`: `uv run` re-syncs the
 environment first, which strips any extras not named on that exact command
 (see the quickstart warning).

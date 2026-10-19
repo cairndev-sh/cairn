@@ -6,10 +6,10 @@ description: Every operator that ships with cairn, the capabilities it provides,
 An **operator** is the code that does one kind of work. A step asks for a
 **capability**, and the environment binds that capability to an operator (see
 [Capabilities and environments](/concepts/capabilities/)). This page lists the
-22 operators that ship with the open-source core, grouped by the package that
-contains them. Each package is installed with `cairndev`, except the Metaflow
-and SkyPilot engines (the `metaflow` and `skypilot` extras) and the training
-stack `train/lora` needs (the `train` extra).
+22 operators that ship with the open-source core, grouped by the pack that
+contains them. The builtin packs ship inside the `cairndev` wheel; the Metaflow
+and SkyPilot engines are wheels of their own (the `metaflow` and `skypilot`
+extras), and the training stack `train/lora` needs is the `train` extra.
 
 :::note[From the manifests]
 Every row comes from the operator package's `pack.toml` manifest
@@ -42,7 +42,7 @@ wherever it runs (see [Approvals an operator asks for](/concepts/gates/#approval
 
 ## Built in
 
-Installed with cairn.
+Inside the `cairndev` wheel; each heading is the pack's directory under `packages/`.
 
 ### `cairn-operator-artifact-local`
 

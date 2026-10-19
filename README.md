@@ -66,9 +66,10 @@ work runs behind deterministic guardrails you can inspect afterward:
 
 ## Quickstart
 
-The engine ships as the `cairndev` distribution (import name `cairn`), with the builtin
-operator packs (14) and the core contracts (13) as sibling packages in
-this repository.
+The engine ships as the `cairndev` distribution (import name `cairn`). The `cairndev` wheel
+carries the builtin operator packs (14) and the core contracts (13); their sources live under
+`packages/` in this repository. The public release is five wheels: `cairndev`, `cairn-client`,
+the optional Metaflow and SkyPilot engines, and the example pack `cairn-pack-hello`.
 
 ```bash
 git clone https://github.com/cairndev-sh/cairn && cd cairn

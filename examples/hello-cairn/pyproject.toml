@@ -30,7 +30,7 @@ dependencies = ["cairndev>=0.1.0"]
 # for retrieval and memory (ask-the-docs), asyncssh for remote/exec (nightly-ops),
 # the DBOS durable runtime (CAIRN_RUNTIME=dbos). The MCP client and the FastMCP
 # server ship with the engine's base dependencies. `cairndev[hello]` pulls this.
-# tiny-finetune's training stack is separate and large: cairn-operator-train-local[train].
+# tiny-finetune's training stack is separate and large: cairndev[train].
 all = ["cairndev[rag-sqlite-vec,ssh,runtime-dbos]>=0.1.0"]
 
 [project.entry-points."cairn.packs"]

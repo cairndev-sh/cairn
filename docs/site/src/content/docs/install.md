@@ -16,7 +16,7 @@ sudo. Choose extras or pin a version with environment variables:
 
 ```bash
 curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_EXTRAS=hello,rag sh
-curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_VERSION=0.1.0 sh
+curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_VERSION=0.1.1 sh
 ```
 
 | Variable | Default | |
@@ -33,7 +33,9 @@ uv tool install cairndev          # or: pipx install cairndev
 ```
 
 The distribution is `cairndev`; the command and the import name are `cairn`.
-To remove it: `uv tool uninstall cairndev`.
+The builtin operator packs and the core contracts ship inside the `cairndev`
+wheel, so there is nothing else to install for them; their extras are
+`cairndev` extras (below). To remove it: `uv tool uninstall cairndev`.
 
 Check the install:
 
@@ -53,6 +55,8 @@ cairn ls            # the installed packs and what they contribute
 | `ssh` | `remote/exec` over SSH |
 | `train` | the CPU training stack for `train/lora` (torch, transformers, peft, datasets) |
 | `infisical` | the Infisical SDK for `secrets/infisical` |
+| `dataflow-engine` | the builtin dataflow engine's job-machine libraries (polars, duckdb, pyarrow) |
+| `rerank-cross-encoder` · `rerank-cohere` | a scorer for `rag/rerank`: a local cross-encoder, or Cohere |
 | `storage-postgres` | the Postgres store and bus driver |
 | `runtime-dbos` | the DBOS durable runtime |
 | `runtime-temporal` | the Temporal runtime |
