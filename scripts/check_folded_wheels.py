@@ -45,7 +45,7 @@ CORE_CONTRACTS = 13
 BUILTIN_OPERATORS = 22
 #: Inherited settings that would steer the venv or the engine away from a plain install.
 SCRUB = ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONPATH", "CAIRN_PACK_PATH", "CAIRN_STORAGE",
-         "OBS_STORAGE", "CAIRN_PROFILE")
+         "OBS_STORAGE", "CAIRN_PROFILE", "PYTHONOPTIMIZE")  # the checks are asserts
 
 CHECK = """
 import importlib.metadata as md, json, sys

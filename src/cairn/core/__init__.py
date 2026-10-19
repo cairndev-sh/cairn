@@ -9,4 +9,4 @@ Discovery via Python entry-points: ``[project.entry-points."cairn.packs"]``.
 """
 from __future__ import annotations
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"

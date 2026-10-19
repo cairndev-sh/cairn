@@ -452,7 +452,7 @@ markers = [
     "expensive: tests that call LLMs in the synthesis path (slow, costs $)",
     "dbos: DBOS runtime integration tests (spawn subprocesses; slower) — deselect with -m 'not dbos'",
     "timing: a wall-clock benchmark measured on a developer machine; not a CI gate (run with -m timing)",
-    "train: runs a real LoRA fine-tune on a tiny model; needs cairn-operator-train-local[train] (skips without it; the e2e train cells too)",
+    "train: runs a real LoRA fine-tune on a tiny model; needs cairndev[train] (skips without it; the e2e train cells too)",
     # the hello-cairn feature proof (ADR-0127 D1): tests/e2e, run by scripts/oss/feature_proof.sh and the public-e2e job
     "e2e: a real cairn-server subprocess per cell, driven as a user would (tests/e2e; excluded from the unit jobs)",
     "services: an e2e cell that needs the light stack's `proof` profile (skipped with the reason when it does not answer)",
