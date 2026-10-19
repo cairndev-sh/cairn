@@ -1,15 +1,20 @@
-"""Refuse a venv that holds more than the public set (ADR-0120 D1, #2424; ADR-0134 D1).
+"""Refuse a venv that holds more than the public set (ADR-0120 D1, #2424; ADR-0134 D1; ADR-0137).
 
-The public core is the root wheel's base dependencies: the engine, the builtin
-operator packs and the contracts whose providers ship in the core, `cairn-client`,
-`cairn-sdk`. CI installs exactly that (`uv sync --extra dev`, no `platform`, `ssh`
-or `ask`) and runs this first, so a test that passes afterwards passed without a
-domain pack, an official operator pack, a platform contract, `cairn-ask` or
-asyncssh being importable. Exit 1 names every private distribution found.
+The public core is the root wheel and its base dependencies: the engine, which carries the
+builtin operator packs and the core contracts (ADR-0137 D2), and `cairn-client`. CI installs
+exactly that (`uv sync --extra dev`, no `platform`, `ssh` or `ask`) and runs this first, so a
+test that passes afterwards passed without a domain pack, an official operator pack, a
+platform contract, `cairn-ask` or asyncssh being importable. Exit 1 names every private
+distribution found.
+
+A distribution folded into the engine (a `packages/*/pyproject.toml` without a build-system
+table: a builtin pack or a core contract package) installed on its own is refused too: it
+would install a second copy of what `cairndev` carries.
 
 `--extras a,b` names the root extras the CI installed on top. An optional operator
-pack (ADR-0134 D1: `cairn/operators/optional/`, offered only through an extra) is
-accepted only when one of those extras names it; nothing else is admitted by an extra.
+pack (ADR-0134 D1, offered only through an extra) or the example pack (`cairn-pack-hello`,
+ADR-0127 D1, offered by `hello`) is accepted only when one of those extras names it and the
+tree builds it; nothing else is admitted by an extra.
 """
 from __future__ import annotations
 
@@ -26,8 +31,11 @@ ROOT = Path(__file__).resolve().parents[1]
 PRIVATE_PREFIXES = ("cairn-operator-", "cairn-contracts-", "cairn-pack-")
 #: Distributions that are extras, never part of the base install.
 PRIVATE_NAMES = {"cairn-ask", "cairn-sdk", "asyncssh", "cairn-platform"}
-#: What a selected extra may admit: an optional operator pack, nothing else (ADR-0134 D1).
-EXTRA_ADMITS = "cairn-operator-"
+#: What a selected extra may admit: an optional operator pack (ADR-0134 D1) or the example
+#: pack (ADR-0127 D1), and only one this tree builds; nothing else.
+EXTRA_ADMITS = ("cairn-operator-", "cairn-pack-")
+#: Why a folded distribution is refused (ADR-0137 D2).
+FOLDED = "folded into cairndev (ADR-0137): uninstall it"
 
 
 def _norm(name: str) -> str:
@@ -59,6 +67,17 @@ def extra_set(extras: Iterable[str], root: Path = ROOT) -> set[str]:
             if n.startswith(EXTRA_ADMITS) and n in workspace}
 
 
+def folded_set(root: Path = ROOT) -> set[str]:
+    """The distributions folded into the engine wheel (ADR-0137 D2): every
+    ``packages/*/pyproject.toml`` that declares no build-system table, so nothing builds it."""
+    found = set()
+    for path in sorted(root.glob("packages/*/pyproject.toml")):
+        doc = tomllib.loads(path.read_text())
+        if "build-system" not in doc:
+            found.add(_norm(doc["project"]["name"]))
+    return found
+
+
 def _workspace_sources(root: Path = ROOT) -> set[str]:
     """The distributions the root builds from its own tree (``[tool.uv.sources]`` with
     ``workspace = true``). An extra admits an operator pack only when it is one of these —
@@ -71,11 +90,15 @@ def private_installed(extras: Iterable[str] = (), root: Path = ROOT,
                       installed: Iterable[tuple[str, str]] | None = None) -> list[str]:
     """``installed`` (name, version) pairs, default the running venv's distributions."""
     allowed = public_set(root) | extra_set(extras, root)
+    folded = folded_set(root)
     if installed is None:
         installed = ((d.metadata["Name"] or "", d.version) for d in distributions())
     found = []
     for raw, version in installed:
         name = _norm(raw)
+        if name in folded:
+            found.append(f"{name} {version}: {FOLDED}")
+            continue
         if name in allowed:
             continue
         if name in PRIVATE_NAMES or name.startswith(PRIVATE_PREFIXES):

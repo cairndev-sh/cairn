@@ -32,12 +32,11 @@
 FROM ghcr.io/astral-sh/uv:python3.13-trixie-slim AS manifests
 WORKDIR /src
 COPY pyproject.toml uv.lock README.md ./
-# The operator packs are the only members at an unpredictable depth. Copying
+# The members under packages/ (the client and the optional operator packs). Copying
 # the whole subtree here costs nothing in the final image (this stage is
-# discarded) and lets the find below track [tool.uv.workspace] automatically.
-# #2241 D — data-only contract distributions are workspace members too (`editable =
-# false`): absent, the install plan fails; installed, the launch door resolves them.
-# #2421 — the private platform's product modules (packages/cairn-platform) are a member too.
+# discarded) and lets the find below track [tool.uv.workspace] automatically. The
+# builtin operator packs and the core contracts under packages/ are not members: the
+# engine wheel carries them (ADR-0137 D2), so only the builder stage needs their source.
 COPY packages ./packages
 # The example pack is a workspace member too (examples/hello-cairn, #2693): its manifest is
 # staged here as well as its source in the builder stage.
@@ -150,18 +149,18 @@ FROM deps AS builder
 WORKDIR /app
 
 # ---- source: everything below re-runs on any source edit (cheap) ----
-# The whole workspace must be present: the root depends on the operator
-# wheels as workspace members (pyproject [tool.uv.workspace]).
+# The whole workspace must be present: the root depends on its members
+# (pyproject [tool.uv.workspace]).
 COPY src ./src
 # uv workspace members (#1194 cairn-client, #1196 cairn-ask) — `uv sync
 # --all-packages` resolves file:// paths for EVERY member, so a missing copy
 # fails the whole install plan ("Distribution not found at: file:///app/ask").
 # #1253 made the SDK a workspace member — same rule as client/ask above:
 # every member must be present or the whole install plan fails.
-# #2241 D — the contract distributions: same rule, and the launch door refuses every
-# pipeline reaching an opted-in operator (eval/delta) when its contract is not installed.
-# #2421 — packages/cairn-platform: same rule; its `cairn.routers` providers mount the
-# capture, datasets and judges routers.
+# ADR-0137 D2 — the engine wheel itself is built from packages/ too: the builtin operator
+# packs' import roots and pack.toml files and the core contracts' definitions
+# ([tool.hatch.build] in pyproject.toml). They must be here BEFORE the final sync, which
+# builds that wheel, or the engine ships without its builtins and its contracts.
 COPY packages ./packages
 # The example pack is a workspace member too (examples/hello-cairn, #2678): same rule. Without
 # it the v0.1.0 public image failed ("Distribution not found at: file:///app/examples/hello-cairn").
@@ -283,9 +282,23 @@ assert len(eps) >= 14, f'only {len(eps)} operator entry points — the overlay i
 import spacy; spacy.load('en_core_web_sm');\
 print('[verify] assembled venv:', len(eps), 'operators, cairn', getattr(cairn,'__version__','?'), 'spaCy sm ok')"
 RUN test -x /app/.venv/bin/cairn-server || (echo "[verify] cairn-server console script missing from the overlay" && exit 1)
+# ADR-0137 D2 — the builtin operator packs and the core contracts ship INSIDE the engine wheel:
+# every `cairn.operators` entry point is cairndev's, and no builtin pack or core contract package
+# is installed as a distribution of its own (it would be a second copy of what cairndev carries).
+RUN /app/.venv/bin/python -c "\
+import importlib.metadata as md;\
+eps = list(md.entry_points(group='cairn.operators'));\
+other = sorted({f'{ep.name} ({ep.dist.name})' for ep in eps if ep.dist.name != 'cairndev'});\
+assert not other, f'builtin operators not shipped by cairndev: {other}';\
+optional = {'cairn-operator-dataflow-metaflow', 'cairn-operator-dataflow-skypilot'};\
+names = [d.metadata['Name'] or '' for d in md.distributions()];\
+folded = sorted(n for n in names if n.startswith('cairn-contracts-') or (n.startswith('cairn-operator-') and n not in optional));\
+assert not folded, f'folded into cairndev (ADR-0137), installed on their own: {folded}';\
+print('[verify]', len(eps), 'operators, all from cairndev; no folded distribution installed')"
 # #2241 D — the launch door refuses every pipeline reaching an opted-in operator whose
-# contract distribution is not installed, so prove the assembled image RESOLVES them (a
-# built image is not enough: a missing or editable-installed distribution resolves to none).
+# contract package is not installed, so prove the assembled image RESOLVES them (a built
+# image is not enough). The engine wheel hosts the core packages (ADR-0137 D3); their names
+# are unchanged.
 RUN /app/.venv/bin/python -c "\
 from cairn.core.pack.contracts import resolve_contracts;\
 names = sorted(d.name for d in resolve_contracts());\

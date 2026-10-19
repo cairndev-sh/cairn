@@ -21,14 +21,31 @@ jobs:
     - uses: astral-sh/setup-uv@v7
     - name: Build all workspace wheels (lockstep)
       run: uv build --all-packages
+    - name: Exactly the five public wheels (ADR-0137 D6)
+      run: |
+        set -euo pipefail
+        ls dist/*.whl | sed 's|dist/||; s|-.*||' | sort > /tmp/wheels.txt
+        printf '%s\n' cairn_client cairn_operator_dataflow_metaflow cairn_operator_dataflow_skypilot cairn_pack_hello cairndev > /tmp/want.txt
+        diff /tmp/want.txt /tmp/wheels.txt
     - name: GitHub Release with wheel artifacts
       uses: softprops/action-gh-release@v3
       with:
         files: dist/*
         generate_release_notes: true
     - name: Publish to PyPI (the account token while PYPI_API_TOKEN exists, then trusted publishing)
-      run: if [ -n "$PYPI_API_TOKEN" ]; then UV_PUBLISH_TOKEN="$PYPI_API_TOKEN" uv publish --check-url https://pypi.org/simple/;
-        else uv publish --trusted-publishing always --check-url https://pypi.org/simple/; fi
+      # Explicit files in order (ADR-0137 D6): the engine first, so it lands before any rate limit;
+      # then the client, the optional engines and the example pack, which depend on it.
+      # --check-url makes a rerun skip what PyPI already has.
+      run: |
+        set -euo pipefail
+        if [ -n "$PYPI_API_TOKEN" ]; then
+          export UV_PUBLISH_TOKEN="$PYPI_API_TOKEN"; AUTH=()
+        else
+          AUTH=(--trusted-publishing always)
+        fi
+        for files in 'dist/cairndev-*' 'dist/cairn_client-*' 'dist/cairn_operator_*' 'dist/cairn_pack_hello-*'; do
+          uv publish ${AUTH[@]+"${AUTH[@]}"} --check-url https://pypi.org/simple/ $files
+        done
       env:
         PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
     permissions:
