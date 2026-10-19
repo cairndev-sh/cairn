@@ -1,6 +1,9 @@
+# FOLDED INTO cairndev (ADR-0137 D2/D3): this contract package is not a distribution of its own.
+# The engine wheel (the repository root's pyproject.toml) hosts its definitions at
+# `cairn_contracts/<name>/`, with the descriptor's own version. It has no build-system table:
+# nothing builds or installs it.
 # A shared contract distribution (#2242 V1-B, ADR-0111), built like cairn-contracts-eval: DATA
-# ONLY — no Python package, no entry points. The root installs it NON-editable
-# (`{ workspace = true, editable = false }`): an editable install is refused as not data-only.
+# ONLY — no Python package, no entry points.
 [project]
 name = "cairn-contracts-dataflow"
 version = "1.1.0"
@@ -8,10 +11,6 @@ description = "Shared contract definitions for the dataflow capability domain (d
 requires-python = ">=3.12"
 dependencies = []
 license = { text = "Apache-2.0" }
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 bypass-selection = true

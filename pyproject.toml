@@ -2,7 +2,7 @@
 # The DISTRIBUTION is `cairndev` (ADR-0121 D3, #2429); the import name `cairn` and the
 # `cairn` command do not change.
 name = "cairndev"
-version = "0.1.0"
+version = "0.1.1"
 description = "A governed control plane for AI and ML work: pipelines that fine-tune, evaluate, compress and serve models, with approval, policy, budget and lineage on every step"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -68,53 +68,12 @@ dependencies = [
     # CLI dispatcher — backs the `cairn` script entry point. Light enough
     # to be a base dep so `pip install cairn` gives users the CLI.
     "typer>=0.12.0",
-    # ADR-0120 D1 (#2419) — the base install is the PUBLIC set and nothing else:
-    # the builtin operator packs (each its own workspace wheel; listing them
-    # here makes their `cairn.operators` entry points discoverable) and the
-    # contracts `dataflow`, `audit` and `mcp`. The official packs, the domain
-    # contracts, `cairn-ask` and asyncssh are the [platform], [ask] and [ssh]
-    # extras below; this repository's CI and image install all three.
-    "cairn-operator-mcp",
-    "cairn-operator-memory-local",
-    "cairn-operator-artifact-local",
-    "cairn-operator-rag-local",
-    "cairn-operator-rag-rerank",
-    "cairn-operator-redact-regex",
-    "cairn-operator-monitor-threshold",
-    "cairn-operator-audit-store",
-    "cairn-operator-secrets-env",
-    # secrets/infisical — the Infisical SecretStore, builtin since ADR-0127 D3;
-    # its SDK is the [infisical] extra below.
-    "cairn-operator-secrets-infisical",
-    # ADR-0074 — data validation, tiers 1+2/3a (tier 3b is the official
-    # cairn-operator-data-expectations, in [platform]).
-    "cairn-operator-data-profile",
-    # required by every flow leg (the builtin dataflow engine).
-    "cairn-operator-dataflow",
-    # remote/exec (#70): the dataflow SSH engine's transport; asyncssh is [ssh] (#2427).
-    "cairn-operator-remote",
-    # ADR-0127 D4 — train/lora + the `train.lora` ml stage + train/eval-loss. Registers on
-    # this base install; the CPU training stack is the [train] extra below.
-    "cairn-operator-train-local",
-    # #2242 V1-B — one data-only distribution per capability domain (decision B1a).
-    # Installed NON-editable (see [tool.uv.sources]) — B2 refuses an editable
-    # install as not data-only.
-    "cairn-contracts-dataflow",
-    "cairn-contracts-audit",
-    "cairn-contracts-mcp",
-    "cairn-contracts-monitor",
-    "cairn-contracts-artifact",
-    # #2243 V2 — the builtin tier's remaining capability domains, one distribution each.
-    "cairn-contracts-storage",
-    "cairn-contracts-memory",
-    "cairn-contracts-redact",
-    "cairn-contracts-secrets",
-    # #2243 V2 — the builtin tier's rag, remote and data capability domains.
-    "cairn-contracts-rag",
-    "cairn-contracts-remote",
-    "cairn-contracts-data",
-    # ADR-0127 D4 — the train capability domain (train.finetune).
-    "cairn-contracts-train",
+    # ADR-0137 D2 — the builtin operator packs (packages/cairn-operator-<name>) and the core
+    # contracts (packages/cairn-contracts-<name>) ship INSIDE this wheel: their import roots,
+    # pack.toml manifests and contract definitions are in [tool.hatch.build] below, and their
+    # entry points are this project's own. None of them is a distribution of its own, so none
+    # is a dependency. The official packs, the domain contracts, `cairn-ask` and asyncssh are
+    # extras or the platform's.
 ]
 
 [project.urls]
@@ -137,6 +96,8 @@ cairn-worker = "cairn.core.runtime.temporal.worker:main"
 # Read-only admin UI over the run store (the `admin` extra). Serves /admin via
 # starlette-admin bound to the configured RunStore (sqlite or Postgres).
 cairn-admin = "cairn.core.admin:main"
+# ADR-0137 D2 — the builtin dataflow engine's job-machine entrypoint (packages/cairn-operator-dataflow).
+cairn-dataflow-run = "operator_dataflow.engine.entry:main"
 
 # Vector-store PROVIDERS (#76) — external backends kept OUT of the core import
 # path, resolved lazily via this entry-point group (core `services/rag/stores`
@@ -154,6 +115,43 @@ pinecone = "cairn.providers.vectorstores.pinecone:PineconeStore"
 # absent = no catalogue.
 [project.entry-points."cairn.seeds"]
 hello-cairn = "cairn.core.demo_seed:seed_hello_cairn"
+
+# ── ADR-0137 D2 — the builtin operator packs' entry points ───────────────────────
+# Each builtin pack (packages/cairn-operator-<name>) declares these in its own pyproject.toml,
+# which is no longer built (no [build-system]); this wheel carries the pack, so it carries the
+# copy. tests/core/test_folded_engine_wheel.py holds the two equal.
+[project.entry-points."cairn.operators"]
+"artifact/promote" = "operator_dataflow.operators.promote:ArtifactPromoteOp"
+"audit/store" = "operator_audit_store.operators.audit_store:AuditStoreOp"
+"data/profile" = "operator_data_profile.operators.profile:DataProfileOp"
+"dataflow/run" = "operator_dataflow.operators.run:DataflowRunOp"
+"mcp/call" = "operator_mcp.operators.call:CallOp"
+"memory/search" = "operator_memory_local.operators.search:SearchOp"
+"memory/write" = "operator_memory_local.operators.write:WriteOp"
+"ml/run" = "operator_dataflow.operators.run_ml:MlRunOp"
+"monitor/dispatch" = "operator_monitor_threshold.operators.dispatch:DispatchOp"
+"monitor/propose" = "operator_monitor_threshold.operators.propose:ProposeOp"
+"monitor/threshold" = "operator_monitor_threshold.operators.threshold:ThresholdOp"
+"rag/fetch" = "operator_rag_local.operators.fetch:FetchOp"
+"rag/rerank" = "operator_rag_rerank.operators.rerank:RerankOp"
+"rag/search" = "operator_rag_local.operators.search:SearchOp"
+"redact/text" = "operator_redact_regex.operators.redact_text:RedactTextOp"
+"remote/exec" = "operator_remote.operators.exec:RemoteExecOp"
+"secrets/env" = "operator_secrets_env.operators.env:EnvSecretStoreOp"
+"secrets/infisical" = "operator_secrets_infisical.operators.infisical:InfisicalSecretStoreOp"
+"storage/get" = "operator_artifact_local.operators.get:GetOp"
+"storage/put" = "operator_artifact_local.operators.put:PutOp"
+"train/eval-loss" = "operator_train_local.operators.eval_loss:EvalLossOp"
+"train/lora" = "operator_train_local.operators.lora:TrainLoraOp"
+
+# #1512 — core selects an engine by NAME through this group and never imports the pack.
+[project.entry-points."cairn.dataflow_engines"]
+"builtin" = "operator_dataflow.engines:builtin_engine"
+
+[project.entry-points."cairn.dataflow_stages"]
+"noop" = "operator_dataflow.stages:noop"
+"noop.slow" = "operator_dataflow.stages:noop_slow"
+"train.lora" = "operator_train_local.stages:train_lora"
 
 [project.optional-dependencies]
 dev = [
@@ -242,12 +240,12 @@ oauth = ["authlib>=1.3.0"]
 # self-hosted/cloud Infisical (MIT core) via infisical:// refs. Optional: the
 # local encrypted-file backend (cryptography, base dep) is the default and needs
 # no service. Install with `pip install -e ".[infisical]"`. The same SDK backs the
-# builtin secrets/infisical operator (cairn-operator-secrets-infisical, lazy import).
+# builtin secrets/infisical operator (its pack's [infisical] extra, ADR-0137; lazy import).
 infisical = ["infisicalsdk>=1.0.0"]
 # The example pack and everything its four pipelines reach beyond the base install
 # (ADR-0127 D1): `pip install 'cairndev[hello]'` → cairn-pack-hello[all] → the
 # sqlite-vec store, asyncssh and DBOS. The training stack is not in it
-# (cairn-operator-train-local[train]).
+# (cairndev[train]).
 hello = ["cairn-pack-hello[all]"]
 # Toad-style interactive terminal console (`cairn remote console`, #56):
 # a Textual TUI + Rich rendering + dropdown autocomplete over the server's
@@ -305,18 +303,23 @@ kernel = [
 # asyncssh (EPL-2.0 OR GPL-2.0-or-later) — kept out of the base install. remote/exec
 # (the train/remote path, which the builtin dataflow SSH engine reaches lazily) fails at
 # runtime "needs asyncssh" without it (#536 e2e); serve/vllm's own [ssh] is in [platform].
-ssh = ["cairn-operator-remote[ssh]"]
+# The remote pack's [ssh] and the dataflow pack's [ssh] (which named the remote pack's), flattened
+# (ADR-0137 D5).
+ssh = ["asyncssh>=2.14"]
 # ADR-0127 D4 — the CPU LoRA stack train/lora and the `train.lora` stage need (torch,
 # transformers, peft, datasets). Separate from every other extra on purpose: CPU torch is
 # too large for the engine image, so Dockerfile.engine does not install it.
-train = ["cairn-operator-train-local[train]"]
-# ADR-0137 D5 — the builtin packs' own extras, named on the engine so a hint or a deployment never
-# names a builtin distribution (the public `cairndev` wheel carries the builtins, ADR-0137 D2).
+# The train-local pack's [train], flattened (ADR-0137 D5).
+train = ["torch>=2.11,<2.12", "transformers>=5.5,<5.6", "peft>=0.20,<0.21", "datasets>=4.3,<4.4"]
+# ADR-0137 D5 — the builtin packs' own extras, flattened onto the engine: this wheel carries the
+# builtins (ADR-0137 D2), so a hint or a deployment names `cairndev[<extra>]`. The packs'
+# pyproject.toml files keep their own tables; tests/core/test_folded_engine_wheel.py holds the
+# two equal through one map (pack, pack extra) → root extra.
 # The builtin dataflow engine's job-machine libraries (polars shards, duckdb, pyarrow).
-dataflow-engine = ["cairn-operator-dataflow[engine]"]
+dataflow-engine = ["polars>=1.0", "duckdb>=1.0", "pyarrow>=15"]
 # rag/rerank's cross-encoder (local torch model) and Cohere (network, COHERE_API_KEY) scorers.
-rerank-cross-encoder = ["cairn-operator-rag-rerank[cross_encoder]"]
-rerank-cohere = ["cairn-operator-rag-rerank[cohere]"]
+rerank-cross-encoder = ["sentence-transformers>=3.0"]
+rerank-cohere = ["cohere>=5.0"]
 # ADR-0134 D2 (#2678) — the Metaflow dataflow engine: an optional public wheel, never a base
 # dependency. `[profile.backends] ml_engine = "metaflow"` without it is refused at the launch door.
 metaflow = ["cairn-operator-dataflow-metaflow", "metaflow>=2.12"]
@@ -329,94 +332,35 @@ skypilot = ["cairn-operator-dataflow-skypilot", "skypilot[aws,kubernetes,runpod,
 
 
 # Pack discovery: cairn.core walks the `cairn.packs` / `cairn.operators` entry-point
-# groups at startup. Every entry point is declared by the workspace member that
-# ships it: operator packs (editable), and domain packs as DATA wheels
-# `cairn-pack-<name>` (#2420, ADR-0121) whose own `pyproject.toml`
-# declares the pack's own entry point. The root declares none, so a pack is
-# invisible until its wheel is installed; in a checkout the domain packs are
-# non-editable members of the `platform` extra, exactly like `cairn-contracts-*`.
+# groups at startup. Every entry point is declared by the distribution that ships
+# it: the builtin operator packs by this project (ADR-0137 D2, above), the optional
+# operator packs by their own wheels, and domain packs as DATA wheels
+# `cairn-pack-<name>` (#2420, ADR-0121) whose own `pyproject.toml` declares the
+# pack's own entry point. The root declares no domain pack, so a domain pack is
+# invisible until its wheel is installed.
 
 # ADR-0120 D4 (#2422) — HTTP surfaces beyond the public API (D2) are `cairn.routers`
 # providers. The root registers none: the server mounts D2 itself (`jobs` and the
 # `/oauth/callback` redirect included, #2427), and the console's surfaces, `ask` and the
 # product routers are declared by the platform package, which ships them (#2421, #2427).
 
-# ─── uv workspace (cargo/npm-style monorepo) ────────────────────────
+# ─── uv workspace ───────────────────────────────────────────────────
 #
-# Each operator pack is its own Python distribution with its own
-# pyproject.toml + src/<operator_name>/ layout. The wheel's import
-# name (`operator_clickstack`, etc.) is standalone — decoupled from
-# the pack's filesystem tier. Promoting from builtins/ → official/
-# is a directory move, zero code changes.
-#
-# When the root project is installed (`uv sync` / `uv pip install -e .`),
-# uv resolves each workspace member as an editable dep and contributes
-# its `cairn.operators` entry-points to the running interpreter.
+# The members are the distributions this tree builds BESIDE the engine: the typed client, the
+# optional operator packs (ADR-0134 D1) and the example pack. The builtin operator packs and the
+# core contracts are not members: their directories under packages/ keep their sources, tests and
+# pyproject.toml (no [build-system]), and THIS project's wheel carries them (ADR-0137 D2).
 [tool.uv.workspace]
 members = [
     "packages/cairn-client",
-    "packages/cairn-operator-mcp",
-    "packages/cairn-operator-memory-local",
-    "packages/cairn-operator-artifact-local",
-    "packages/cairn-operator-rag-local",
-    "packages/cairn-operator-rag-rerank",
-    "packages/cairn-operator-redact-regex",
-    "packages/cairn-operator-monitor-threshold",
-    "packages/cairn-operator-audit-store",
-    "packages/cairn-operator-secrets-env",
-    "packages/cairn-operator-secrets-infisical",
-    "packages/cairn-operator-data-profile",
-    "packages/cairn-operator-dataflow",
-    "packages/cairn-operator-remote",
-    "packages/cairn-operator-train-local",
     "packages/cairn-operator-dataflow-metaflow",
     "packages/cairn-operator-dataflow-skypilot",
-    "packages/cairn-contracts-dataflow",
-    "packages/cairn-contracts-audit",
-    "packages/cairn-contracts-mcp",
-    "packages/cairn-contracts-monitor",
-    "packages/cairn-contracts-artifact",
-    "packages/cairn-contracts-storage",
-    "packages/cairn-contracts-memory",
-    "packages/cairn-contracts-redact",
-    "packages/cairn-contracts-secrets",
-    "packages/cairn-contracts-rag",
-    "packages/cairn-contracts-remote",
-    "packages/cairn-contracts-data",
-    "packages/cairn-contracts-train",
     "examples/hello-cairn",
 ]
 
 [tool.uv.sources]
 cairn-client           = { workspace = true }
-cairn-operator-data-profile  = { workspace = true }
-cairn-contracts-dataflow = { workspace = true, editable = false }
-cairn-contracts-audit  = { workspace = true, editable = false }
-cairn-contracts-mcp    = { workspace = true, editable = false }
-cairn-contracts-monitor = { workspace = true, editable = false }
-cairn-contracts-artifact = { workspace = true, editable = false }
-cairn-contracts-storage = { workspace = true, editable = false }
-cairn-contracts-memory = { workspace = true, editable = false }
-cairn-contracts-redact = { workspace = true, editable = false }
-cairn-contracts-secrets = { workspace = true, editable = false }
-cairn-contracts-rag    = { workspace = true, editable = false }
-cairn-contracts-remote = { workspace = true, editable = false }
-cairn-contracts-data   = { workspace = true, editable = false }
-cairn-contracts-train  = { workspace = true, editable = false }
 cairn-pack-hello = { workspace = true, editable = false }
-cairn-operator-mcp           = { workspace = true }
-cairn-operator-memory-local  = { workspace = true }
-cairn-operator-artifact-local = { workspace = true }
-cairn-operator-rag-local     = { workspace = true }
-cairn-operator-rag-rerank    = { workspace = true }
-cairn-operator-redact-regex  = { workspace = true }
-cairn-operator-monitor-threshold = { workspace = true }
-cairn-operator-audit-store   = { workspace = true }
-cairn-operator-secrets-env   = { workspace = true }
-cairn-operator-secrets-infisical = { workspace = true }
-cairn-operator-remote        = { workspace = true }
-cairn-operator-dataflow      = { workspace = true }
-cairn-operator-train-local   = { workspace = true }
 cairn-operator-dataflow-metaflow = { workspace = true }
 cairn-operator-dataflow-skypilot = { workspace = true }
 
@@ -425,19 +369,71 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-# The root wheel ships only the engine (`cairn/`) — operator packs
-# are sibling wheels, built and installed independently via the uv
-# workspace declaration above. Exclude operator pack src trees so
-# hatchling doesn't try to bundle them into the cairn wheel.
-packages = ["src/cairn"]
+# ADR-0137 D2 — the engine (`cairn`) and every builtin operator pack's import root, each placed
+# at the top of the wheel exactly as its own wheel placed it.
+packages = [
+    "src/cairn",
+    "packages/cairn-operator-artifact-local/src/operator_artifact_local",
+    "packages/cairn-operator-audit-store/src/operator_audit_store",
+    "packages/cairn-operator-data-profile/src/operator_data_profile",
+    "packages/cairn-operator-dataflow/src/operator_dataflow",
+    "packages/cairn-operator-mcp/src/operator_mcp",
+    "packages/cairn-operator-memory-local/src/operator_memory_local",
+    "packages/cairn-operator-monitor-threshold/src/operator_monitor_threshold",
+    "packages/cairn-operator-rag-local/src/operator_rag_local",
+    "packages/cairn-operator-rag-rerank/src/operator_rag_rerank",
+    "packages/cairn-operator-redact-regex/src/operator_redact_regex",
+    "packages/cairn-operator-remote/src/operator_remote",
+    "packages/cairn-operator-secrets-env/src/operator_secrets_env",
+    "packages/cairn-operator-secrets-infisical/src/operator_secrets_infisical",
+    "packages/cairn-operator-train-local/src/operator_train_local",
+]
 exclude = ["CLAUDE.md", "AGENTS.md"]
 
+# Each builtin pack's manifest at `operator_<pack>/pack.toml`, and each core contract package
+# hosted at `cairn_contracts/cairn-contracts-<domain>/` — the paths their own wheels installed,
+# so the contract package identities (names, descriptor versions, digests) do not change
+# (ADR-0137 D3). An editable install copies the contract definitions (it reads the packs'
+# code and pack.toml from packages/): after editing a contract, `uv sync --reinstall-package
+# cairndev`.
+[tool.hatch.build.targets.wheel.force-include]
+"packages/cairn-operator-artifact-local/pack.toml" = "operator_artifact_local/pack.toml"
+"packages/cairn-operator-audit-store/pack.toml" = "operator_audit_store/pack.toml"
+"packages/cairn-operator-data-profile/pack.toml" = "operator_data_profile/pack.toml"
+"packages/cairn-operator-dataflow/pack.toml" = "operator_dataflow/pack.toml"
+"packages/cairn-operator-mcp/pack.toml" = "operator_mcp/pack.toml"
+"packages/cairn-operator-memory-local/pack.toml" = "operator_memory_local/pack.toml"
+"packages/cairn-operator-monitor-threshold/pack.toml" = "operator_monitor_threshold/pack.toml"
+"packages/cairn-operator-rag-local/pack.toml" = "operator_rag_local/pack.toml"
+"packages/cairn-operator-rag-rerank/pack.toml" = "operator_rag_rerank/pack.toml"
+"packages/cairn-operator-redact-regex/pack.toml" = "operator_redact_regex/pack.toml"
+"packages/cairn-operator-remote/pack.toml" = "operator_remote/pack.toml"
+"packages/cairn-operator-secrets-env/pack.toml" = "operator_secrets_env/pack.toml"
+"packages/cairn-operator-secrets-infisical/pack.toml" = "operator_secrets_infisical/pack.toml"
+"packages/cairn-operator-train-local/pack.toml" = "operator_train_local/pack.toml"
+"packages/cairn-contracts-artifact/definitions" = "cairn_contracts/cairn-contracts-artifact"
+"packages/cairn-contracts-audit/definitions" = "cairn_contracts/cairn-contracts-audit"
+"packages/cairn-contracts-data/definitions" = "cairn_contracts/cairn-contracts-data"
+"packages/cairn-contracts-dataflow/definitions" = "cairn_contracts/cairn-contracts-dataflow"
+"packages/cairn-contracts-mcp/definitions" = "cairn_contracts/cairn-contracts-mcp"
+"packages/cairn-contracts-memory/definitions" = "cairn_contracts/cairn-contracts-memory"
+"packages/cairn-contracts-monitor/definitions" = "cairn_contracts/cairn-contracts-monitor"
+"packages/cairn-contracts-rag/definitions" = "cairn_contracts/cairn-contracts-rag"
+"packages/cairn-contracts-redact/definitions" = "cairn_contracts/cairn-contracts-redact"
+"packages/cairn-contracts-remote/definitions" = "cairn_contracts/cairn-contracts-remote"
+"packages/cairn-contracts-secrets/definitions" = "cairn_contracts/cairn-contracts-secrets"
+"packages/cairn-contracts-storage/definitions" = "cairn_contracts/cairn-contracts-storage"
+"packages/cairn-contracts-train/definitions" = "cairn_contracts/cairn-contracts-train"
+
 [tool.hatch.build.targets.sdist]
-# The source archive carries what builds the engine wheel (plus README, LICENSE,
-# NOTICE, examples) — not process files, internal docs, tests, deploy tooling, the
-# console sources, or the sibling workspace distributions, which have their own
-# sdists (#2405).
-exclude = ["CLAUDE.md", "AGENTS.md", "/.claude", "/.agents", "/.circleci", "/.github", "/docs", "/tests", "/deploy", "/packages", "/examples"]
+# The source archive carries what builds the engine wheel (uv builds the wheel FROM it): the
+# engine, the builtin packs' sources and manifests and the core contracts' definitions (plus
+# README, LICENSE, NOTICE). Not process files, internal docs, tests, deploy tooling, the example
+# pack, or the distributions built beside the engine, which have their own sdists (#2405).
+exclude = ["CLAUDE.md", "AGENTS.md", "/.claude", "/.agents", "/.circleci", "/.github", "/docs", "/tests",
+           "/deploy", "/examples", "/packages/cairn-client", "/packages/cairn-operator-dataflow-metaflow",
+           "/packages/cairn-operator-dataflow-skypilot", "/packages/*/tests", "/packages/*/README.md",
+           "/packages/*/DESIGN.md", "/packages/*/LICENSE", "/packages/*/NOTICE"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
