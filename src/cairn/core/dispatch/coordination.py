@@ -8,14 +8,15 @@ process … a brake, not a distributed mutex". With N control-plane replicas
 that scope is the bug: two replicas can advance one pipeline concurrently, or
 both claim the same last slot under a target cap.
 
-This module makes the section fleet-wide **on the substrate the owner chose
-(2026-08-24): Postgres, never Temporal** — Temporal stays the optional
-durability tier for agentic bodies; requiring it for control-plane scale
-would tax every future engine (Ray/Spark/Dask) that brings its own
-orchestration. ``CAIRN_STORAGE`` is the selector, exactly as it is for the run
-store and the #1530 budget backend: ``postgres://…`` → fleet-wide advisory
-locks, anything else → the same per-key ``asyncio.Lock`` behaviour as before
-(single-process dev and the entire hermetic test suite are unchanged).
+This module makes the section fleet-wide on Postgres when that is the selected
+storage backend. The pipeline section is used by both the in-process bridge and
+Temporal worker activities; coordination stays on Postgres while Temporal remains
+the optional durability tier for agentic bodies. Requiring Temporal for
+control-plane scale would tax every future engine (Ray/Spark/Dask) that brings
+its own orchestration. ``CAIRN_STORAGE`` is the selector, exactly as it is for
+the run store and the #1530 budget backend: ``postgres://…`` → fleet-wide
+advisory locks, anything else → the same per-key ``asyncio.Lock`` behaviour as
+before (single-process dev and the entire hermetic test suite are unchanged).
 
 **Why session-scoped ``pg_advisory_lock``, unlike #1530's xact-scoped one.**
 The budget reserve is one transaction on one connection, so the
@@ -229,4 +230,22 @@ class CriticalSections:
         self._local.clear()
 
 
-__all__ = ["CriticalSections"]
+def pipeline_sections_for(owner: Any) -> CriticalSections:
+    """Return the pipeline-record section owned by ``owner``.
+
+    The bridge and Temporal activities can share one section when they use the
+    same dispatcher. Separate service processes still coordinate through the
+    PostgreSQL advisory lock under the same namespace and pipeline key.
+    """
+    sections = getattr(owner, "_pipeline_sections", None)
+    if sections is not None:
+        return sections
+    sections = CriticalSections(namespace="pipeline")
+    try:
+        setattr(owner, "_pipeline_sections", sections)
+    except (AttributeError, TypeError):
+        pass
+    return sections
+
+
+__all__ = ["CriticalSections", "pipeline_sections_for"]

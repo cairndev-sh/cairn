@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import AbstractAsyncContextManager
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Callable
 
 from cairn.core.runtime.temporal import require
 
@@ -42,19 +43,27 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-async def _pin_step_run(pstore: Any, pipeline_id: str, step_id: str, run_id: str) -> None:
+async def _pin_step_run(
+    pstore: Any,
+    pipeline_id: str,
+    step_id: str,
+    run_id: str,
+    *,
+    section: Callable[[str], AbstractAsyncContextManager[None]],
+) -> None:
     """Record the leg's run_id on the pipeline's step the moment it exists —
     the retry/adopt anchor (#1429). Best-effort: the workflow mirrors it too."""
     try:
-        rec = await pstore.get(pipeline_id)
-        st = rec.step_state.get(step_id) if rec else None
-        if rec is None or st is None:
-            return
-        st.run_id = run_id
-        st.status = "running"
-        st.started_at = st.started_at or _now()
-        rec.step_state[step_id] = st
-        await pstore.put(rec)
+        async with section(pipeline_id):
+            rec = await pstore.get(pipeline_id)
+            st = rec.step_state.get(step_id) if rec else None
+            if rec is None or st is None:
+                return
+            st.run_id = run_id
+            st.status = "running"
+            st.started_at = st.started_at or _now()
+            rec.step_state[step_id] = st
+            await pstore.put(rec)
     except Exception:  # noqa: BLE001 — read-model, never fail the leg on it
         logger.debug("_pin_step_run failed for %s/%s", pipeline_id, step_id, exc_info=True)
 
@@ -210,6 +219,7 @@ async def _run_flow_leg(
     from cairn.core.dispatch.dispatcher import new_run_id  # noqa: PLC0415 — cycle
     from cairn.core.dispatch.leg_executor import execute_leg, parse_flow_ref, recorded_stage_contracts  # noqa: PLC0415 — cycle
     from cairn.core.dispatch.leg_hooks import FlowLegHooks, flow_leg_record, pipeline_spent_usd  # noqa: PLC0415 — cycle
+    from cairn.core.dispatch.coordination import pipeline_sections_for  # noqa: PLC0415 — cycle
     from cairn.core.dispatch.pipeline_bridge import (  # noqa: PLC0415 — cycle
         _flow_leg_output,
         _leg_retry_policy,
@@ -223,6 +233,7 @@ async def _run_flow_leg(
     from temporalio.exceptions import ApplicationError  # noqa: PLC0415 — engine code stays out of workflow imports
 
     d = _dispatcher()
+    sections = pipeline_sections_for(d)
     pstore = default_pipeline_store()
     # Governance + workspace come from the pipeline record (the workflow doesn't
     # carry them). #2223 — an UNREADABLE store is not an ABSENT record: a read
@@ -319,7 +330,7 @@ async def _run_flow_leg(
             workspace_id=workspace_id,
         )
         await d.store.create(run)
-        await _pin_step_run(pstore, pipeline_id, step_id, run.id)
+        await _pin_step_run(pstore, pipeline_id, step_id, run.id, section=sections.hold)
 
     # The flow's OWN kind picks the engine (#1180 bugs 5-6: kind from the def,
     # with the pack dir/manifest name alias fallback). #2126 — through
@@ -343,6 +354,7 @@ async def _run_flow_leg(
         pipeline_id=pipeline_id, step_id=step_id, leg_ref=ref, run_id=run.id,
         pipeline_store=pstore, run_store=d.store, emit=d._emit,
         artifact_store=build_artifact_store(), engine=engine,
+        section=sections.hold,
     )
     resolved = dict(resolved or {})
     retry_policy = _leg_retry_policy(resolved.pop("retry", None))
