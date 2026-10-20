@@ -126,6 +126,50 @@ def _query_token_allowed(method: str, path: str) -> bool:
     return method == "GET" and _QUERY_TOKEN_PATH.match(path) is not None
 
 
+#: #120 — a per-run worker token (``live_channel_env_for`` mints ``sub=worker:<run>``,
+#: ``scope=run-ingest``, ``run_id=<run>``) exists to report ONE run. It reaches the
+#: routes the in-container reporter and the pull worker call, for that run only:
+#: its events up, its control requests down, and its job's heartbeat (the jobs
+#: router checks the job belongs to the run). Any other route answers 403. The
+#: guard runs outside the workspace middleware, so the ``/workspaces/{id}/`` form
+#: is matched too.
+RUN_INGEST_SCOPE = "run-ingest"
+_WORKER_SUB_PREFIX = "worker:"
+_RUN_SCOPED_ROUTES = (
+    ("POST", re.compile(r"^(?:/workspaces/[^/]+)?/runs/(?P<run>[^/]+)/events/ingest$")),
+    ("GET", re.compile(r"^(?:/workspaces/[^/]+)?/runs/(?P<run>[^/]+)/control$")),
+    ("POST", re.compile(r"^(?:/workspaces/[^/]+)?/jobs/[^/]+/heartbeat$")),
+)
+
+
+def token_run_scope(claims: dict[str, Any]) -> Optional[str]:
+    """The run a per-run worker token is scoped to; ``None`` for any other token.
+
+    A token carrying the scope or the worker subject is run-scoped. When its
+    ``run_id`` claim and its subject name different runs it is scoped to nothing
+    (``""``), so it reaches no route at all."""
+    sub = str(claims.get("sub") or "")
+    is_worker = sub.startswith(_WORKER_SUB_PREFIX)
+    if claims.get("scope") != RUN_INGEST_SCOPE and not is_worker:
+        return None
+    claimed = str(claims.get("run_id") or "")
+    from_sub = sub[len(_WORKER_SUB_PREFIX):] if is_worker else ""
+    if claimed and from_sub and claimed != from_sub:
+        return ""
+    return claimed or from_sub
+
+
+def _run_scoped_route_allowed(run_id: str, method: str, path: str) -> bool:
+    """Whether a token scoped to ``run_id`` may make this request (#120)."""
+    if not run_id:
+        return False
+    for allowed_method, pattern in _RUN_SCOPED_ROUTES:
+        m = pattern.match(path) if method == allowed_method else None
+        if m is not None and m.groupdict().get("run", run_id) == run_id:
+            return True
+    return False
+
+
 def register_public_trigger_path(path: str) -> None:
     """Mark a spec-declared trigger ingress path as reachable without a JWT.
 
@@ -653,10 +697,20 @@ def install_auth(app: FastAPI) -> None:
             # still validated below.
             if not token and _query_token_allowed(request.method, request.url.path):
                 token = (request.query_params.get("access_token") or "").strip()
-            if not token or decode_subject(token) is None:
+            claims = decode_claims(token) if token else None
+            if claims is None:
                 return JSONResponse(
                     {"detail": "Could not validate credentials"},
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     headers={"WWW-Authenticate": "Bearer"},
+                )
+            run_scope = token_run_scope(claims)
+            if run_scope is not None and not _run_scoped_route_allowed(
+                run_scope, request.method, request.url.path
+            ):
+                return JSONResponse(
+                    {"detail": "a per-run worker token may only report its own run "
+                               "(events/ingest, control, its job's heartbeat)"},
+                    status_code=status.HTTP_403_FORBIDDEN,
                 )
         return await call_next(request)

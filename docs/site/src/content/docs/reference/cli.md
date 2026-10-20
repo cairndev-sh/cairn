@@ -124,7 +124,7 @@ Every `remote` command takes `--endpoint` / `-e`, `--token` and `--profile`.
 |---|---|
 | `cairn deploy doctor` | Checks a deployment's `.env` (`--env`) or Helm values (`--values`) before it starts: required values, and that the runtime matches the enabled services. `--strict` fails on warnings. |
 | `cairn remote hash-password` | Prints the password hash for `CAIRN_API_PASSWORD_HASH` (the `auth` extra). |
-| `cairn worker --pull` | Runs a worker that claims jobs from the control plane over HTTP: `--engine-url`, `--token`, `-c gpu=T4` to say what the machine offers, `--once` for a single job. Without `--pull` it polls a Temporal task queue. |
+| `cairn worker --pull` | Runs a worker that claims jobs from the control plane over HTTP: `--engine-url`, `--token` (an operator token: the per-run token the engine hands a job's container can only post that run's events, read its control requests and heartbeat its job, and gets `403` anywhere else), `-c gpu=T4` to say what the machine offers, `--once` for a single job. Without `--pull` it polls a Temporal task queue. |
 
 ## Next
 
