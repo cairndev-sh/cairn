@@ -111,11 +111,11 @@ def test_slack_approve_under_auth_records_the_caller_not_the_query(monkeypatch, 
     seen: dict = {}
     tok = create_access_token({"sub": "maya"})
     with caplog.at_level("WARNING"), TestClient(build_app(_slack_runner(seen), enable_scheduler=False)) as c:
-        r = c.get("/triggers/approve/wf-1?decision=approve&approver=someone-else",
-                  headers={"Authorization": f"Bearer {tok}"})
+        r = c.post("/triggers/approve/wf-1", json={"decision": "approve", "approver": "someone-else"},
+                   headers={"Authorization": f"Bearer {tok}"})
         assert r.status_code == 200, r.text
         # no token → the bearer guard refuses before any decision is recorded
-        assert c.get("/triggers/approve/wf-2?decision=approve&approver=maya").status_code == 401
+        assert c.post("/triggers/approve/wf-2", json={"decision": "approve", "approver": "maya"}).status_code == 401
     rec = seen["record"]
     assert (rec.approver, rec.channel, rec.approved) == ("maya", "slack", True)
     assert any("someone-else" in r.getMessage() for r in caplog.records)
@@ -125,7 +125,7 @@ def test_slack_approve_auth_off_keeps_the_claimed_name(monkeypatch):
     monkeypatch.delenv("OBS_JWT_SECRET", raising=False)
     seen: dict = {}
     with TestClient(build_app(_slack_runner(seen), enable_scheduler=False)) as c:
-        assert c.get("/triggers/approve/wf-1?decision=reject").status_code == 200
+        assert c.post("/triggers/approve/wf-1", json={"decision": "reject"}).status_code == 200
     assert (seen["record"].approver, seen["record"].channel, seen["record"].approved) == ("slack-user", "slack", False)
 
 

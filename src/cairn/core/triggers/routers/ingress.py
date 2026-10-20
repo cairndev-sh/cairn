@@ -8,11 +8,24 @@ server.py — route order is part of the committed OpenAPI contract.
 from typing import Annotated, Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
 
 from cairn.core._time import utc_now_iso
 from cairn.core.engine.schema import ApprovalRecord, TriggerEvent
 from cairn.core.triggers.auth import _oauth2_scheme
 from cairn.core.triggers.routers.reviews import decision_actor
+
+_APPROVE = ("approve", "approved", "yes", "y")
+_REJECT = ("reject", "rejected", "no", "n")
+
+
+class SagaApprovalRequest(BaseModel):
+    """Body of ``POST /triggers/approve/{workflow_id}`` (#63). ``decision`` is
+    REQUIRED and must say approve or reject: no default, so a request that omits
+    it is a 422, never a silent approve (the #628 rule ``ResumeRequest`` keeps)."""
+    decision: str = Field(..., description="'approve' | 'reject' (or approved/yes/y, rejected/no/n)")
+    approver: str = Field("slack-user", description="accepted for old clients; under auth the caller is recorded")
+    note: Optional[str] = Field(None, description="free-text note recorded on the approval")
 
 
 def build_ingress_router(dispatcher, environment, runner) -> APIRouter:
@@ -97,20 +110,45 @@ def build_ingress_router(dispatcher, environment, runner) -> APIRouter:
     # parameter is accepted for old links but ignored (a mismatch is logged).
     # A Slack link click carries no Slack user id, so none is recorded; the
     # record's ``channel="slack"`` is the "via Slack" marker.
+    #
+    # #63 — the decision is a POST with an explicit ``decision`` in the body (no
+    # default, the #628 rule). The GET used to read it from the query string and
+    # default to approve, so a logged, prefetched or replayed URL approved; it now
+    # answers how to decide and never resumes anything.
     @r.get("/triggers/approve/{workflow_id}")
+    async def approve_confirm(workflow_id: str) -> dict[str, Any]:
+        """Never decides (#63): says how to approve or reject this saga."""
+        return {
+            "workflow_id": workflow_id,
+            "decided": False,
+            "detail": "a GET never decides an approval: POST /triggers/approve/{workflow_id} "
+                      'with {"decision": "approve"} or {"decision": "reject"}',
+            "decide": {"method": "POST", "path": f"/triggers/approve/{workflow_id}",
+                       "body": {"decision": "approve | reject"}},
+        }
+
+    @r.post("/triggers/approve/{workflow_id}")
     async def approve_endpoint(
         workflow_id: str,
-        decision: str = "approve",
-        approver: str = "slack-user",
+        body: SagaApprovalRequest,
         token: Annotated[Optional[str], Depends(_oauth2_scheme)] = None,
     ) -> dict[str, Any]:
-        approved = decision.lower() in ("approve", "approved", "yes", "y")
+        decision = body.decision.strip().lower()
+        if decision in _APPROVE:
+            approved = True
+        elif decision in _REJECT:
+            approved = False
+        else:
+            raise HTTPException(status_code=422, detail="decision must be 'approve' or 'reject'")
+        note = f"resolved via POST /triggers/approve (decision={decision})"
+        if body.note:
+            note = f"{note}: {body.note}"
         record = ApprovalRecord(
             approved=approved,
-            approver=await decision_actor(token, approver, fallback="slack-user"),
+            approver=await decision_actor(token, body.approver, fallback="slack-user"),
             channel="slack",
             timestamp_iso=utc_now_iso(),
-            note=f"resolved via /triggers/approve (decision={decision})",
+            note=note,
         )
         handler = getattr(runner, "action_handler", None)
         resume = getattr(handler, "resume", None)

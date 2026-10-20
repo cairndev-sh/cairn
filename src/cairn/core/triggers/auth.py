@@ -71,6 +71,12 @@ _OPEN_PATHS = frozenset({
     # `CAIRN_SIGNUP=invite` (the default) the POST refuses with `signup_closed`,
     # so being routable is not being open.
     "/auth/signup",
+    # #62 — the OAuth provider redirects the user's browser here with `state` +
+    # `code` and never a cairn bearer, so the guard 401'd every `cairn connect
+    # --via oauth` on an auth-enabled deployment. The route authenticates by its
+    # own single-use `state` (`AuthlibBroker.complete_authorization` pops it or
+    # refuses), the same posture as a signature-checked webhook.
+    "/oauth/callback",
 })
 
 #: #1612 — the invite PREVIEW is a prefix route (`/auth/invite/{token}`), so it

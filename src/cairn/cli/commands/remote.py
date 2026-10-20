@@ -728,7 +728,7 @@ def _resume(run_id: str, decision: str, approver: str, endpoint, token, profile)
 
     Targets ``POST /runs/{id}/resume`` (an internal issue) — the run-level
     gate (status ``awaiting_approval``) the server routes to the deployment
-    runtime. NOT the action-saga ``GET /triggers/approve`` callback, which needs
+    runtime. NOT the action-saga ``POST /triggers/approve`` callback, which needs
     a DurableActionHandler and 501s on a default deploy (issue #42).
     """
     ep, tok = _resolve(endpoint, token, profile)

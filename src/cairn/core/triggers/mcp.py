@@ -16,9 +16,9 @@ the curated read endpoints followed by a final EXCLUDE catch-all — so a route
 not named here is off the agent belt by default. A newly-added *mutating* route
 can never silently leak onto an agent (this is what enforces the ask RED LINE by
 capability: no run / resume / cancel / install / admin tool exists to bind). Note
-one sharp edge this closes: ``GET /triggers/approve/{id}`` is a mutation behind a
-GET (a magic-link approval) — the catch-all excludes it precisely because we do
-NOT blanket-allow GETs.
+one sharp edge this closed: ``GET /triggers/approve/{id}`` used to be a mutation
+behind a GET (a magic-link approval); the decision is a POST now (#63), and the
+catch-all still excludes the route because we do NOT blanket-allow GETs.
 """
 from __future__ import annotations
 from cairn.core.settings import getenv
