@@ -43,6 +43,7 @@ from cairn.core.leadership import Leadership  # #1533 — fleet-singleton electi
 from cairn.core import liveness  # ADR-0125 — the in-process leg owner lock
 from cairn.core.triggers.auth import (
     _oauth2_scheme,
+    authenticated_token,
     caller_identity,
     install_auth,
     register_public_trigger_path,
@@ -469,9 +470,15 @@ class _WorkspaceMiddleware:
         if ws:
             try:
                 from cairn.core.triggers.console_support import caller_account
-                hdrs = dict(scope.get("headers") or [])
-                raw = hdrs.get(b"authorization", b"").decode("latin-1")
-                bearer = raw.split(" ", 1)[1].strip() if raw.lower().startswith("bearer ") else None
+                # #205 — the token the bearer guard (outermost) authenticated:
+                # it may have come from `?access_token=` on the run stream, and
+                # the tenant check must judge that same credential. The header
+                # parse remains for requests the guard did not authenticate.
+                bearer = authenticated_token(scope)
+                if bearer is None:
+                    hdrs = dict(scope.get("headers") or [])
+                    raw = hdrs.get(b"authorization", b"").decode("latin-1")
+                    bearer = raw.split(" ", 1)[1].strip() if raw.lower().startswith("bearer ") else None
                 acct = await caller_account(bearer) if bearer else None
             except Exception:  # noqa: BLE001 — unauthenticated is not unauthorized
                 acct = None

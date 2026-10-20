@@ -134,6 +134,21 @@ def _query_token_allowed(method: str, path: str) -> bool:
     return method == "GET" and _QUERY_TOKEN_PATH.match(path) is not None
 
 
+#: #205 — the request-state key under which the bearer guard records the token it
+#: authenticated, header or query string alike. ``_WorkspaceMiddleware`` (inside
+#: the guard) resolves the caller's tenant from THIS token, so the identity the
+#: guard accepted is the identity the workspace boundary checks.
+_AUTHENTICATED_TOKEN_STATE = "cairn_authenticated_token"
+
+
+def authenticated_token(scope: dict[str, Any]) -> Optional[str]:
+    """The token the bearer guard authenticated for this request, else ``None``
+    (auth off, or a public path the guard waved through)."""
+    state = scope.get("state")
+    tok = state.get(_AUTHENTICATED_TOKEN_STATE) if isinstance(state, dict) else None
+    return tok or None
+
+
 #: #120 — a per-run worker token (``live_channel_env_for`` mints ``sub=worker:<run>``,
 #: ``scope=run-ingest``, ``run_id=<run>``) exists to report ONE run. It reaches the
 #: routes the in-container reporter and the pull worker call, for that run only:
@@ -722,4 +737,7 @@ def install_auth(app: FastAPI) -> None:
                                "(events/ingest, control, its job's heartbeat)"},
                     status_code=status.HTTP_403_FORBIDDEN,
                 )
+            # #205 — hand the workspace middleware the credential checked here,
+            # so a query-string token is tenant-checked exactly like a header.
+            setattr(request.state, _AUTHENTICATED_TOKEN_STATE, token)
         return await call_next(request)
