@@ -62,8 +62,7 @@ dependencies = [
     "opentelemetry-sdk==1.41.1",
     "opentelemetry-instrumentation-logging",
     # JWT auth for the trigger server control plane (an internal issue).
-    # Token *verification* is the hot path (base dep); password *hashing* for
-    # POST /token is the optional [auth] extra.
+    # Token *verification* is the hot path; password *hashing* for POST /token is pwdlib, below.
     "pyjwt>=2.8.0",
     # CLI dispatcher — backs the `cairn` script entry point. Light enough
     # to be a base dep so `pip install cairn` gives users the CLI.
@@ -227,9 +226,8 @@ runtime-dbos = ["dbos>=2.0"]
 # derives the storage URL (the same database the training_runs rows live in)
 # without it, so this extra is needed only to CREATE a study.
 optuna = ["optuna>=4.0"]
-# JWT auth for the trigger server (an internal issue): password hashing for
-# POST /token. Token *verification* needs only pyjwt (a base dep); only token
-# *issuance* needs this. Enable auth with CAIRN_JWT_SECRET + CAIRN_API_PASSWORD[_HASH].
+# Kept for compatibility: since 0.1.2 password hashing (pwdlib[argon2]) is a base dependency,
+# so `cairndev[auth]` installs nothing more. Enable auth with CAIRN_JWT_SECRET + CAIRN_API_PASSWORD[_HASH].
 auth = ["pwdlib[argon2]>=0.2.0"]
 # NATS JetStream backend for the durable trigger inbox (#115) — the multi-node
 # swap behind the TriggerInbox Protocol. Optional: the sqlite inbox is the

@@ -66,7 +66,7 @@ cairn ls            # the installed packs and what they contribute
 | `runtime-sqlite` · `runtime-postgres` | a durable checkpointer for paused agentic flows |
 | `pii` | Presidio-backed PII detection |
 | `telemetry` | OpenTelemetry export |
-| `auth` | argon2 password hashing for server sign-in |
+| `auth` | kept for compatibility: argon2 password hashing is in the base install since 0.1.2 |
 | `oauth` | sign-in with GitHub or Google |
 | `nats` | the NATS remote-job channel |
 | `metaflow` | the Metaflow dataflow engine (`cairn-operator-dataflow-metaflow`) |

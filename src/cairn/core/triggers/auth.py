@@ -613,7 +613,7 @@ def install_auth(app: FastAPI) -> None:
     @app.exception_handler(PasswordHashingUnavailable)
     async def _no_auth_extra(request: Request, exc: PasswordHashingUnavailable) -> JSONResponse:
         # #2536: login, signup and invite redemption hash a password; on a base
-        # install without the `auth` extra that is a missing feature, not a crash.
+        # install without pwdlib (only possible before 0.1.2) that is a missing feature, not a crash.
         return JSONResponse({"detail": str(exc)}, status_code=status.HTTP_501_NOT_IMPLEMENTED)
 
     @app.get("/auth/status", tags=["auth"])
