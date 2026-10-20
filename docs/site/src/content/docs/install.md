@@ -24,12 +24,15 @@ curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_VERSION=0.1.1 sh
 | `CAIRN_EXTRAS` | none | comma-separated extras, from the table below |
 | `CAIRN_VERSION` | the latest release | an exact version |
 | `CAIRN_PYTHON` | `3.13` | the Python uv provisions for the tool |
+| `CAIRN_RELEASE` | `CAIRN_VERSION`, else `0.1.1` | the GitHub Release whose wheels back the install; empty means PyPI only |
 
-The same without the script:
+The same without the script. Until the 0.1.1 packages are on PyPI, point the installer at the
+release's wheels (third-party packages still come from PyPI):
 
 ```bash
-pip install cairndev              # inside a virtual environment, Python 3.12 or later
-uv tool install cairndev          # or: pipx install cairndev
+L=https://github.com/cairndev-sh/cairn/releases/expanded_assets/v0.1.1
+pip install cairndev --find-links "$L"            # inside a virtual environment, Python 3.12 or later
+uv tool install cairndev --find-links "$L"        # or: pipx install cairndev --pip-args="--find-links $L"
 ```
 
 The distribution is `cairndev`; the command and the import name are `cairn`.

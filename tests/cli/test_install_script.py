@@ -12,7 +12,8 @@ import pytest
 SCRIPT = Path(__file__).resolve().parents[2] / "docs/site/public/install.sh"
 SH = shutil.which("sh")
 pytestmark = pytest.mark.skipif(SH is None, reason="needs a POSIX sh")
-INSTALL = "tool install --upgrade --force --python 3.13 cairndev"
+LINKS = "https://github.com/cairndev-sh/cairn/releases/expanded_assets/v{}"
+INSTALL = f"tool install --upgrade --force --python 3.13 --find-links {LINKS.format('0.1.1')} cairndev"
 
 
 def _stub(path: Path, body: str) -> None:
@@ -70,7 +71,23 @@ def test_extras_and_a_pinned_version_reach_the_spec(env):
     e, log, _, _ = env
     r = _run(e, CAIRN_EXTRAS="hello,metaflow", CAIRN_VERSION="0.1.0", CAIRN_PYTHON="3.12")
     assert r.returncode == 0, r.stderr
-    assert log.read_text().strip() == "tool install --upgrade --force --python 3.12 cairndev[hello,metaflow]==0.1.0"
+    assert log.read_text().strip() == ("tool install --upgrade --force --python 3.12 "
+                                       f"--find-links {LINKS.format('0.1.0')} cairndev[hello,metaflow]==0.1.0")
+
+
+def test_an_empty_release_installs_from_pypi_alone(env):
+    """CAIRN_RELEASE= switches the GitHub Release fallback off: the plain PyPI install."""
+    e, log, _, _ = env
+    r = _run(e, CAIRN_RELEASE="")
+    assert r.returncode == 0, r.stderr
+    assert log.read_text().strip() == "tool install --upgrade --force --python 3.13 cairndev"
+
+
+def test_a_release_that_is_not_a_version_is_refused(env):
+    e, log, _, _ = env
+    r = _run(e, CAIRN_RELEASE="0.1.1/../../evil")
+    assert r.returncode != 0 and "CAIRN_RELEASE is not a version" in r.stderr
+    assert not log.exists()
 
 
 @pytest.mark.parametrize("var, value", [

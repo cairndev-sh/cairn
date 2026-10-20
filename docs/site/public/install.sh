@@ -13,6 +13,8 @@
 #   CAIRN_EXTRAS   comma-separated extras, e.g. hello,rag,metaflow (default: none)
 #   CAIRN_VERSION  an exact version to pin (default: the latest release)
 #   CAIRN_PYTHON   the Python uv provisions for the tool (default: 3.13)
+#   CAIRN_RELEASE  the GitHub Release whose wheels back the install while PyPI catches up
+#                  (default: CAIRN_VERSION, else 0.1.1; empty: PyPI only)
 #
 # Uninstall: uv tool uninstall cairndev
 #
@@ -31,6 +33,11 @@ main() {
   case "$extras" in *[!a-z0-9,-]*) die "CAIRN_EXTRAS may hold only lowercase letters, digits, '-' and ',' (got: $extras)";; esac
   case "$version" in *[!A-Za-z0-9.+-]*) die "CAIRN_VERSION is not a version (got: $version)";; esac
   case "$python" in ""|*[!0-9.]*) die "CAIRN_PYTHON is not a Python version (got: $python)";; esac
+  # Until PyPI carries the release, its wheels come from the GitHub Release of that version (the
+  # pinned one, else 0.1.1); third-party packages still come from PyPI. CAIRN_RELEASE= (empty)
+  # installs from PyPI alone.
+  release="${CAIRN_RELEASE-${version:-0.1.1}}"
+  case "$release" in *[!A-Za-z0-9.+-]*) die "CAIRN_RELEASE is not a version (got: $release)";; esac
 
   if ! command -v uv >/dev/null 2>&1; then
     install_uv
@@ -40,8 +47,14 @@ main() {
   [ -n "$extras" ] && spec="cairndev[$extras]"
   [ -n "$version" ] && spec="$spec==$version"
 
-  say "installing $spec (Python $python) as a uv tool"
-  uv tool install --upgrade --force --python "$python" "$spec"
+  if [ -n "$release" ]; then
+    links="https://github.com/cairndev-sh/cairn/releases/expanded_assets/v$release"
+    say "installing $spec (Python $python) as a uv tool, wheels from $links"
+    uv tool install --upgrade --force --python "$python" --find-links "$links" "$spec"
+  else
+    say "installing $spec (Python $python) as a uv tool"
+    uv tool install --upgrade --force --python "$python" "$spec"
+  fi
 
   say "done — run: cairn --help"
   say "if 'cairn' is not found, run 'uv tool update-shell' and open a new shell"
