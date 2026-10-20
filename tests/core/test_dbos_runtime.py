@@ -156,6 +156,10 @@ def test_dbos_node_events_and_heartbeat(tmp_path):
     assert "RESULT: PASS" in r.stdout, r.stdout + r.stderr
 
 
+def test_dbos_node_events_capture_llm_cost(tmp_path):
+    r = _run("node_events_cost", tmp_path / "ne-cost")
+    assert "RESULT: PASS" in r.stdout, r.stdout + r.stderr
+
 
 def test_dbos_graceful_shutdown_leaves_the_workflow_pending(tmp_path):
     """#1872 — cancelling every task on the loop (what uvicorn's asyncio.run does
