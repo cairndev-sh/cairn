@@ -208,7 +208,9 @@ token in the query string with `401`.
 Only `/healthz`, `/token`, the sign-up, invite and provider sign-in routes
 under `/auth/`, `/oauth/callback` (the redirect `cairn connect --via oauth`
 completes on; it checks its own single-use `state`), and webhook receivers that require a
-signature (`signature.required: true`) answer without one.
+signature (`signature.required: true`) answer without one. A receiver is open only for
+its own method and only while its signing secret is set to a non-empty value. Its runs
+land in the workspace that declared it, and these open routes ignore `X-Cairn-Workspace`.
 
 **Who can sign up: `CAIRN_SIGNUP`.**
 

@@ -92,8 +92,8 @@ def test_optional_signature_receiver_refuses_an_anonymous_unsigned_payload(monke
 
 def test_optional_signature_path_is_not_registered_public(monkeypatch, started):
     _client(monkeypatch, started, auth_on=True)
-    assert not auth._is_public_path("/triggers/optional")
-    assert auth._is_public_path("/triggers/signed")
+    assert not auth._is_public_path("/triggers/optional", "POST")
+    assert auth._is_public_path("/triggers/signed", "POST")
 
 
 # ─── the legitimate paths keep working ────────────────────────────────

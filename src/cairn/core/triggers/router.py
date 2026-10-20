@@ -73,6 +73,12 @@ def _store_trigger_specs() -> list[TriggerSpec]:
     """Layer ③ — console-authored triggers from the DB store, parsed through the
     same strict loader the file path uses. Best-effort: one bad stored spec is
     logged + skipped, never blanks the router."""
+    return [spec for spec, _ws in _store_trigger_rows()]
+
+
+def _store_trigger_rows() -> list[tuple[TriggerSpec, str]]:
+    """:func:`_store_trigger_specs` with the workspace each row was created in —
+    the workspace that declared the receiver, where its runs land (#209)."""
     try:
         from cairn.core.storage.trigger_store import default_trigger_store  # lazy: store pulls sqlite/env
     except Exception:
@@ -86,12 +92,12 @@ def _store_trigger_specs() -> list[TriggerSpec]:
         close = getattr(store, "close", None)
         if callable(close):
             close()
-    out: list[TriggerSpec] = []
+    out: list[tuple[TriggerSpec, str]] = []
     for st in stored:
         if not st.enabled:
             continue
         try:
-            out.append(load_trigger_spec_text(st.yaml, name=st.name))
+            out.append((load_trigger_spec_text(st.yaml, name=st.name), st.workspace_id))
         except Exception as e:  # noqa: BLE001 — skip a broken stored trigger
             logger.warning("stored trigger %r failed to load: %s", st.name, e)
     return out
@@ -143,12 +149,17 @@ _ENV_REF = re.compile(r"^\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}$|^env:([A-Za-z_][A-Z
 
 def resolve_secret(ref: str) -> Optional[str]:
     """Resolve a secret reference. ``${env:NAME}`` / ``env:NAME`` read the
-    environment; anything else is treated as a literal secret value."""
-    m = _ENV_REF.match(ref)
-    if m:
-        name = m.group(1) or m.group(2)
-        return os.environ.get(name)
-    return ref or None
+    environment; anything else is treated as a literal secret value.
+
+    An empty (or whitespace-only) value is NO secret and resolves to ``None``,
+    exactly like an unset variable (#206): an HMAC keyed with ``""`` is one
+    anyone can compute, so a required signature with an empty secret must refuse
+    every request rather than verify a forgery."""
+    m = _ENV_REF.match(ref or "")
+    value = os.environ.get(m.group(1) or m.group(2)) if m else ref
+    if not value or not value.strip():
+        return None
+    return value
 
 
 def _header_get(headers: dict[str, str], name: str) -> Optional[str]:
@@ -308,6 +319,7 @@ class TriggerRouter:
         inbox: "Optional[TriggerInbox]" = None,
         run_template: Optional[Callable[..., Awaitable[Any]]] = None,
         run_environment: Optional[str] = None,
+        workspaces: Optional[dict[str, str]] = None,
     ) -> None:
         # ADR-0131 D4 — a `bus` row (a declared `kind: event`) is never an HTTP route;
         # the bus subscriber (dispatch/event_triggers.py) fires it.
@@ -333,6 +345,12 @@ class TriggerRouter:
         # holds and a test can still pass a plain stub.
         self._run_template = run_template
         self._run_environment = run_environment
+        #: #209 — ingress path → the workspace that declared the receiver (a stored
+        #: row's ``workspace_id``). A receiver's runs land THERE, never in a workspace
+        #: the sender names. A pack- or overlay-file receiver has no row and no
+        #: entry: it runs in the process default (``current_workspace()`` with no
+        #: request override — ``CAIRN_WORKSPACE`` or ``default``).
+        self._workspace_by_path = dict(workspaces or {})
 
     @classmethod
     def from_installed(
@@ -359,9 +377,15 @@ class TriggerRouter:
         for pack in get_packs():
             specs.extend(getattr(pack, "trigger_specs", []) or [])
         specs.extend(load_trigger_specs(_user_trigger_overlay_dir()))
-        specs.extend(_store_trigger_specs())
+        # #209 — a stored row knows the workspace it was created in; last-wins by
+        # path like the specs themselves, so the workspace follows the winning spec.
+        workspaces: dict[str, str] = {}
+        for spec, ws in _store_trigger_rows():
+            specs.append(spec)
+            workspaces[spec.ingress.path] = ws
         specs = _dedupe_specs_by_path([s for s in specs if s.ingress.transport != "bus"])  # ADR-0131 D4
-        router = cls(specs, run_template=run_template, run_environment=run_environment)
+        router = cls(specs, run_template=run_template, run_environment=run_environment,
+                     workspaces=workspaces)
         if getenv("CAIRN_TRIGGER_DURABLE", "").strip().lower() in ("1", "true", "yes", "on"):
             from cairn.core.storage.trigger_inbox import get_trigger_inbox
             router.inbox = get_trigger_inbox()
@@ -373,6 +397,11 @@ class TriggerRouter:
 
     def spec_for_path(self, path: str) -> Optional[TriggerSpec]:
         return self._by_path.get(path)
+
+    def workspace_for(self, spec: TriggerSpec) -> Optional[str]:
+        """The workspace that declared ``spec``'s receiver, or ``None`` for a
+        pack/overlay receiver (the process default applies) — #209."""
+        return self._workspace_by_path.get(spec.ingress.path) or None
 
     def provider_for(self, spec: TriggerSpec) -> TriggerProvider:
         """A registered vendor provider for the source, else the generic

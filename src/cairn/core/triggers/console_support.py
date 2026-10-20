@@ -26,7 +26,7 @@ import tomlkit  # comment-preserving TOML read/write for the profile form (base 
 from fastapi import HTTPException
 
 from cairn.core.profile_backends import get_field  # Environment backends configurator (#303)
-from cairn.core.triggers.auth import caller_identity  # account-scope the API (#392 p2)
+from cairn.core.triggers.auth import caller_identity, identity_from_claims  # account-scope the API (#392 p2)
 
 
 # ── profiles: edit the shipped execution profiles (cairn/profiles/*.toml) ──
@@ -288,6 +288,13 @@ async def caller_account(token: Optional[str]) -> str:
     what the store call is scoped to — the API-side half of the two-layer isolation
     (the store filter is the other half)."""
     ident = await caller_identity(token)
+    return str(ident.get("account_id") or "default")
+
+
+async def account_from_claims(claims: dict[str, Any]) -> str:
+    """:func:`caller_account` for the claims the bearer guard already verified
+    (#209) — the same tenant resolution, no second decode of the token."""
+    ident = await identity_from_claims(claims)
     return str(ident.get("account_id") or "default")
 
 

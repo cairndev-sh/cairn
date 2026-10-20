@@ -106,18 +106,21 @@ _DOCS_PATHS = frozenset({
     "/docs", "/openapi.json", "/redoc", "/docs/oauth2-redirect",
 })
 
-# Spec-declared trigger ingress paths (webhook receivers) that authenticate via
+# Spec-declared trigger ingress routes (webhook receivers) that authenticate via
 # their OWN signature verification (``ingress.signature`` / ``provider.verify``),
 # NOT a JWT — a real Alertmanager/PagerDuty/GitHub sender presents an HMAC
 # signature, never a bearer token, so JWT-gating them 401s every real webhook
 # before its signature is ever checked (issue #686). Populated at app-build time
-# by ``_mount_trigger_routes`` for each ingress whose signature is REQUIRED; a
-# receiver with no ``signature`` block, or with ``signature.required: false``
-# (an unsigned payload passes, so it authenticates nothing — #59), is NOT
-# registered here and stays JWT-gated. The legacy
+# by ``_mount_trigger_routes`` for each ingress whose signature is REQUIRED and
+# whose secret resolves; a receiver with no ``signature`` block, or with
+# ``signature.required: false`` (an unsigned payload passes, so it authenticates
+# nothing — #59), is NOT registered here and stays JWT-gated. The legacy
 # ``/triggers/manual`` · ``/triggers/scheduled`` · ``/triggers/inbox*`` routes
 # are console/CLI-facing and are never registered — they keep the JWT guard.
-_PUBLIC_TRIGGER_PATHS: set[str] = set()
+#
+# #206 — keyed by ``(METHOD, path)``, not by path: only the receiver's declared
+# method is public, so the path can never lend its pass to another verb.
+_PUBLIC_TRIGGER_PATHS: set[tuple[str, str]] = set()
 
 
 #: #58 — the ONE route that may carry the bearer in the query string: the run SSE
@@ -134,19 +137,23 @@ def _query_token_allowed(method: str, path: str) -> bool:
     return method == "GET" and _QUERY_TOKEN_PATH.match(path) is not None
 
 
-#: #205 — the request-state key under which the bearer guard records the token it
-#: authenticated, header or query string alike. ``_WorkspaceMiddleware`` (inside
-#: the guard) resolves the caller's tenant from THIS token, so the identity the
+#: #205 — the request-state key under which the bearer guard records the identity
+#: it authenticated, header or query string alike. ``_WorkspaceMiddleware`` (inside
+#: the guard) resolves the caller's tenant from THIS identity, so the identity the
 #: guard accepted is the identity the workspace boundary checks.
-_AUTHENTICATED_TOKEN_STATE = "cairn_authenticated_token"
+#:
+#: #209 — it holds the guard's DECODED claims, not the raw token: re-decoding the
+#: token downstream opened a window where a token expiring between the two decodes
+#: was authenticated by the guard yet skipped the workspace check.
+_AUTHENTICATED_CLAIMS_STATE = "cairn_authenticated_claims"
 
 
-def authenticated_token(scope: dict[str, Any]) -> Optional[str]:
-    """The token the bearer guard authenticated for this request, else ``None``
+def authenticated_claims(scope: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """The claims the bearer guard authenticated for this request, else ``None``
     (auth off, or a public path the guard waved through)."""
     state = scope.get("state")
-    tok = state.get(_AUTHENTICATED_TOKEN_STATE) if isinstance(state, dict) else None
-    return tok or None
+    claims = state.get(_AUTHENTICATED_CLAIMS_STATE) if isinstance(state, dict) else None
+    return claims if isinstance(claims, dict) and claims else None
 
 
 #: #120 — a per-run worker token (``live_channel_env_for`` mints ``sub=worker:<run>``,
@@ -193,18 +200,19 @@ def _run_scoped_route_allowed(run_id: str, method: str, path: str) -> bool:
     return False
 
 
-def register_public_trigger_path(path: str) -> None:
-    """Mark a spec-declared trigger ingress path as reachable without a JWT.
+def register_public_trigger_path(path: str, method: str = "POST") -> None:
+    """Mark a spec-declared trigger ingress ROUTE (``method`` + ``path``) as
+    reachable without a JWT.
 
     Its authn is signature verification in the trigger router (``provider.verify``
     — the mechanism real webhook senders use), so the JWT middleware must let it
     through. Called by ``_mount_trigger_routes`` per ingress whose signature is
-    required (#686, #59).
+    required (#686, #59). Only that method is public (#206).
     """
-    _PUBLIC_TRIGGER_PATHS.add(path)
+    _PUBLIC_TRIGGER_PATHS.add(((method or "").upper(), path))
 
 
-def _is_public_path(path: str) -> bool:
+def _is_public_path(path: str, method: str = "") -> bool:
     """Whether ``path`` is reachable without a bearer token when auth is enabled.
 
     The exact ``_OPEN_PATHS`` set, the console SPA's static assets, PLUS any
@@ -224,7 +232,9 @@ def _is_public_path(path: str) -> bool:
     # kept as an explicit named set so the reason survives the next reader.
     if path in _DOCS_PATHS:
         return False
-    if path in _PUBLIC_TRIGGER_PATHS:
+    # #206 — a webhook receiver is public for its own method only; with no
+    # method named, no receiver is.
+    if ((method or "").upper(), path) in _PUBLIC_TRIGGER_PATHS:
         return True
     if any(path.startswith(pfx) for pfx in _PUBLIC_PATH_PREFIXES):
         return True
@@ -439,6 +449,14 @@ async def caller_identity(token: Optional[str]) -> dict[str, Any]:
             detail="Could not validate credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    return await identity_from_claims(claims)
+
+
+async def identity_from_claims(claims: dict[str, Any]) -> dict[str, Any]:
+    """:func:`caller_identity` for claims ALREADY decoded and verified — by the
+    bearer guard (#209), which hands them on rather than the raw token so the
+    identity is resolved without a second decode. Auth must be on: the caller
+    holds verified claims."""
     sub = str(claims["sub"])
     account_id = str(claims.get("account_id") or "default")
     cfg = _configured_user()
@@ -711,7 +729,7 @@ def install_auth(app: FastAPI) -> None:
         if (
             auth_enabled()
             and request.method != "OPTIONS"
-            and not _is_public_path(request.url.path)
+            and not _is_public_path(request.url.path, request.method)
         ):
             authz = request.headers.get("Authorization", "")
             token = authz[7:].strip() if authz[:7].lower() == "bearer " else ""
@@ -739,5 +757,7 @@ def install_auth(app: FastAPI) -> None:
                 )
             # #205 — hand the workspace middleware the credential checked here,
             # so a query-string token is tenant-checked exactly like a header.
-            setattr(request.state, _AUTHENTICATED_TOKEN_STATE, token)
+            # #209 — hand it the DECODED claims, so nothing downstream re-decodes
+            # (a token expiring in between used to skip the workspace check).
+            setattr(request.state, _AUTHENTICATED_CLAIMS_STATE, claims)
         return await call_next(request)

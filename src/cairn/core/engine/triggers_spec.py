@@ -82,6 +82,31 @@ _VALID_TRANSPORTS = {"http", "bus"}
 _BUS_TOPIC = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]*")
 _VALID_METHODS = {"POST", "PUT"}
 
+#: #206 — every HTTP receiver lives under this prefix. A receiver that requires a
+#: signature answers without a bearer token, so one declared at a control-plane
+#: path (``/runs``, ``/runs/<id>/cancel``) would hand that route its public pass.
+#: The path is also a literal: no ``{param}`` (it would match paths the author never
+#: named), no ``.``/``..`` segment, no empty segment, no trailing slash.
+INGRESS_PATH_PREFIX = "/triggers/"
+_INGRESS_PATH_SEGMENT = re.compile(r"[A-Za-z0-9_~-][A-Za-z0-9._~-]*")
+
+
+def ingress_path_problem(path: Any) -> str:
+    """Why ``path`` cannot be a webhook receiver's ingress path, or ``""`` if it can.
+
+    The ONE rule, read by the spec loader, the ``triggers:`` grammar and the HTTP
+    mount, so a path cannot pass one and fail another."""
+    p = path if isinstance(path, str) else ""
+    rest = p[len(INGRESS_PATH_PREFIX):] if p.startswith(INGRESS_PATH_PREFIX) else ""
+    if rest and all(_INGRESS_PATH_SEGMENT.fullmatch(seg) for seg in rest.split("/")):
+        return ""
+    return (
+        f"ingress path {path!r} must be a literal path under {INGRESS_PATH_PREFIX} "
+        f"(e.g. {INGRESS_PATH_PREFIX}my-source): each segment letters, digits or "
+        f"`._~-`, no parameters, no empty or dot segments, no trailing slash. A "
+        f"receiver anywhere else would sit on a control-plane route"
+    )
+
 
 @dataclass(frozen=True)
 class SignatureSpec:
@@ -345,6 +370,9 @@ def _parse_ingress(raw: Any, path: Path) -> IngressSpec:
     if "topic" in raw:
         raise TriggerSpecError(f"{path}: `topic` belongs to a bus ingress, not {transport!r}")
     ingress_path = _required_str(raw, "path", path, dotted="ingress.path")
+    problem = ingress_path_problem(ingress_path)
+    if problem:
+        raise TriggerSpecError(f"{path}: {problem}")
     method = _optional_str(raw, "method", path, default="POST",
                            dotted="ingress.method")
     if method not in _VALID_METHODS:
@@ -495,6 +523,8 @@ __all__ = [
     "FanOutSpec",
     "RunSpec",
     "TriggerSpecError",
+    "INGRESS_PATH_PREFIX",
+    "ingress_path_problem",
     "load_trigger_specs",
     "load_trigger_spec",
 ]

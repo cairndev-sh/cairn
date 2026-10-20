@@ -86,7 +86,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from cairn.core.engine.triggers_presets import PRESET_SOURCES, preset_for
-from cairn.core.engine.triggers_spec import load_trigger_spec_text
+from cairn.core.engine.triggers_spec import ingress_path_problem, load_trigger_spec_text
 from cairn.core.refs import same_ref
 from cairn.core.workspace import DEFAULT_WORKSPACE
 
@@ -439,6 +439,11 @@ def _check_semantics(decl: Any, *, site: str) -> None:
                 f"({', '.join(PRESET_SOURCES)}) — name one of those, or give an "
                 f"explicit `path:` for a custom source"
             )
+        if (decl.path or "").strip():
+            # #206 — the same rule the spec loader applies, said at the declaration.
+            problem = ingress_path_problem(decl.path.strip())
+            if problem:
+                raise DeclaredTriggerError(f"{site}: `path:` — {problem}")
     elif isinstance(decl, WatchTrigger):
         _check_watch(decl, site=site)
 

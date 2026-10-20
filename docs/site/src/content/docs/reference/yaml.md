@@ -153,11 +153,30 @@ A pipeline can start on its own. Each entry has a `kind`:
 | `watch` | when a watched source changes or a signal crosses a threshold | `source` (`kind: dataset`, `s3` or `table`); `every`; `when`; `on_change` (`propose`, `start` or `none`); `inputs`; `enabled` (default `false`) |
 | `event` | when another pipeline's leg `emits` the topic | `topic`; `input`; `enabled` (default `false`) |
 
+A webhook's `path` must be a literal path under `/triggers/`, such as
+`/triggers/my-source`: letters, digits and `._~-` in each segment, with no
+`{parameters}`, no empty or `.`/`..` segments and no trailing slash. Any other
+path is refused when the pipeline is validated. A receiver whose path an
+existing server route already answers (for example `/triggers/manual`) is not
+mounted, and the server logs why.
+
 With auth on (`CAIRN_JWT_SECRET` set), a webhook answers a sender without a
 bearer token only when its preset requires a signature (Slack, PagerDuty,
-GitHub) and the request carries a valid one. A preset whose signature is
-optional (`custom`, `gmail`) keeps the token check, so call it with
-`Authorization: Bearer <token>`.
+GitHub) and the request carries a valid one. Only the receiver's own method
+(`POST` for every preset) is open; anything else at that path needs a token.
+A preset whose signature is optional (`custom`, `gmail`) keeps the token check,
+so call it with `Authorization: Bearer <token>`.
+
+A required signature needs its secret (`SLACK_SIGNING_SECRET`,
+`PAGERDUTY_WEBHOOK_SECRET`, `GITHUB_WEBHOOK_SECRET`). If the variable is unset
+or empty, the receiver refuses every request, needs a token as well, and the
+server logs an error when it mounts the route.
+
+A webhook's run lands in the workspace where the pipeline that declares it was
+enabled. A receiver shipped as a pack or overlay file, with no such record,
+runs in the server's default workspace. The `X-Cairn-Workspace` header does not
+change this, and a signed request without a token ignores it. A caller with a
+token must belong to the receiver's workspace, or the receiver answers `404`.
 
 The Gmail preset is the one this affects in practice: Google's Pub/Sub push authenticates with
 its own OIDC token in `Authorization`, which is not a cairn token, so on a deployment with

@@ -42,8 +42,9 @@ from cairn.core.dispatch.scheduler import SkillScheduler
 from cairn.core.leadership import Leadership  # #1533 — fleet-singleton election
 from cairn.core import liveness  # ADR-0125 — the in-process leg owner lock
 from cairn.core.triggers.auth import (
+    _is_public_path,
     _oauth2_scheme,
-    authenticated_token,
+    authenticated_claims,
     caller_identity,
     install_auth,
     register_public_trigger_path,
@@ -453,7 +454,10 @@ class _WorkspaceMiddleware:
         if ws is not None:
             # path is authoritative: rewrite to the flat route the handlers declare
             scope = {**scope, "path": rewritten, "raw_path": rewritten.encode("latin-1")}
-        else:
+        elif not (auth_enabled() and _is_public_path(scope.get("path", ""), scope.get("method", ""))):
+            # #209 — NOT on a public route: the guard authenticated nobody there, so
+            # nothing below could check the header's workspace against a caller. A
+            # signed webhook binds to the workspace that declared its receiver.
             hdrs = dict(scope.get("headers") or [])
             ws = hdrs.get(b"x-cairn-workspace", b"").decode("latin-1").strip() or None
         # #1610 (ADR-0094 D3) — AUTHORIZE the asserted workspace before acting
@@ -469,17 +473,21 @@ class _WorkspaceMiddleware:
         # `assert_workspace_allowed` treats as "no tenant boundary to enforce".
         if ws:
             try:
-                from cairn.core.triggers.console_support import caller_account
-                # #205 — the token the bearer guard (outermost) authenticated:
+                from cairn.core.triggers.console_support import account_from_claims, caller_account
+                # #205 — the identity the bearer guard (outermost) authenticated:
                 # it may have come from `?access_token=` on the run stream, and
-                # the tenant check must judge that same credential. The header
-                # parse remains for requests the guard did not authenticate.
-                bearer = authenticated_token(scope)
-                if bearer is None:
+                # the tenant check must judge that same credential. #209 — the
+                # guard's decoded claims, not its token, so no second decode can
+                # fail in between and skip the check. The header parse remains
+                # for requests the guard did not authenticate.
+                claims = authenticated_claims(scope)
+                if claims is not None:
+                    acct = await account_from_claims(claims)
+                else:
                     hdrs = dict(scope.get("headers") or [])
                     raw = hdrs.get(b"authorization", b"").decode("latin-1")
                     bearer = raw.split(" ", 1)[1].strip() if raw.lower().startswith("bearer ") else None
-                acct = await caller_account(bearer) if bearer else None
+                    acct = await caller_account(bearer) if bearer else None
             except Exception:  # noqa: BLE001 — unauthenticated is not unauthorized
                 acct = None
             if acct:
@@ -1029,7 +1037,9 @@ def build_app(
                 run_template=unattended_starter(dispatcher, source="webhook"),
                 run_environment=environment,
             )
-            _mount_trigger_routes(app, router)
+            # Mounted LAST (below, after every router) — #206: a receiver is
+            # refused when an app route already answers its path, so every app
+            # route must be there to be collided with.
         except Exception as exc:  # never let trigger discovery break boot
             logger.warning("spec-declared trigger routes not mounted: %s", exc)
 
@@ -1070,26 +1080,93 @@ def build_app(
         lifespan=_router_lifespans,
     ))
 
+    # ── The spec-declared receivers, discovered above (#206: after every other
+    # route, so a receiver that collides with one is refused, not mounted).
+    if router is not None:
+        try:
+            _mount_trigger_routes(app, router)
+        except Exception as exc:  # never let trigger mounting break boot
+            logger.warning("spec-declared trigger routes not mounted: %s", exc)
+
     return app
+
+
+def _colliding_route(app: FastAPI, method: str, path: str) -> Optional[str]:
+    """The app route that already answers ``path`` (any method), else ``None``.
+
+    #206 — a receiver may not sit on a path an app route serves: its public pass
+    would reach that route (the receiver mounted after it never sees the
+    request), or it would shadow the route (mounted before it). Matched the way
+    Starlette routes a request, so ``/triggers/approve/{workflow_id}`` collides
+    with a receiver at ``/triggers/approve/x``."""
+    from starlette.routing import Match  # noqa: PLC0415 — only the mount needs it
+
+    scope = {"type": "http", "path": path, "root_path": "", "method": method,
+             "path_params": {}, "headers": []}
+    for route in app.routes:
+        matches = getattr(route, "matches", None)
+        if matches is None:
+            continue
+        try:
+            match, _child = matches(scope)
+        except Exception:  # noqa: BLE001 — an exotic route that cannot answer is no collision
+            continue
+        if match != Match.NONE:
+            return str(getattr(route, "path", "") or getattr(route, "name", "") or route)
+    return None
 
 
 def _mount_trigger_routes(app: FastAPI, router: "TriggerRouter", *,
                           skip_paths: "frozenset[str] | set[str]" = frozenset()) -> None:
     """Add one HTTP route per installed trigger spec's ``ingress.path`` (except
-    ``skip_paths``, the ones already mounted)."""
+    ``skip_paths``, the ones already mounted).
+
+    #206 — a receiver is refused (logged, not mounted, never public) when its path
+    is not a literal path under ``/triggers/`` (a spec built without the loader
+    reaches here too) or an app route already answers it."""
+    from cairn.core.engine.triggers_spec import ingress_path_problem  # noqa: PLC0415 — engine off the import path
+    from cairn.core.triggers.router import resolve_secret  # noqa: PLC0415 — local, like its neighbours
+
     for spec in router.specs:
         if spec.ingress.path in skip_paths:
+            continue
+        problem = ingress_path_problem(spec.ingress.path)
+        clash = None if problem else _colliding_route(app, spec.ingress.method, spec.ingress.path)
+        if problem or clash:
+            logger.error(
+                "trigger receiver %r NOT mounted: %s", spec.source,
+                problem or (f"{spec.ingress.method} {spec.ingress.path} collides with the "
+                            f"app route {clash!r}; give the receiver its own path under "
+                            f"/triggers/"),
+            )
             continue
 
         async def handler(request: Request, _spec=spec) -> dict[str, Any]:
             body = await request.body()
             headers = dict(request.headers)
+            # #209 — the run lands in the workspace that declared this receiver,
+            # never one the sender names (a public route ignores X-Cairn-Workspace
+            # in the middleware; this binds it whatever reached the handler). A
+            # caller the guard authenticated must be allowed in that workspace —
+            # the same check, and the same 404, as the path form.
+            ws_token = set_current_workspace(router.workspace_for(_spec))
             try:
-                results = await router.route(_spec, headers, body)
-            except PermissionError as e:
-                raise HTTPException(status_code=401, detail=str(e))
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e))
+                claims = authenticated_claims(request.scope)
+                if claims is not None:
+                    from cairn.core.triggers.console_support import account_from_claims  # noqa: PLC0415 — cycle
+                    try:
+                        await assert_workspace_allowed(current_workspace(),
+                                                       await account_from_claims(claims))
+                    except WorkspaceForbidden:
+                        raise HTTPException(status_code=404, detail="workspace not found") from None
+                try:
+                    results = await router.route(_spec, headers, body)
+                except PermissionError as e:
+                    raise HTTPException(status_code=401, detail=str(e))
+                except ValueError as e:
+                    raise HTTPException(status_code=400, detail=str(e))
+            finally:
+                reset_current_workspace(ws_token)
             return _summarize_routes(_spec.source, results)
 
         app.add_api_route(
@@ -1106,8 +1183,19 @@ def _mount_trigger_routes(app: FastAPI, router: "TriggerRouter", *,
         # signature block, keeps the JWT guard when auth is on.
         sig = spec.ingress.signature
         signature_authed = sig is not None and sig.required
-        if signature_authed:
-            register_public_trigger_path(spec.ingress.path)
+        if signature_authed and resolve_secret(sig.secret) is None:
+            # #206 — a required signature with no usable secret (unset, or set but
+            # empty) verifies nothing: the receiver refuses every request (the
+            # check fails closed) and is never public.
+            signature_authed = False
+            logger.error(
+                "trigger receiver %s %s requires a signature but its secret %s is "
+                "unset or empty: it refuses every request and is NOT public. Set the "
+                "secret to the sender's signing secret",
+                spec.ingress.method, spec.ingress.path, sig.secret,
+            )
+        elif signature_authed:
+            register_public_trigger_path(spec.ingress.path, spec.ingress.method)
         elif sig is not None:
             logger.warning(
                 "trigger ingress %s has signature.required=false, so it is NOT public: "

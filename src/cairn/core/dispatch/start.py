@@ -370,9 +370,12 @@ def unattended_starter(dispatcher: Any, *, source: str, lane: str = "") -> Any:
     """
     async def _start(template_ref: str, inputs: Optional[dict[str, Any]] = None, *,
                      environment: Optional[str] = None) -> Any:
+        from cairn.core.workspace import current_workspace  # noqa: PLC0415 — as the module's other lazy imports
+        # #209 — the pipeline record lands where its legs do: the workspace the
+        # ingress bound (a webhook binds the one that declared its receiver).
         return await launch_ref(
             template_ref, inputs, dispatcher=dispatcher, environment=environment or "",
-            lane=lane, trigger={"source": source},
+            lane=lane, workspace_id=current_workspace(), trigger={"source": source},
         )
     return _start
 
