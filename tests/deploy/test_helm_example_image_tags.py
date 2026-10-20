@@ -29,3 +29,12 @@ def test_each_example_pins_the_released_engine_tag(path):
     tag = str((yaml.safe_load(path.read_text()).get("image") or {}).get("tag", ""))
     assert tag == VERSION, f"{path.name}: image.tag {tag!r}, but the release pushes {VERSION!r}"
     assert not re.match(r"^v\d", tag)
+
+
+def test_the_released_chart_defaults_to_an_image_tag_that_exists():
+    """The chart's image tag defaults to .Chart.AppVersion, so the release must package the chart with
+    the bare version (0.1.2), the tag docker/metadata-action pushes, never the git tag (v0.1.2)."""
+    release = (ROOT / ".github/workflows/release.yml").read_text()
+    helpers = (ROOT / "deploy/helm/cairn/templates/_helpers.tpl").read_text()
+    assert ".Chart.AppVersion" in helpers
+    assert '--app-version "$VERSION"' in release and '--app-version "$GITHUB_REF_NAME"' not in release
