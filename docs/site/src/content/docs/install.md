@@ -181,9 +181,16 @@ helm upgrade --install cairn deploy/helm/cairn -n cairn -f my-values.yaml
 image tag, so pin `image.tag`. Three example values files ship with the
 chart: bundled Postgres (`values-postgres.example.yaml`), an external database
 (`values-external-dsn.example.yaml`) and Temporal
-(`values-temporal.example.yaml`). While the engine image on GHCR is private,
-create a `docker-registry` pull secret in the namespace and list it in
-`imagePullSecrets`.
+(`values-temporal.example.yaml`). The engine image
+(`ghcr.io/cairndev-sh/cairn-engine`) and the chart are public on GHCR, so no
+pull secret is needed.
+
+The same chart is published as an OCI artifact, so you can install a released
+version without cloning the repository:
+
+```bash
+helm upgrade --install cairn oci://ghcr.io/cairndev-sh/charts/cairn --version 0.1.2 -n cairn -f my-values.yaml
+```
 
 Then `kubectl -n cairn rollout status deploy/cairn-server` and
 `curl -fsS https://<your host>/healthz`.

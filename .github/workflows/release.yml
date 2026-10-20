@@ -144,6 +144,6 @@ jobs:
       run: |
         set -euo pipefail
         VERSION="${GITHUB_REF_NAME#v}"
-        helm package "$CHART" --version "$VERSION" --app-version "$GITHUB_REF_NAME" -d /tmp/chart
+        helm package "$CHART" --version "$VERSION" --app-version "$VERSION" -d /tmp/chart  # appVersion = the image tag the release pushes (no v)
         helm push "/tmp/chart/cairn-${VERSION}.tgz" oci://ghcr.io/cairndev-sh/charts
         echo "installed with: helm install cairn oci://ghcr.io/cairndev-sh/charts/cairn --version ${VERSION}" >> "$GITHUB_STEP_SUMMARY"
