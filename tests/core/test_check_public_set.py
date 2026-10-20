@@ -12,7 +12,7 @@ _spec = importlib.util.spec_from_file_location("check_public_set", _layout.REPO 
 check = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(check)
 
-BASE = [("cairndev", "0.1.1"), ("cairn-client", "0.1.1"), ("httpx", "0.28.1")]
+BASE = [("cairndev", "0.1.2"), ("cairn-client", "0.1.2"), ("httpx", "0.28.1")]
 
 
 def test_the_folded_set_is_read_from_the_tree_not_a_list():
@@ -34,9 +34,9 @@ def test_a_folded_distribution_installed_on_its_own_is_refused(folded):
 
 
 def test_a_selected_extra_admits_the_optional_engines_and_the_example_pack_only():
-    optional = [("cairn-operator-dataflow-metaflow", "0.1.1"), ("cairn-pack-hello", "0.2.0")]
+    optional = [("cairn-operator-dataflow-metaflow", "0.1.2"), ("cairn-pack-hello", "0.2.0")]
     assert check.private_installed(installed=[*BASE, *optional]) == [
-        "cairn-operator-dataflow-metaflow 0.1.1", "cairn-pack-hello 0.2.0"]
+        "cairn-operator-dataflow-metaflow 0.1.2", "cairn-pack-hello 0.2.0"]
     assert check.private_installed(["metaflow", "hello"], installed=[*BASE, *optional]) == []
     # an extra never admits a folded pack, asyncssh or a name the tree does not build
     extra = [("asyncssh", "2.23.1"), ("cairn-operator-remote", "0.1.0"), ("cairn-pack-other", "1.0")]

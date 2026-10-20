@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cairn-operator-dataflow-skypilot"
-version = "0.1.1"
+version = "0.1.2"
 description = "The SkyPilot provisioning dataflow engine (ADR-0104 D5) for cairn's ml and data flows — offered by cairndev[skypilot] (ADR-0134 D3)."
 readme = "README.md"
 license = "Apache-2.0"

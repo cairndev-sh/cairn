@@ -25,8 +25,8 @@ your CLI profile:
 cairn remote login -e https://cairn.example.com -u admin
 ```
 
-Install the `auth` extra on the server: sign-up and `cairn remote
-hash-password` hash passwords with argon2, and need it.
+Sign-up and `cairn remote hash-password` hash passwords with argon2, which the base install
+carries (since 0.1.2; on 0.1.1 install the `auth` extra).
 
 ## 2. Create the first account
 

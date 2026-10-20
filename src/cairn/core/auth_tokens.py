@@ -10,7 +10,7 @@ the FastAPI side (``POST /token``, the bearer middleware, ``require_auth`` /
 Moved out of ``cairn/core/triggers/auth.py`` unchanged. Configuration is the same
 environment (read lazily so tests can monkeypatch): ``CAIRN_JWT_SECRET`` (its
 presence enables auth), ``CAIRN_JWT_ALGORITHM``, ``CAIRN_ACCESS_TOKEN_EXPIRE_MINUTES``.
-Password hashing uses ``pwdlib[argon2]`` — the ``auth`` extra — imported lazily;
+Password hashing uses ``pwdlib[argon2]`` — a base dependency since 0.1.2, imported lazily;
 token verification uses only PyJWT, a base dependency.
 """
 from __future__ import annotations
@@ -68,7 +68,7 @@ def _password_hash():
     global _PH
     if _PH is None:
         try:
-            from pwdlib import PasswordHash  # optional dep: the `auth` extra
+            from pwdlib import PasswordHash  # a base dependency since 0.1.2; guarded for older installs
         except ImportError as e:
             raise PasswordHashingUnavailable(
                 "password hashing needs the 'auth' extra: "

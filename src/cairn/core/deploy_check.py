@@ -130,11 +130,11 @@ def check_deploy(env: dict[str, str], profiles: set[str]) -> list[CheckResult]:
             category="required"))
     elif h:
         try:
-            from pwdlib import PasswordHash  # noqa: PLC0415 — optional dep: the `auth` extra
+            from pwdlib import PasswordHash  # noqa: PLC0415 — a base dependency since 0.1.2; guarded for older installs
         except ImportError:
             out.append(CheckResult(
                 "password_hash", "warn",
-                "cannot verify the hash format — the `auth` extra (pwdlib[argon2]) is not installed here",
+                "cannot verify the hash format — pwdlib[argon2] is not installed here (a base dependency since 0.1.2)",
                 category="required"))
         else:
             try:

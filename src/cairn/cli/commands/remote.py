@@ -172,7 +172,7 @@ def _ephemeral():
         fg="yellow", err=True,
     )
     proc = subprocess.Popen(
-        [sys.executable, "-m", "cairn.core.triggers.main"], env=env,
+        [sys.executable, "-P", "-m", "cairn.core.triggers.main"], env=env,  # -P: never the cwd's cairn/
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     ep = f"http://127.0.0.1:{port}"

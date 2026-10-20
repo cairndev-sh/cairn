@@ -13,8 +13,8 @@ SCRIPT = Path(__file__).resolve().parents[2] / "docs/site/public/install.sh"
 SH = shutil.which("sh")
 pytestmark = pytest.mark.skipif(SH is None, reason="needs a POSIX sh")
 LINKS = "https://github.com/cairndev-sh/cairn/releases/expanded_assets/v{}"
-INSTALL = (f"tool install --upgrade --force --python 3.13 --find-links {LINKS.format('0.1.1')} "
-           "--with cairn-client==0.1.1 cairndev==0.1.1")
+INSTALL = (f"tool install --upgrade --force --python 3.13 --find-links {LINKS.format('0.1.2')} "
+           "--with cairn-client==0.1.2 cairndev==0.1.2")
 
 
 def _stub(path: Path, body: str) -> None:
@@ -89,15 +89,15 @@ def test_the_github_fallback_pins_the_engine_and_the_client_to_the_release(env):
     """While the wheels come from GitHub, a higher version of cairndev or cairn-client published on
     PyPI by someone else must not win: both are pinned to the release."""
     e, log, _, _ = env
-    r = _run(e, CAIRN_RELEASE="0.1.1", CAIRN_EXTRAS="hello")
+    r = _run(e, CAIRN_RELEASE="0.1.2", CAIRN_EXTRAS="hello")
     assert r.returncode == 0, r.stderr
     line = log.read_text().strip()
-    assert line.endswith("--with cairn-client==0.1.1 cairndev[hello]==0.1.1"), line
+    assert line.endswith("--with cairn-client==0.1.2 cairndev[hello]==0.1.2"), line
 
 
 def test_a_release_that_is_not_a_version_is_refused(env):
     e, log, _, _ = env
-    r = _run(e, CAIRN_RELEASE="0.1.1/../../evil")
+    r = _run(e, CAIRN_RELEASE="0.1.2/../../evil")
     assert r.returncode != 0 and "CAIRN_RELEASE is not a version" in r.stderr
     assert not log.exists()
 

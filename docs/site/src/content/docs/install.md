@@ -16,7 +16,7 @@ sudo. Choose extras or pin a version with environment variables:
 
 ```bash
 curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_EXTRAS=hello,rag sh
-curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_VERSION=0.1.1 sh
+curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_VERSION=0.1.2 sh
 ```
 
 | Variable | Default | |
@@ -24,13 +24,13 @@ curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_VERSION=0.1.1 sh
 | `CAIRN_EXTRAS` | none | comma-separated extras, from the table below |
 | `CAIRN_VERSION` | the latest release | an exact version |
 | `CAIRN_PYTHON` | `3.13` | the Python uv provisions for the tool |
-| `CAIRN_RELEASE` | `CAIRN_VERSION`, else `0.1.1` | the GitHub Release whose wheels back the install; empty means PyPI only |
+| `CAIRN_RELEASE` | `CAIRN_VERSION`, else `0.1.2` | the GitHub Release whose wheels back the install; empty means PyPI only |
 
-The same without the script. Until the 0.1.1 packages are on PyPI, point the installer at the
+The same without the script. Until the 0.1.2 packages are on PyPI, point the installer at the
 release's wheels (third-party packages still come from PyPI):
 
 ```bash
-L=https://github.com/cairndev-sh/cairn/releases/expanded_assets/v0.1.1
+L=https://github.com/cairndev-sh/cairn/releases/expanded_assets/v0.1.2
 pip install cairndev --find-links "$L"            # inside a virtual environment, Python 3.12 or later
 uv tool install cairndev --find-links "$L"        # or: pipx install cairndev --pip-args="--find-links $L"
 ```
@@ -66,7 +66,7 @@ cairn ls            # the installed packs and what they contribute
 | `runtime-sqlite` · `runtime-postgres` | a durable checkpointer for paused agentic flows |
 | `pii` | Presidio-backed PII detection |
 | `telemetry` | OpenTelemetry export |
-| `auth` | argon2 password hashing for server sign-in |
+| `auth` | kept for compatibility: argon2 password hashing is in the base install since 0.1.2 |
 | `oauth` | sign-in with GitHub or Google |
 | `nats` | the NATS remote-job channel |
 | `metaflow` | the Metaflow dataflow engine (`cairn-operator-dataflow-metaflow`) |
