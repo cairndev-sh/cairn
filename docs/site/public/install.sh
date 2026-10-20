@@ -48,9 +48,12 @@ main() {
   [ -n "$version" ] && spec="$spec==$version"
 
   if [ -n "$release" ]; then
+    # Pinned to the release while the wheels come from GitHub: our names are not yet registered
+    # on PyPI, and a higher version published there by someone else must never win.
+    [ -n "$version" ] || spec="$spec==$release"
     links="https://github.com/cairndev-sh/cairn/releases/expanded_assets/v$release"
     say "installing $spec (Python $python) as a uv tool, wheels from $links"
-    uv tool install --upgrade --force --python "$python" --find-links "$links" "$spec"
+    uv tool install --upgrade --force --python "$python" --find-links "$links" --with "cairn-client==$release" "$spec"
   else
     say "installing $spec (Python $python) as a uv tool"
     uv tool install --upgrade --force --python "$python" "$spec"
