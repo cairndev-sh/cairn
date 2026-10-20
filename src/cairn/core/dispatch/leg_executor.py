@@ -52,8 +52,8 @@ class LegOutcome:
     metrics: dict[str, Any] = field(default_factory=dict)
     error: str = ""
     handle: Any = None
-    #: #1441 — what the engine reported the leg spent (``DataflowResult.cost_usd``,
-    #: the runner's sum of stage ``cost_usd``); 0.0 until a leg succeeds.
+    #: #1441/#131 — known spend the engine reported for this leg, including
+    #: partial cost from failed attempts and earlier attempts replaced by retry.
     cost_usd: float = 0.0
 
     @property
@@ -350,6 +350,7 @@ async def execute_leg(
     delay = max(0.0, float(policy.initial_interval_seconds or 0.0))
 
     out = LegOutcome(state="failed", error="leg never attempted")
+    known_attempt_cost_usd = 0.0
     adopting = _adopt_handle(adopt)
     for attempt in range(1, attempts + 1):
         # Governance invariant: EVERY attempt is admitted — the reservation is
@@ -364,21 +365,29 @@ async def execute_leg(
                 # #1441 — the caller could not read what earlier legs spent (an
                 # adopted leg proceeds without it); a FRESH attempt is new spend
                 # and unknown spend is never "nothing spent".
-                return LegOutcome(state="failed", error=(
-                    "budget: the spend of earlier legs is unreadable; a new attempt is not admitted"))
+                return LegOutcome(
+                    state="failed",
+                    error=("budget: the spend of earlier legs is unreadable; "
+                           "a new attempt is not admitted"),
+                    cost_usd=known_attempt_cost_usd,
+                )
             try:
                 reservation = await reserve(
                     series_id, est_usd=float(estimated_usd or 0.0),
-                    spent_usd=float(spent_usd or 0.0), budget_usd=float(budget_usd or 0.0),
+                    spent_usd=round(float(spent_usd or 0.0) + known_attempt_cost_usd, 6),
+                    budget_usd=float(budget_usd or 0.0),
                     # #1530 — stamp the run so a hold left behind by a dead
                     # process is attributable (and reapable) by run id, not just
                     # by the object this frame happens to hold.
                     run_id=str(run_id or ""),
                 )
             except BudgetExceeded as e:
-                return LegOutcome(state="failed", error=str(e))
+                return LegOutcome(
+                    state="failed", error=str(e), cost_usd=known_attempt_cost_usd)
 
         retriable = False
+        attempt_cost_usd = 0.0
+        status = None
         try:
             # H6c (#1248, ADR-0088) — resume selection: before EVERY attempt,
             # ask for the newest durable checkpoint of this exact spec. Fresh
@@ -426,13 +435,16 @@ async def execute_leg(
                     except Exception:  # noqa: BLE001
                         logger.debug("leg %s: on_submit persistence failed", ref, exc_info=True)
             status = await _poll_until_terminal(engine, handle, poll_budget_s, heartbeat=heartbeat)
+            attempt_cost_usd = _reported_metrics_cost(getattr(status, "metrics", {}) or {})
             if str(getattr(status, "state", "")) == "succeeded":
                 result = await engine.result(handle)
+                result_cost_usd = _reported_cost(result)
+                attempt_cost_usd = max(attempt_cost_usd, result_cost_usd)
                 out = LegOutcome(
                     state="succeeded", handle=handle,
                     stats=dict(getattr(result, "stats", {}) or {}),
                     metrics=dict(getattr(status, "metrics", {}) or {}),
-                    cost_usd=_reported_cost(result),
+                    cost_usd=round(known_attempt_cost_usd + attempt_cost_usd, 6),
                 )
                 # ADR-0118 D5 — each opted-in stage's descriptor stats re-checked before the
                 # intake verdict and before anything registers; a refusal fails the leg.
@@ -460,21 +472,34 @@ async def execute_leg(
                 # #1441 — the hold gives way to what the leg ACTUALLY spent (the
                 # template path's rule, dispatcher.py `_close_reservations`), not the
                 # estimate it was admitted on.
-                await settle(reservation, actual_usd=out.cost_usd)
+                await settle(reservation, actual_usd=attempt_cost_usd)
                 return out
             out = LegOutcome(
                 state=str(getattr(status, "state", "failed")), handle=handle,
                 metrics=dict(getattr(status, "metrics", {}) or {}),
                 error=str(getattr(status, "error", "") or ""),
+                cost_usd=round(known_attempt_cost_usd + attempt_cost_usd, 6),
             )
             # Only the ENGINE may call a failure transient (cancellation never
             # is); an exception below has no flag and is not retried.
             retriable = (out.state == "failed") and bool(getattr(status, "retriable", False))
         except Exception as e:  # noqa: BLE001 — a leg failure is an outcome, not a crash
             logger.exception("leg %s failed", ref)
-            out = LegOutcome(state="failed", error=f"{type(e).__name__}: {e}")
+            attempt_cost_usd = max(
+                attempt_cost_usd,
+                _reported_metrics_cost(getattr(status, "metrics", {}) or {}),
+            )
+            out = LegOutcome(
+                state="failed", error=f"{type(e).__name__}: {e}",
+                metrics=dict(getattr(status, "metrics", {}) or {}),
+                cost_usd=round(known_attempt_cost_usd + attempt_cost_usd, 6),
+            )
 
-        await release(reservation)
+        if attempt_cost_usd > 0:
+            await settle(reservation, actual_usd=attempt_cost_usd)
+            known_attempt_cost_usd = round(known_attempt_cost_usd + attempt_cost_usd, 6)
+        else:
+            await release(reservation)
         if not retriable or attempt >= attempts:
             return out
         if on_retry is not None:
@@ -494,9 +519,23 @@ def _reported_cost(result: Any) -> float:
     (a duck-typed result from an older engine carries no cost)."""
     try:
         value = float(getattr(result, "cost_usd", 0.0) or 0.0)
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return 0.0
     return value if 0.0 < value < float("inf") else 0.0   # NaN compares False
+
+
+def _reported_metrics_cost(metrics: Any) -> float:
+    """Known positive partial cost from an engine's progressive metrics."""
+    if not isinstance(metrics, dict):
+        return 0.0
+    raw = metrics.get("cost_usd", 0.0)
+    if isinstance(raw, bool):
+        return 0.0
+    try:
+        value = float(raw or 0.0)
+    except (OverflowError, TypeError, ValueError):
+        return 0.0
+    return value if 0.0 < value < float("inf") else 0.0
 
 
 def _adopt_handle(persisted: Optional[dict]) -> Any:

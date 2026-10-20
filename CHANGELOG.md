@@ -4,6 +4,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+- Failed and retried flow-leg attempts now retain known partial spend in run cost accounting and subsequent budget reservations.
+
 ## [0.1.3]
 
 ### Security

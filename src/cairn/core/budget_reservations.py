@@ -416,11 +416,12 @@ async def reserve(series_id: str, *, est_usd: float, spent_usd: float,
 
 
 async def release(reservation: Optional[Reservation]) -> None:
-    """Free a reservation whose run failed or was cancelled — no spend occurred.
+    """Free a reservation when the attempt reported no positive spend.
 
     Idempotent: terminal handling can fire more than once (the completion path
     and the reconciler both see the same run), and a double release must not
-    free budget that was never held.
+    free budget that was never held. Callers with a reported positive spend
+    must use :func:`settle` even when the attempt failed or was cancelled.
     """
     if reservation is None:
         return
@@ -429,13 +430,13 @@ async def release(reservation: Optional[Reservation]) -> None:
 
 async def settle(reservation: Optional[Reservation],
                  actual_usd: float = 0.0) -> None:
-    """Close a reservation whose run SUCCEEDED.
+    """Close a reservation after an attempt completes with known spend.
 
-    The hold stops counting: the actual cost is now recorded as spend in the
-    ledger, so holding the estimate as well would double-count it. Under the
-    Postgres backend the row is transitioned to ``settled`` with ``actual_usd``
-    recorded, so the table is a full audit trail of what each admission
-    actually cost.
+    This applies to successful, failed, or cancelled attempts. The hold stops
+    counting and the actual cost is recorded as spend, so holding the estimate
+    as well would double-count it. Under the Postgres backend the row is
+    transitioned to ``settled`` with ``actual_usd`` recorded, so the table is
+    a full audit trail of what each admission actually cost.
     """
     if reservation is None:
         return

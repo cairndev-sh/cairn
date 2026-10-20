@@ -40,7 +40,7 @@ It owns execution, all rows, the per-stage loop, its own retries/resources on it
 substrate; it receives no registry or database credentials (ADR-0082 D3) and returns
 descriptors + scalar stats only.
 
-**Spend (#1441).** A stage reports its own spend under the stat `cost_usd`; the runner
+**Spend (#1441, #131).** A stage reports its own spend under the stat `cost_usd`; the runner
 (`run_dataflow`) sums it across stages and mapped items for `budget.max_cost_usd` and returns
 it as `DataflowResult.cost_usd` (`contract.py:332`, the field ADR-0081 D2 lists). The runner
 also meters the governed LLM chokepoint itself: each kernel call and each mapped item runs in
@@ -49,10 +49,13 @@ an `obs.cost_scope` without the session backstop, and a stage that made at least
 `llm_tokens_out`, `llm_usd` and `llm_unpriced_calls` (absent when it made none); its
 `cost_usd` is the kernel's own value when the kernel reported one, else `llm_usd`. They are
 added after the raw output check and ride the descriptor and findings like any stat
-(`<stage>_llm_usd`). The control plane settles the leg's reservation at `cost_usd` and writes
-it on the leg's `Run` (`llm_cost_usd` → `Run.cost`, `leg_hooks.flow_leg_record`, both owners);
-a failed leg, and a succeeded leg whose engine reported no cost (a GPU train stage today), records no
-`Run.cost` — unknown, never $0 (the payload still carries `llm_cost_usd`).
+(`<stage>_llm_usd`). As each stage or mapped item progresses, the runner writes the cumulative
+known positive cost to `metrics.json`, including metered calls made before a stage fails. Each
+engine exposes that terminal metric on failed and cancelled jobs. The control plane settles
+each attempt's reservation at its known cost and adds earlier attempts to a retry's next
+reservation. The final known total is written on the leg's `Run` (`llm_cost_usd` → `Run.cost`,
+`leg_hooks.flow_leg_record`, both owners). Unknown cost remains absent, never $0; a succeeded
+leg whose engine reports no cost (a GPU train stage today) still records no `Run.cost`.
 
 ## What cairn owns
 Admission and governance before submit, the record, the handle for re-attach

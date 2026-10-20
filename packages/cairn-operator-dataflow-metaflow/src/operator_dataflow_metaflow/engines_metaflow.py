@@ -308,6 +308,10 @@ class MetaflowEngine:
             k: v for k, v in progress.items()
             if k in ("stages_done", "stages_total") and isinstance(v, (int, float))
         }
+        cost_usd = progress.get("cost_usd")
+        if (isinstance(cost_usd, (int, float)) and not isinstance(cost_usd, bool)
+                and 0 < cost_usd < float("inf")):
+            metrics["cost_usd"] = round(float(cost_usd), 6)
         stage = progress.get("stage")
 
         if proc is not None and proc.returncode is None:
@@ -572,7 +576,15 @@ class MetaflowEngine:
                 return _status("running", None, {})
             if run.successful:
                 return _status("succeeded", None, {})
-            return _status("failed", None, {},
+            metrics: dict[str, Any] = {}
+            try:
+                cost_usd = run["execute"].task.data.partial_cost_usd
+                if (isinstance(cost_usd, (int, float)) and not isinstance(cost_usd, bool)
+                        and 0 < cost_usd < float("inf")):
+                    metrics["cost_usd"] = round(float(cost_usd), 6)
+            except Exception:  # noqa: BLE001 — older runs may have no persisted partial cost
+                pass
+            return _status("failed", None, metrics,
                            error=f"metaflow run {spec} failed (client status; "
                                  "see the metadata service for step detail)")
         except Exception:  # noqa: BLE001 — an unreadable service is "cannot say", not "failed"

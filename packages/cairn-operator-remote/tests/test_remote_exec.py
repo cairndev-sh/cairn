@@ -107,9 +107,12 @@ async def test_poll_running_surfaces_live_metrics(monkeypatch):
 
 
 async def test_poll_failure(monkeypatch):
-    _patch_conn(monkeypatch, {"exit_code": "1", "tail": "boom"})
+    _patch_conn(monkeypatch, {
+        "exit_code": "1", "tail": "boom", "metrics.json": '{"cost_usd": 0.42}',
+    })
     st = await RemoteExecOp().poll(JobHandle(job_id="box:/w", meta={"host": "box", "workdir": "/w"}), _inp(), _ctx())
     assert st.state == "failed" and "exit 1" in st.error
+    assert st.metrics == {"cost_usd": 0.42}
 
 
 # ── #337: liveness — a job isn't terminal just because exit_code is absent ──
