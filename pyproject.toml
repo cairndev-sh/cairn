@@ -2,7 +2,7 @@
 # The DISTRIBUTION is `cairndev` (ADR-0121 D3, #2429); the import name `cairn` and the
 # `cairn` command do not change.
 name = "cairndev"
-version = "0.1.1"
+version = "0.1.2"
 description = "A governed control plane for AI and ML work: pipelines that fine-tune, evaluate, compress and serve models, with approval, policy, budget and lineage on every step"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -74,6 +74,9 @@ dependencies = [
     # entry points are this project's own. None of them is a distribution of its own, so none
     # is a dependency. The official packs, the domain contracts, `cairn-ask` and asyncssh are
     # extras or the platform's.
+    # `cairn dev` turns on password sign-in (dev/dev) and the quickstart logs in with it, so password
+    # hashing is part of the base install (0.1.2; in 0.1.1 it was only the `auth` extra).
+    "pwdlib[argon2]>=0.2.0",
 ]
 
 [project.urls]

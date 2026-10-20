@@ -727,7 +727,7 @@ wheels = [
 
 [[package]]
 name = "cairn-client"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "packages/cairn-client" }
 dependencies = [
     { name = "httpx" },
@@ -738,7 +738,7 @@ requires-dist = [{ name = "httpx", specifier = ">=0.27" }]
 
 [[package]]
 name = "cairn-operator-dataflow-metaflow"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "packages/cairn-operator-dataflow-metaflow" }
 
 [package.optional-dependencies]
@@ -752,7 +752,7 @@ provides-extras = ["metaflow"]
 
 [[package]]
 name = "cairn-operator-dataflow-skypilot"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "packages/cairn-operator-dataflow-skypilot" }
 
 [package.optional-dependencies]
@@ -786,7 +786,7 @@ provides-extras = ["all"]
 
 [[package]]
 name = "cairndev"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },
@@ -806,6 +806,7 @@ dependencies = [
     { name = "opentelemetry-instrumentation-logging" },
     { name = "opentelemetry-sdk" },
     { name = "packaging" },
+    { name = "pwdlib", extra = ["argon2"] },
     { name = "pydantic-settings" },
     { name = "pyjwt" },
     { name = "python-frontmatter" },
@@ -987,6 +988,7 @@ requires-dist = [
     { name = "polars", marker = "extra == 'dataflow-engine'", specifier = ">=1.0" },
     { name = "presidio-analyzer", marker = "extra == 'pii'", specifier = ">=2.2" },
     { name = "presidio-anonymizer", marker = "extra == 'pii'", specifier = ">=2.2" },
+    { name = "pwdlib", extras = ["argon2"], specifier = ">=0.2.0" },
     { name = "pwdlib", extras = ["argon2"], marker = "extra == 'auth'", specifier = ">=0.2.0" },
     { name = "pyarrow", marker = "extra == 'dataflow-engine'", specifier = ">=15" },
     { name = "pydantic", marker = "extra == 'kernel'", specifier = ">=2.7" },

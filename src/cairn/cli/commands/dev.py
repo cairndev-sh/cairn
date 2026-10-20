@@ -111,7 +111,7 @@ def _seed(env: dict[str, str]) -> None:
     points at. ONE code path: `cairn demo` → `seed_demo_workspace`. Idempotent."""
     cairn_bin = Path(sys.executable).with_name("cairn")
     cmd = [str(cairn_bin), "demo"] if cairn_bin.exists() else [
-        sys.executable, "-m", "cairn.cli.main", "demo"]
+        sys.executable, "-P", "-m", "cairn.cli.main", "demo"]
     typer.secho("seeding demo data into the dev store…", fg=typer.colors.GREEN)
     r = subprocess.run(cmd, env=env)
     if r.returncode:
@@ -146,7 +146,7 @@ def dev_cmd(
             fg=typer.colors.GREEN,
         )
         procs.append(subprocess.Popen(
-            [sys.executable, "-m", "cairn.core.triggers.main"], env=env,
+            [sys.executable, "-P", "-m", "cairn.core.triggers.main"], env=env,  # -P: never the cwd's cairn/
         ))
 
     if not engine_only:

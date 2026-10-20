@@ -3,7 +3,7 @@
 #
 #   curl -LsSf https://docs.cairndev.sh/install.sh | sh
 #   curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_EXTRAS=hello,rag sh
-#   curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_VERSION=0.1.1 sh
+#   curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_VERSION=0.1.2 sh
 #
 # Installs uv if it is missing (astral.sh's own installer, into ~/.local/bin, no sudo; like any uv
 # install it adds that directory to your shell's PATH), then installs — or upgrades — the
@@ -14,7 +14,7 @@
 #   CAIRN_VERSION  an exact version to pin (default: the latest release)
 #   CAIRN_PYTHON   the Python uv provisions for the tool (default: 3.13)
 #   CAIRN_RELEASE  the GitHub Release whose wheels back the install while PyPI catches up
-#                  (default: CAIRN_VERSION, else 0.1.1; empty: PyPI only)
+#                  (default: CAIRN_VERSION, else 0.1.2; empty: PyPI only)
 #
 # Uninstall: uv tool uninstall cairndev
 #
@@ -34,9 +34,9 @@ main() {
   case "$version" in *[!A-Za-z0-9.+-]*) die "CAIRN_VERSION is not a version (got: $version)";; esac
   case "$python" in ""|*[!0-9.]*) die "CAIRN_PYTHON is not a Python version (got: $python)";; esac
   # Until PyPI carries the release, its wheels come from the GitHub Release of that version (the
-  # pinned one, else 0.1.1); third-party packages still come from PyPI. CAIRN_RELEASE= (empty)
+  # pinned one, else 0.1.2); third-party packages still come from PyPI. CAIRN_RELEASE= (empty)
   # installs from PyPI alone.
-  release="${CAIRN_RELEASE-${version:-0.1.1}}"
+  release="${CAIRN_RELEASE-${version:-0.1.2}}"
   case "$release" in *[!A-Za-z0-9.+-]*) die "CAIRN_RELEASE is not a version (got: $release)";; esac
 
   if ! command -v uv >/dev/null 2>&1; then
