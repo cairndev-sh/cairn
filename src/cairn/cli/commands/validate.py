@@ -67,7 +67,7 @@ def _unbound_hint(reports: list[ValidationReport]) -> str:
         return ""
     from cairn.core.settings import getenv  # noqa: PLC0415
 
-    active = getenv("CAIRN_PROFILE", "") or "(none)"
+    active = getenv("CAIRN_PROFILE", "") or "local-dev (the default; set CAIRN_PROFILE to use another)"
     lines = [f"\nhint: a capability has no binding in the active profile ({active}). "
              "Validate under the profile the pack runs with:",
              "  CAIRN_PROFILE=<profile.toml> cairn validate …"]

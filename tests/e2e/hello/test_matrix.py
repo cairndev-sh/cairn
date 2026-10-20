@@ -211,6 +211,15 @@ def _hooks_receipt(ctx: Ctx) -> None:
     proved on profile-and-publish, which runs in every cell (CI included); nightly-ops
     needs the proof sshd, which CI cannot run."""
     hooks = ctx.srv.home / ".cairn" / "hello-cairn" / "receipts.jsonl"
+    from importlib.metadata import PackageNotFoundError, version  # noqa: PLC0415
+    try:
+        version("cairn-pack-hello")
+        installed = True
+    except PackageNotFoundError:
+        installed = False
+    # With the wheel installed its listener is registered, so a missing receipts file is a broken
+    # hook, not an unproved one: fail the cell rather than report NOT PROVED.
+    assert hooks.is_file() or not installed, f"cairn-pack-hello is installed but wrote no receipts at {hooks}"
     if hooks.is_file():
         lines = [line for line in hooks.read_text(encoding="utf-8").splitlines() if ctx.pid in line]
         assert lines, f"no hook receipt names {ctx.pid}"

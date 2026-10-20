@@ -21,7 +21,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - `cairn pipeline show` no longer says flow legs cannot run yet.
 - `cairn dev` no longer promises a console at `/console` (the web console is not part of the public core), and `cairn demo`/`cairn dev --seed` say how to read the `demo` workspace.
 - `cairn init operator` scaffolds a smoke test per operator, so `cairn test <pack>` has something to run.
-- `cairn remote approve`/`reject` (`POST /runs/{id}/resume`) on a pipeline step gate answers 409 with the `cairn remote advance` command, not 502.
+- `cairn remote approve`/`reject` (`POST /runs/{id}/resume`) on a pipeline step gate answers 409 with the `cairn remote advance` command, not 502, on the in-process runtime; under DBOS and Temporal the step-gate resume is unchanged.
 - When a capability has no binding in the active profile, `cairn validate` names the active profile and the profiles the pack ships (hello-cairn validates under `profiles/hello.toml`).
 
 ### Changed
