@@ -1,7 +1,8 @@
 """Read-only admin UI over cairn's run store (starlette-admin).
 
-Optional inspection surface — install the ``admin`` extra
-(``pip install 'cairndev[admin]'``). It binds to the live :class:`RunStore` via a
+Optional inspection surface. It needs ``starlette-admin`` and ``itsdangerous``,
+which ``cairndev`` does not install (there is no ``admin`` extra): add them to the
+environment cairn runs in. It binds to the live :class:`RunStore` via a
 **custom data layer** (no ORM), so it works identically whether the store is
 SQLite or Postgres (``CAIRN_STORAGE`` / ``CAIRN_RUN_DB``). Unlike Datasette (SQLite
 only) this follows the configured backend.
@@ -42,9 +43,13 @@ try:
         StringField,
     )
     from starlette_admin.auth import AdminUser, AuthProvider, LoginFailed
-except ImportError as e:  # optional dep — the `admin` extra
+except ImportError as e:  # optional deps, not an extra of cairndev
+    import sys as _sys
+
     raise ImportError(
-        "the admin UI needs the 'admin' extra: pip install 'cairndev[admin]'"
+        "the admin UI needs starlette-admin and itsdangerous, which cairndev does not "
+        "install (there is no 'admin' extra). Add them to the environment cairn runs in:\n"
+        f"  uv pip install --python {_sys.executable} starlette-admin itsdangerous"
     ) from e
 
 import json

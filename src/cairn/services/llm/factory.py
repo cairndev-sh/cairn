@@ -34,7 +34,7 @@ from langchain_openai import ChatOpenAI
 
 from cairn.core import obs
 from cairn.services.llm.gateway import get_gateway
-from cairn.services.llm.redacting import RedactingChatOpenAI
+from cairn.services.llm.redacting import COMPILE_PLACEHOLDER_KEY, RedactingChatOpenAI
 
 _log = logging.getLogger("cairn.llm_factory")
 
@@ -138,13 +138,15 @@ def build_chat_model(
     # present compiles 0 templates → empty graph registry → every run fails
     # "Graph not found". Inject a placeholder when no key is configured (and the
     # gateway didn't set one); a genuinely missing key still fails loudly at
-    # *invocation* (run-time), which is the correct place to require it.
+    # *invocation* (run-time), which is the correct place to require it: the
+    # model refuses to send the placeholder to a provider and says "no model
+    # configured" instead (RedactingChatOpenAI).
     if not (
         params.get("api_key")
         or params.get("openai_api_key")
         or os.environ.get("OPENAI_API_KEY")
     ):
-        params["api_key"] = "sk-cairn-compile-placeholder"
+        params["api_key"] = COMPILE_PLACEHOLDER_KEY
 
     # #1376 — THE redaction chokepoint for LangChain-driven calls. Every
     # agentic LLM surface funnels through this constructor (template prompt

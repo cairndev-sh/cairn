@@ -15,11 +15,11 @@ from typing import Optional
 
 import typer
 
-# Load .env into os.environ BEFORE importing the command modules: several
-# modules (notably cairn.core.validate) stamp an offline dummy
-# OPENAI_API_KEY via os.environ.setdefault at import time, and litellm/openai
-# read os.environ directly — so a real key must be present first. Shared with
-# the worker/server entrypoints via load_env().
+# Load .env into os.environ BEFORE importing the command modules: litellm/openai
+# read os.environ directly, so a real key must be present first. No module
+# stamps a dummy key into os.environ (a keyless model gets a compile-only
+# placeholder from build_chat_model, which never reaches a provider). Shared
+# with the worker/server entrypoints via load_env().
 from cairn.core.provider_settings import load_env
 
 load_env()

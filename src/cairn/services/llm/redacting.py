@@ -25,12 +25,39 @@ untouched, so deployments without a binding pay nothing.
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+import os
+from typing import Any, Iterator, Optional
 
 from langchain_core.messages import BaseMessage
 from langchain_openai import ChatOpenAI
 
 logger = logging.getLogger("cairn.services.llm.redacting")
+
+#: The key ``build_chat_model`` injects when none is configured, so a template
+#: COMPILES offline (``ChatOpenAI`` checks its key at construction, #412). It is
+#: never a credential: a model holding it refuses to call a provider (below).
+COMPILE_PLACEHOLDER_KEY = "sk-cairn-compile-placeholder"
+
+
+class ModelNotConfiguredError(RuntimeError):
+    """An LLM call was attempted with no model configured (no key, no endpoint)."""
+
+
+def _refuse_without_model(model: "RedactingChatOpenAI") -> None:
+    """Fail fast, before any network call, when the model holds only the compile
+    placeholder and no endpoint is configured. Sending the placeholder to the
+    vendor would only come back as a 401 that names a key nobody set. With
+    ``OPENAI_BASE_URL``/``base_url`` set (a keyless OpenAI-compatible endpoint,
+    such as a local stub), the call goes ahead: such an endpoint needs no key."""
+    key = model.openai_api_key.get_secret_value() if model.openai_api_key else ""
+    if key != COMPILE_PLACEHOLDER_KEY:
+        return
+    if model.openai_api_base or os.environ.get("OPENAI_BASE_URL") or os.environ.get("OPENAI_API_BASE"):
+        return
+    raise ModelNotConfiguredError(
+        f"no model configured for {model.model_name!r}: set OPENAI_API_KEY, or "
+        "OPENAI_BASE_URL for a keyless OpenAI-compatible endpoint (a local stub or "
+        "gateway), or point LLM_GATEWAY at a gateway that holds the key")
 
 
 async def redact_lc_messages(messages: list[BaseMessage]) -> list[BaseMessage]:
@@ -72,11 +99,13 @@ class RedactingChatOpenAI(ChatOpenAI):
 
     async def _agenerate(self, messages: list[BaseMessage], stop: Optional[list[str]] = None,
                          run_manager: Any = None, **kwargs: Any) -> Any:
+        _refuse_without_model(self)
         return await super()._agenerate(
             await redact_lc_messages(messages), stop=stop, run_manager=run_manager, **kwargs)
 
     async def _astream(self, messages: list[BaseMessage], stop: Optional[list[str]] = None,
                        run_manager: Any = None, **kwargs: Any) -> Any:
+        _refuse_without_model(self)
         async for chunk in super()._astream(
                 await redact_lc_messages(messages), stop=stop,
                 run_manager=run_manager, **kwargs):
@@ -86,6 +115,7 @@ class RedactingChatOpenAI(ChatOpenAI):
                   run_manager: Any = None, **kwargs: Any) -> Any:
         from cairn.core.obs.redact import _NOOP, get_redactor  # noqa: PLC0415 — cycle
 
+        _refuse_without_model(self)
         if get_redactor() is not _NOOP:
             raise RuntimeError(
                 "a redact.text binding is active but this model was invoked "
@@ -95,5 +125,11 @@ class RedactingChatOpenAI(ChatOpenAI):
             )
         return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
 
+    def _stream(self, messages: list[BaseMessage], stop: Optional[list[str]] = None,
+                run_manager: Any = None, **kwargs: Any) -> Iterator[Any]:
+        _refuse_without_model(self)
+        return super()._stream(messages, stop=stop, run_manager=run_manager, **kwargs)
 
-__all__ = ["RedactingChatOpenAI", "redact_lc_messages"]
+
+__all__ = ["COMPILE_PLACEHOLDER_KEY", "ModelNotConfiguredError", "RedactingChatOpenAI",
+           "redact_lc_messages"]

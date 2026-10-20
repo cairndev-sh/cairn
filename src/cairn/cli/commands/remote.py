@@ -30,7 +30,7 @@ import sys
 import time
 import tomllib
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import typer
 
@@ -788,14 +788,17 @@ def console(
 ):
     """Launch the interactive Textual console (Toad-style) over the server — a
     live runs view, a command bar with autocomplete, and clickable HITL
-    approve/reject. Needs the optional 'tui' extra (textual + textual-autocomplete)."""
+    approve/reject. Needs textual and textual-autocomplete, which cairndev does not
+    install (there is no 'tui' extra): the error says how to add them."""
     ep, tok = _resolve(endpoint, token, profile)
     try:
         from cairn.cli.tui.app import run_console
     except ModuleNotFoundError as e:
         _fail(
-            f"the console needs the `tui` extra ({e.name}). Install it:\n"
-            "  pip install -e '.[tui]'   (or: uv pip install textual textual-autocomplete)"
+            f"the terminal console needs textual and textual-autocomplete ({e.name} is "
+            "missing), which cairndev does not install (there is no 'tui' extra). Add "
+            "them to the environment cairn runs in:\n"
+            f"  uv pip install --python {sys.executable} textual textual-autocomplete"
         )
     run_console(ep, tok)
 
@@ -819,11 +822,19 @@ def hash_password_cmd(
 # runs, as three commands.
 
 
+def _step_status(s: Any) -> str:
+    """A step's status: ``GET /pipelines`` gives the bare string, a full record a dict."""
+    return str(s.get("status", "") if isinstance(s, dict) else s or "")
+
+
 def _pipeline_line(p: dict) -> str:
-    steps = p.get("step_state") or {}
-    done = sum(1 for s in steps.values() if s.get("status") in ("done", "skipped"))
+    # `GET /pipelines` rows carry `steps` ({step: status}) and `name`; a full
+    # record (`GET /pipelines/{id}`) carries `step_state` and `pipeline_name`.
+    steps = p.get("steps") or p.get("step_state") or {}
+    done = sum(1 for s in steps.values() if _step_status(s) in ("done", "skipped"))
+    name = p.get("name") or p.get("pipeline_name") or ""
     return (f"{p.get('pipeline_id', ''):22s} {p.get('status', ''):10s} "
-            f"{done}/{len(steps)} steps  {p.get('pipeline_name', '')}")
+            f"{done}/{len(steps)} steps  {name}")
 
 
 @app.command()

@@ -848,6 +848,7 @@ def _render_operator_readme(name: str, ops: list[str]) -> str:
         {name}/
         ├── pyproject.toml            # wheel metadata + cairn.operators entry-points
         ├── pack.toml                 # manifest: kind=operator + [operator."…"] tables
+        ├── tests/test_operators.py   # a smoke test per operator (`cairn test .`)
         └── src/{pkg}/
             ├── operators/            # one module per operator (the Operation classes)
             └── schemas/              # one module per operator (pydantic Input/Output)
@@ -859,6 +860,7 @@ def _render_operator_readme(name: str, ops: list[str]) -> str:
         pip install -e .              # registers every operator with the engine
         cairn ls                  # confirm discovery
         cairn doctor
+        cairn test .              # the smoke tests in tests/
         ```
 
         Each operator's `run()` raises `NotImplementedError` until you implement
@@ -866,6 +868,44 @@ def _render_operator_readme(name: str, ops: list[str]) -> str:
         (or by hand: a module + schema + an `[operator."…"]` table + an
         entry-point).
         """)
+
+
+def _render_operator_test(name: str, ops: list[str]) -> str:
+    """One smoke test per operator, so ``cairn test <pack>`` has something to run
+    from the first minute (an empty ``tests/`` made pytest exit 5, "no tests")."""
+    pkg = f"operator_{name}"
+    rows = "\n".join(
+        f'    ("{op}", "{pkg}.operators.{_op_parts(op)[2]}", "{_op_parts(op)[4]}"),'
+        for op in ops)
+    return textwrap.dedent('''\
+        """Smoke tests for {pkg}. Scaffolded by `cairn init operator`.
+
+        Run them with `cairn test <this pack>`. Once an operator's run() is
+        implemented, add a test that calls it with a sample input.
+        """
+        from __future__ import annotations
+
+        import importlib
+        import sys
+        from pathlib import Path
+
+        import pytest
+        from pydantic import BaseModel
+
+        # The package's own source, so the tests also run before `pip install -e .`.
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+        OPERATORS = [
+        {rows}
+        ]
+
+
+        @pytest.mark.parametrize("op, module, cls", OPERATORS)
+        def test_the_operator_class_imports_with_its_schemas(op, module, cls):
+            klass = getattr(importlib.import_module(module), cls)
+            assert issubclass(klass.input_schema, BaseModel), op
+            assert issubclass(klass.output_schema, BaseModel), op
+        ''').format(pkg=pkg, rows=rows)
 
 
 def _render_operator_changelog() -> str:
@@ -924,8 +964,10 @@ def init_operator(
         _g, _s, module, _b, _cls = _op_parts(op)
         _write_file(src / "operators" / f"{module}.py", _render_operator_module(name, op), force=force)
         _write_file(src / "schemas" / f"{module}.py", _render_operator_schema(op), force=force)
-    for sub in ("docs", "examples", "tests"):
+    for sub in ("docs", "examples"):
         _gitkeep(root / sub)
+    _write_file(root / "tests" / "test_operators.py", _render_operator_test(name, op_names),
+                force=force)
 
     typer.echo(f"scaffolded operator pack {root}  ({len(op_names)} operator(s))")
     for op in op_names:

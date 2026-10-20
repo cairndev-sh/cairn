@@ -38,7 +38,7 @@ FEATURES: dict[str, tuple[str, str]] = {
     "trigger.webhook": ("a declared webhook starting its pipeline", "profile-and-publish"),
     "event.emit": ("a leg's `emits:` published on the bus", "profile-and-publish"),
     "event.on": ("a `kind: event` trigger starting a pipeline on that topic", "ask-the-docs"),
-    "hooks": ("a cairn.run_hooks listener's receipts", "nightly-ops"),
+    "hooks": ("a cairn.run_hooks listener's receipts", "profile-and-publish"),
     "llm": ("a model call through core's build_chat_model (the keyless stub model, #2607)", "ask-the-docs"),
     "mcp": ("mcp/call against a stdio server", "ask-the-docs"),
     "rag": ("rag index + query on a vector store", "ask-the-docs"),

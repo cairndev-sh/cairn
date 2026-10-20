@@ -152,9 +152,13 @@ def dev_cmd(
     if not engine_only:
         web = _web_dir()
         if web is None:
+            # The web console is the platform's (#2427): the public engine serves no
+            # /console, so do not point anyone at one.
             typer.secho(
-                "console source not found (installed wheel?) — the engine serves the "
-                "built console at /console; use --engine-only to silence this.",
+                "no web console here: it is not part of the public core (the cairn "
+                "platform ships it). Running the engine only; use the CLI "
+                "(`cairn remote login`, `cairn remote ps`) or the HTTP API. Pass "
+                "--engine-only to skip this check.",
                 fg=typer.colors.YELLOW,
             )
         else:

@@ -78,7 +78,9 @@ def cmd(
     for why in result.skipped:
         console.print(f"      [yellow]skipped[/] {why}")
     console.print(
-        f"\nOpen the console and switch to the [b]{result.workspace_id}[/] workspace "
-        f"to explore Runs / Pilot / Audit. Re-run this command any time — it is "
+        f"\nThe data is in workspace [b]{result.workspace_id}[/], not the default one "
+        f"that [b]cairn remote[/] reads: send the header [b]X-Cairn-Workspace: "
+        f"{result.workspace_id}[/] to the HTTP API (a console, where one is installed, "
+        f"switches workspace in its header). Re-run this command any time — it is "
         f"idempotent. Tear it down with [b]cairn demo --archive[/]."
     )

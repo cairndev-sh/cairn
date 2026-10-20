@@ -38,6 +38,45 @@ def _format(report: ValidationReport, *, verbose: bool) -> str:
     return "\n".join(lines)
 
 
+#: The compile refusal for a capability the active profile does not bind (ADR-0111 D10).
+_UNBOUND = "has no [profile.bindings] entry"
+
+
+def _pack_profiles(files: list[Path]) -> list[Path]:
+    """The profiles shipped by the packs that hold ``files`` (``<pack>/profiles/*.toml``)."""
+    found: list[Path] = []
+    for f in files:
+        for parent in f.resolve().parents:
+            if (parent / "pack.toml").is_file():
+                for prof in sorted((parent / "profiles").glob("*.toml")):
+                    if prof not in found:
+                        found.append(prof)
+                break
+    return found
+
+
+def _unbound_hint(reports: list[ValidationReport]) -> str:
+    """When a capability is unbound, say which profile was active and which to use.
+
+    A pack validates under the profile it runs with: the default dev profile binds
+    only the builtins every pack shares, so a pack whose flow needs another capability
+    (hello-cairn's nightly-job needs ``secrets.store``) ships a profile that binds it."""
+    failing = [Path(r.path) for r in reports
+               if any(i.level == "error" and _UNBOUND in i.message for i in r.issues)]
+    if not failing:
+        return ""
+    from cairn.core.settings import getenv  # noqa: PLC0415
+
+    active = getenv("CAIRN_PROFILE", "") or "(none)"
+    lines = [f"\nhint: a capability has no binding in the active profile ({active}). "
+             "Validate under the profile the pack runs with:",
+             "  CAIRN_PROFILE=<profile.toml> cairn validate …"]
+    shipped = _pack_profiles(failing)
+    if shipped:
+        lines.append("  profiles shipped with this pack: " + ", ".join(str(p) for p in shipped))
+    return "\n".join(lines)
+
+
 def _run(
     paths: list[str],
     *,
@@ -62,6 +101,9 @@ def _run(
         f"\n{len(reports)} artifact(s): {len(reports) - n_err} ok, "
         f"{n_err} failed, {n_warn} warning(s)"
     )
+    hint = _unbound_hint(reports)
+    if hint:
+        print(hint)
     failed = n_err > 0 or (strict and n_warn > 0)
     return 1 if failed else 0
 

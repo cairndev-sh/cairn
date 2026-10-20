@@ -83,7 +83,7 @@ jobs:
         cache-dependency-glob: uv.lock
     - name: Locked install of the public set with the proof extras (train when the root declares it)
       run: uv sync --locked --extra dev --extra rag --extra rag-sqlite-vec --extra storage-postgres --extra runtime-sqlite
-        --extra runtime-postgres --extra runtime-dbos $(grep -q '^train = ' pyproject.toml && echo --extra train)
+        --extra runtime-postgres --extra runtime-dbos --extra hello $(grep -q '^train = ' pyproject.toml && echo --extra train)
     - name: Every matrix and crash cell of the feature proof (tests/e2e/hello)
       run: env -u OBS_STORAGE -u CAIRN_STORAGE .venv/bin/pytest -q --no-header -p no:cacheprovider -rs -m e2e --junitxml=/tmp/test-results/public-e2e.xml
         tests/e2e
@@ -106,5 +106,27 @@ jobs:
         context: .
         file: Dockerfile.engine
         push: false
+        load: true
+        tags: cairn-engine:ci
         cache-from: type=gha
         cache-to: type=gha,mode=max
+    # The image starts as the Dockerfile header documents: a bare run gets the packaged
+    # profile; auth on binds 0.0.0.0 (healthz answers, /runs needs a token); keyless stays
+    # on the container's loopback (nothing answers) unless CAIRN_TRIGGER_HOST says otherwise.
+    - name: The engine image starts as documented
+      run: |
+        set -eu
+        wait_up() { for _ in $(seq 1 60); do curl -fsS "$1/healthz" >/dev/null 2>&1 && return 0; sleep 2; done; return 1; }
+        docker run -d --name eng-auth -p 127.0.0.1:19090:9090 \
+          -e CAIRN_JWT_SECRET="$(openssl rand -hex 32)" -e CAIRN_API_PASSWORD=ci-only cairn-engine:ci
+        wait_up http://127.0.0.1:19090
+        test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:19090/runs)" = 401
+        docker run -d --name eng-trial -p 127.0.0.1:19092:9090 -e CAIRN_TRIGGER_HOST=0.0.0.0 cairn-engine:ci
+        wait_up http://127.0.0.1:19092
+        docker run -d --name eng-keyless -p 127.0.0.1:19091:9090 cairn-engine:ci
+        for _ in $(seq 1 60); do docker logs eng-keyless 2>&1 | grep -q 'trigger server starting on' && break; sleep 2; done
+        docker logs eng-keyless 2>&1 | grep -q 'trigger server starting on 127.0.0.1:9090'
+        if curl -fsS --max-time 3 http://127.0.0.1:19091/healthz; then echo "a keyless container answered on its published port"; exit 1; fi
+    - if: always()
+      name: Engine container logs
+      run: for c in eng-auth eng-trial eng-keyless; do echo "== $c"; docker logs "$c" 2>&1 | tail -n 40 || true; done

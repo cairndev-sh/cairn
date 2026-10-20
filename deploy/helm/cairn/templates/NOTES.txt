@@ -3,21 +3,13 @@ cairn {{ .Chart.AppVersion }} — release {{ .Release.Name }} in {{ .Release.Nam
   runtime      {{ .Values.runtime }}
   image        {{ include "cairn.image" . }}
   database     {{ if .Values.postgres.enabled }}bundled StatefulSet ({{ include "cairn.postgresName" . }}){{ else }}external DSN{{ end }}
-  console      served by the server container at https://{{ .Values.ingress.host }}/console
+  api          https://{{ .Values.ingress.host }} (cairn remote login --endpoint https://{{ .Values.ingress.host }})
 
 Next:
 
   kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "cairn.fullname" . }}-server
   curl -fsS https://{{ .Values.ingress.host }}/healthz
 
-{{- if not .Values.imagePullSecrets }}
-{{- if hasPrefix "ghcr.io/cairndev-sh/" .Values.image.repository }}
-
-NOTE: {{ .Values.image.repository }} is PRIVATE until the owner makes the GHCR
-package public. If the pods sit in ImagePullBackOff, create a pull secret and
-set imagePullSecrets — see the chart README, "Owner steps".
-{{- end }}
-{{- end }}
 {{- if eq (include "cairn.imageTag" .) "latest" }}
 
 WARNING: image.tag is `latest`. Pin a tag or digest so "what is deployed" is

@@ -29,8 +29,10 @@ against the light stack's `proof` profile (Postgres, sshd), so `nightly-ops` (SS
 env-secrets check, the run hook) runs there. The `public-e2e` CI job runs every
 storage × runtime × bus cell and the crash cells against a pgvector sibling only: a key
 generated in the job cannot be mounted into a CI service container, so `nightly-ops` skips in CI
-with that reason. The Infisical variant reads NOT PROVED in both, because its machine
-identity is made by hand. A receipt counts only when the case that recorded it passed in
+with that reason. The Infisical variant reads NOT PROVED in both: neither starts an
+Infisical server or seeds a machine identity (`scripts/oss/proof_seed.py` says how). The run
+hook (`hooks`) is proved on `profile-and-publish`, so it needs the `hello` extra (the
+installed wheel declares the listener), which `public-e2e` installs. A receipt counts only when the case that recorded it passed in
 that run's junit. A SQLite-DBOS cell needs a Python whose SQLite is >= 3.42 (#2655); both
 runners use a uv-managed Python.
 

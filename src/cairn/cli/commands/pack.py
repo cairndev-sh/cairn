@@ -17,6 +17,7 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -208,7 +209,7 @@ def check_cmd(
 RESTORE_SAFE_SYNC = (
     "uv sync --extra dev --extra rag --extra rag-sqlite-vec \\\n"
     "        --extra runtime-sqlite --extra runtime-temporal \\\n"
-    "        --extra telemetry --extra auth \\\n"
+    "        --extra runtime-dbos --extra telemetry --extra auth \\\n"
     "        --extra ssh"
 )
 
@@ -395,14 +396,15 @@ def add_cmd(
 
     dist = _distribution_name(target)
     if not dist:
-        console.print(f"[red]✗ {target}/pyproject.toml declares no [project] name[/]")
+        console.print(f"[red]✗ {escape(str(target))}/pyproject.toml declares no "
+                      f"{escape('[project]')} name[/]")
         raise typer.Exit(2)
 
     root = _workspace_root()
     if root is None:
         console.print("[red]✗ no uv workspace root found[/] — run this from inside "
                       "a cairn checkout (the pyproject.toml with "
-                      "[tool.uv.workspace]), or use [bold]--dev[/].", markup=False)
+                      f"{escape('[tool.uv.workspace]')}), or use [bold]--dev[/].")
         raise typer.Exit(2)
 
     try:
@@ -423,7 +425,7 @@ def add_cmd(
     try:
         new_text, changes = wire_pack_into_pyproject(text, member=member, dist=dist)
     except ValueError as e:
-        console.print(f"[red]✗ cannot wire {pp}[/]: {e}", markup=False)
+        console.print(f"[red]✗ cannot wire {escape(str(pp))}[/]: {escape(str(e))}")
         raise typer.Exit(1)
 
     if not changes:
@@ -440,10 +442,9 @@ def add_cmd(
         title="now install it — this exact command (see CONTRIBUTING.md)",
         border_style="cyan"))
     console.print(
-        "[yellow]⚠[/] run it as written. A bare [bold]uv sync[/] (or any "
-        "[bold]uv run[/], which re-syncs) REMOVES every extra not named on the "
-        "command line — presidio, temporal and auth vanish silently. That is why "
-        "this command does not sync for you.")
+        "[yellow]⚠[/] run it as written. A bare [bold]uv sync[/] REMOVES every "
+        "extra not named on the command line — presidio, temporal and auth vanish "
+        "silently. That is why this command does not sync for you.")
     console.print(f"[dim]Then confirm:[/] [bold]cairn ls {dist}[/]")
 
 
@@ -518,7 +519,7 @@ def build_cmd(
         console.print(f"  op {op['name']}  risk={op['risk']} "
                       f"requires={op['requires']}", markup=False)
     for note in compiled.notes:
-        console.print(f"  [yellow]note[/] {note}", markup=False)
+        console.print(f"  [yellow]note[/] {escape(str(note))}")
 
     _warn_shadowing_authoring_file(compiled, dest)
 
@@ -549,20 +550,21 @@ def sync_cmd(
 
     report = check_pack(target) if check else sync_pack(target)
     for line in report.import_problems:
-        console.print(f"  [yellow]import[/] {line}", markup=False)
+        console.print(f"  [yellow]import[/] {escape(str(line))}")
     for line in report.synced:
-        console.print(f"  [green]synced[/] {line}", markup=False)
+        console.print(f"  [green]synced[/] {escape(str(line))}")
     if report.clean:
         console.print(f"[green]✓[/] {target.name}: class ↔ pack.toml ↔ entry points in sync")
         return
     for name in report.missing_tables:
-        console.print(f"  [red]missing table[/] [operator.\"{name}\"]", markup=False)
+        table = '[operator."' + str(name) + '"]'
+        console.print(f"  [red]missing table[/] {escape(table)}")
     for name, diffs in report.drifted.items():
-        console.print(f"  [red]drift[/] {name}: " + "; ".join(diffs), markup=False)
+        console.print(f"  [red]drift[/] {escape(str(name))}: " + escape("; ".join(diffs)))
     for ep in report.missing_entry_points:
-        console.print(f"  [red]missing entry point[/] {ep}", markup=False)
+        console.print(f"  [red]missing entry point[/] {escape(str(ep))}")
     for name in report.orphan_tables:
-        console.print(f"  [yellow]orphan table[/] {name} (no class in src/)", markup=False)
+        console.print(f"  [yellow]orphan table[/] {escape(str(name))} (no class in src/)")
     raise typer.Exit(1)
 
 

@@ -7,8 +7,8 @@ knowledge required.
 
 > **New here?** Start with this file, then the public
 > [Quickstart](https://docs.cairndev.sh/quickstart/) for the runtime side
-> (choosing SQLite vs Postgres, seeding demo fixtures, starting the server
-> and console). This file covers *contributing*; that one covers *running*.
+> (choosing SQLite vs Postgres, seeding demo fixtures, starting the server).
+> This file covers *contributing*; that one covers *running*.
 
 ## Quickstart (the 15-minute path)
 
@@ -18,28 +18,31 @@ git clone https://github.com/cairndev-sh/cairn && cd cairn
 # 1. Python env (uv: https://docs.astral.sh/uv/)
 uv sync --extra dev --extra rag --extra rag-sqlite-vec \
         --extra runtime-sqlite --extra runtime-temporal \
-        --extra telemetry --extra auth \
+        --extra runtime-dbos --extra telemetry --extra auth \
         --extra ssh
 
-# ⚠ Any later bare `uv sync` (or a plain `uv run <cmd>`, which re-syncs the
-# environment) REMOVES every extra not named on that command line — auth,
-# temporal, and anything else you added (e.g. `--extra pii` for presidio)
-# vanish silently. After any sync, re-run the full command above.
+# ⚠ Any later bare `uv sync` REMOVES every extra not named on that command
+# line — auth, temporal, dbos and anything else you added (e.g. `--extra pii`
+# for presidio) vanish silently. After any sync, re-run the full command above.
+# (`uv run <cmd>` adds what is missing but removes nothing.)
 
-# 2. Console deps (only needed for UI work)
-npm ci --prefix console
+# 2. A local engine on a pinned sqlite config, with demo data
+uv run cairn dev --engine-only --seed
 
-# 3. Everything, one command
-uv run cairn dev --seed
+# 3. In another shell: sign in and drive it
+uv run cairn remote login -u dev -p dev -e http://localhost:8000
+uv run cairn remote launch hello-cairn/profile-and-publish --environment sandbox \
+    -i path=$PWD/examples/hello-cairn/data/sample.jsonl --watch
 ```
 
-`cairn dev` starts the engine (http://localhost:8000) and the console's vite
-dev server on a **pinned** sqlite config — a stale `.env` can never redirect
-your dev session to someone's postgres. Log in with **dev / dev**. `--seed`
-fills every console surface with deterministic demo data (including one run
-paused at an approval gate, so the HITL flow is explorable immediately).
-
-Flags: `--engine-only`, `--web-only`, `--port`, `--db`.
+`cairn dev` starts the engine on http://localhost:8000 on a **pinned** sqlite
+config (`~/.cairn/dev.db`): a stale `.env` can never redirect your dev session to
+someone's postgres. Sign in with **dev / dev**. From a checkout it adds
+`examples/hello-cairn` to `CAIRN_PACK_PATH`. `--seed` writes deterministic demo
+records (three pipelines, one paused at a person gate) into the `demo` workspace;
+`cairn remote` reads the default workspace, so send `X-Cairn-Workspace: demo` to
+the HTTP API to see them. The web console is not part of this repository, so pass
+`--engine-only`. Other flags: `--port`, `--db`.
 
 ## Working on a pack
 
@@ -70,11 +73,16 @@ installed engine at load time — a mismatch warns, in the log and as a
 ## Running tests
 
 ```bash
-.venv/bin/pytest tests/core -q     # engine/core (the PR gate runs the full suite)
+.venv/bin/pytest tests/core -q     # engine/core
 .venv/bin/pytest -q                # everything, incl. operator-pack tests
-npm run build --prefix console     # console typecheck + bundle
-npm run lint  --prefix console     # oxlint
+uvx ruff check .                   # lint, the rule set CI runs
 ```
+
+`tests/core/test_dbos_runtime.py` needs the `runtime-dbos` extra (in the sync line
+above). CI's `public` job runs `tests/core`, `tests/cli`, `tests/deploy` and the
+optional engines' own tests with `-m "not dbos and not timing and not e2e"`; its
+`public-e2e` job runs the feature proof (`-m e2e tests/e2e`, Postgres and DBOS cells
+included). `scripts/oss/feature_proof.sh` runs the same proof locally with services.
 
 The builtin operator packs and the core contracts are part of the `cairndev`
 project (ADR-0137). An editable install reads the packs' code and `pack.toml`
@@ -82,9 +90,8 @@ from `packages/`, but holds COPIES of the contract definitions
 (`packages/cairn-contracts-*/definitions`). After editing a contract, refresh
 them: `uv sync --reinstall-package cairndev` (with the extras you use).
 
-Prefer `.venv/bin/pytest` over `uv run pytest`: `uv run` re-syncs the
-environment first, which strips any extras not named on that exact command
-(see the quickstart warning).
+`.venv/bin/pytest` and `uv run pytest` run the same environment: `uv run` installs
+what is missing but removes nothing, so the extras from the sync line stay.
 
 The suite is hermetic: no keys, no databases, no network. If a test you write
 needs a real backend, it must opt in explicitly — the repo `.env` is
@@ -100,11 +107,11 @@ env -u CAIRN_STORAGE .venv/bin/pytest tests/core -q
 
 ## Other CI gates
 
-- **`cairn.lock`** — the shipped pack closure. If your change touches shipped
-  packs/operators, regenerate with `uv run cairn lock` (exactly that
-  invocation — it is what CI verifies via `uv run cairn lock --check`).
-- **Docs honesty** — `uv run python scripts/audit_status.py` probes the
-  claims in `status.yaml` against the code.
+- **`uv.lock`** — the install is `uv sync --locked`, so a dependency or version
+  change needs `uv lock` in the same PR (`uv lock --check` tells you).
+- **The wheels** — `scripts/check_folded_wheels.py` builds the five wheels and
+  checks that `cairndev` carries the builtin operators and the core contracts.
+- **The engine image** — the `image` job builds `Dockerfile.engine` and starts it.
 
 ## Documentation
 
@@ -127,9 +134,8 @@ Build it locally with `npm ci && npm run build` in `docs/site/`. The one-line in
    pack tests live inside the pack's own `tests/`, not top-level `tests/`.
 5. New operators ship with golden-fixture tests. Packs are data (md + YAML) —
    code belongs in operator packs.
-6. **Regenerate what your change invalidates.** A pack edit needs
-   `uv run cairn lock`. It is a
-   CI gate, and it has been missed before.
+6. **Regenerate what your change invalidates**: `uv lock` after a dependency or
+   version change, and the docs page a behaviour change makes wrong.
 7. **Sign off every commit (DCO).** Contributions are Apache-2.0 under the
    [Developer Certificate of Origin](https://developercertificate.org/): commit
    with `git commit -s`, which adds a `Signed-off-by: Your Name <you@example.com>`
@@ -161,28 +167,15 @@ cause rather than memorising a count — an "11-failure baseline" here was
 nothing** until you've checked your search terms against the codebase's own
 vocabulary.
 
-Install the hooks once and pre-commit will catch the quick stuff locally
-(pre-commit is not a project dependency, so run it as a `uvx` tool — plain
-`uv run pre-commit` will not find it):
-
-```bash
-uvx pre-commit install
-```
-
 ### What gates a merge to `main`
 
-`main` has **no GitHub branch protection today** — the private repository's
-plan does not offer it, so nothing in GitHub itself blocks a push or a red
-merge. The rule is a working agreement:
+`main` is a protected branch:
 
-- **Every change lands through a PR**, and the maintainer reviews and merges
-  it. Nobody pushes to `main` directly.
-- **Green CI is the merge condition**: the `ci.yml` jobs **test (3.13)**,
-  **build**, **web** and **docker** must pass. A red check is fixed in the PR,
-  not merged around.
-- Branch protection with these required checks will be switched on when the
-  repository becomes public; this section will then describe what GitHub
-  enforces.
+- **Every change lands through a PR** with one approving review; conversations
+  must be resolved, and force pushes and deletion are refused.
+- **Required checks**: `public` and `public-e2e` (`ci.yml`) and `dco` (`dco.yml`),
+  on a branch up to date with `main`. The `image` job runs on every PR too; a red
+  one is fixed in the PR, not merged around.
 
 ## Where decisions live (reading order)
 
@@ -191,35 +184,34 @@ merge. The rule is a working agreement:
    ADR-0020 (the locked pack contract), ADR-0084 (control plane: one flow
    concept, pipelines as the runnable surface), ADR-0085 (this contributor
    experience and where it's going).
-3. [docs/roadmap.md](docs/roadmap.md) + the GitHub issue tracker — what's in
-   flight. Issues labeled `good-first-issue` are curated to be self-contained.
+3. The GitHub issue tracker — what's in flight. Issues labeled
+   `good-first-issue` are curated to be self-contained.
 
 Changing a locked surface needs a **new ADR**, not an edit to an old one.
 
 ## Layout in one paragraph
 
-`cairn/core/` is the engine (dispatch, storage, policy, triggers/API server);
-`cairn/packs/` are domain packs (data only, each its own `cairn-pack-<name>` wheel
-with its `cairn.packs` entry point in `cairn/packs/<dir>/pyproject.toml`);
-`cairn/operators/` are operator packs (each its own wheel, tests inside; `builtins/`
-ship with the public core, `official/` are the platform's); `contracts/` are the
-capability contracts (data wheels); `client/` is `cairn-client`, the typed API client
-over the committed contract (no `cairn.core` imports — CI-enforced); `console/` is
-the React console (top-level per ADR-0085); `packages/cairn-platform/` is the
-private platform (ADR-0120 D3, ADR-0121): the product modules, the console-only
-routers, the product CLI commands and the run-event listeners that the public core
-reaches only through entry-point groups (`cairn.routers`, `cairn.cli`,
+`src/cairn/core/` is the engine (dispatch, storage, policy, triggers/API server) and
+`src/cairn/cli/` the `cairn` command; `packages/cairn-operator-*` are the builtin
+operator packs and `packages/cairn-contracts-*` the core capability contracts, both
+shipped inside the `cairndev` wheel (ADR-0137), except the two optional engines
+(`cairn-operator-dataflow-metaflow`, `cairn-operator-dataflow-skypilot`), which are
+wheels of their own; `packages/cairn-client` is `cairn-client`, the typed API client
+(no `cairn.core` imports — CI-enforced); `examples/hello-cairn` is the example
+domain pack (data only, its own `cairn-pack-hello` wheel); `deploy/` holds the
+compose stack and the Helm chart; `docs/site/` is docs.cairndev.sh. The web console
+and the product modules are the private platform (ADR-0120 D3, ADR-0121), which the
+public core reaches only through entry-point groups (`cairn.routers`, `cairn.cli`,
 `cairn.run_hooks`, `cairn.model_catalogs`, `cairn.seeds`); `docs/decisions/` is why
 everything above is the way it is.
 
 ## The public core and the platform
 
-`uv sync --extra dev` alone installs the PUBLIC SET (the engine, the builtin operator
-packs, the core contracts, client) and nothing private; the `public` CI job
-proves that set installs alone and passes the `tests/core` files listed in
-`tests/core` (exactly the public set, as assembled) (plus `scripts/check_public_set.py`, which refuses
-any private distribution). The `ssh` extra adds the rest, which
-is what this repository's CI and image run. Three rules the boundary tests enforce:
+`uv sync --extra dev` installs the public set (the engine with the builtin operator
+packs and the core contracts, and the client) and nothing private; the `public` CI
+job proves that set installs alone and passes `tests/core`, and
+`scripts/check_public_set.py` refuses any private distribution. Three rules the
+boundary tests enforce:
 the public core never imports `cairn_platform` or a domain pack; an operator pack
 imports only `cairn.core.operator` (its re-exports cover what a pack needs from the
 core) plus `cairn.core.dataflow` for engine providers; product logic lives in the platform,

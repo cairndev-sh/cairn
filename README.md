@@ -113,14 +113,12 @@ default. Promotion pauses for a human. Read the walkthrough in the
 
 ## One engine, many surfaces
 
-The same governed core is driven from three places:
+The same governed core is driven from two places in this repository:
 
 - **CLI** — the full control surface: run, preflight, replay, approve, deploy.
   → [CLI reference](https://docs.cairndev.sh/reference/cli/)
-- **Web console** — a React app served at `/console`: runs, approval gates,
-  pipelines, configuration, policies, connections, and a sandboxed Playground.
-- **HTTP + SSE API** — everything the console does is a documented endpoint,
-  including live run streaming. → [HTTP API](https://docs.cairndev.sh/reference/http-api/)
+- **HTTP + SSE API** — every control-plane action is an endpoint, including live
+  run streaming. → [HTTP API](https://docs.cairndev.sh/reference/http-api/)
 
 ## Documentation
 

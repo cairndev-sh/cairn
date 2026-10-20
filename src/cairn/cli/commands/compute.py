@@ -89,6 +89,21 @@ async def _status(name: str) -> dict:
             "hourly_usd": box.hourly_usd, "state": state}
 
 
+def _aws_setup_hint(e: BaseException) -> Optional[str]:
+    """A one-line fix for botocore's "not configured" errors, else None."""
+    try:
+        from botocore.exceptions import NoCredentialsError, NoRegionError  # noqa: PLC0415
+    except ImportError:
+        return None
+    if isinstance(e, NoRegionError):
+        return ("no AWS region: pass --region (e.g. --region eu-central-1) or set "
+                "AWS_DEFAULT_REGION.")
+    if isinstance(e, NoCredentialsError):
+        return ("no AWS credentials: set AWS_PROFILE or AWS_ACCESS_KEY_ID/"
+                "AWS_SECRET_ACCESS_KEY (the sweep needs ec2:DescribeInstances).")
+    return None
+
+
 @app.command("sweep")
 def sweep(
     region: str = typer.Option("", "--region", help="AWS region (else AWS_DEFAULT_REGION)."),
@@ -104,7 +119,14 @@ def sweep(
     never touch a box cairn did not turn on and never acts on a tag it could not
     parse. Exit code 1 when anything was found expired, so a cron can alert.
     """
-    rows = _run(sweep_expired(region=region, apply=apply))
+    try:
+        rows = _run(sweep_expired(region=region, apply=apply))
+    except Exception as e:  # noqa: BLE001 — only botocore's own setup errors are answered here
+        hint = _aws_setup_hint(e)
+        if hint is None:
+            raise
+        _console.print(f"[red]✗[/red] {hint}")
+        raise typer.Exit(2) from None
     if json:
         typer.echo(_json.dumps(rows))
     else:

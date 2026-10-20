@@ -34,8 +34,12 @@ def cmd(
         raise typer.Exit(2)
 
     if importlib.util.find_spec("pytest") is None:
-        print("cairn test runs a pack's pytest suite, and pytest is not installed: "
-              "pip install pytest pytest-asyncio", file=sys.stderr)
+        # The environment cairn runs in, which the installer's uv tool keeps isolated: a
+        # bare `pip install` from the shell lands somewhere else.
+        print("cairn test runs a pack's pytest suite, and pytest is not installed in "
+              "cairn's environment. Add it:\n"
+              f"  uv pip install --python {sys.executable} pytest pytest-asyncio",
+              file=sys.stderr)
         raise typer.Exit(1)
 
     target = root / "tests" if (root / "tests").is_dir() else root

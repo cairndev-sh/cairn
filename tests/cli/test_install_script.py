@@ -13,8 +13,8 @@ SCRIPT = Path(__file__).resolve().parents[2] / "docs/site/public/install.sh"
 SH = shutil.which("sh")
 pytestmark = pytest.mark.skipif(SH is None, reason="needs a POSIX sh")
 LINKS = "https://github.com/cairndev-sh/cairn/releases/expanded_assets/v{}"
-INSTALL = (f"tool install --upgrade --force --python 3.13 --find-links {LINKS.format('0.1.2')} "
-           "--with cairn-client==0.1.2 cairndev==0.1.2")
+INSTALL = (f"tool install --upgrade --force --python 3.13 --find-links {LINKS.format('0.1.3')} "
+           "--with cairn-client==0.1.3 cairndev==0.1.3")
 
 
 def _stub(path: Path, body: str) -> None:

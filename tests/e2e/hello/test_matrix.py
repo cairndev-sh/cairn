@@ -201,7 +201,23 @@ def check_profile_and_publish(ctx: Ctx) -> None:
     budget = (ctx.rec.get("governance") or {}).get("budget") or {}
     assert float(budget.get("usd", 0)) == 1.0, ctx.rec.get("governance")
     ctx.receipt("budget", f"governance.budget.usd={budget['usd']}")
+    _hooks_receipt(ctx)
     _cell_receipts(ctx)
+
+
+def _hooks_receipt(ctx: Ctx) -> None:
+    """The hello-receipts listener (a `cairn.run_hooks` entry point of the cairn-pack-hello
+    wheel) writes a line for every settled leg on the engine, whatever the pipeline. It is
+    proved on profile-and-publish, which runs in every cell (CI included); nightly-ops
+    needs the proof sshd, which CI cannot run."""
+    hooks = ctx.srv.home / ".cairn" / "hello-cairn" / "receipts.jsonl"
+    if hooks.is_file():
+        lines = [line for line in hooks.read_text(encoding="utf-8").splitlines() if ctx.pid in line]
+        assert lines, f"no hook receipt names {ctx.pid}"
+        ctx.receipt("hooks", f"{len(lines)} hello-receipts lines for this pipeline at $CAIRN_HOME/hello-cairn/receipts.jsonl")
+    else:
+        ctx.receipt("hooks", "the hello-receipts listener is an entry point of the cairn-pack-hello wheel; "
+                    "a dev pack (CAIRN_PACK_PATH) declares none — install the `hello` extra", proved=False)
 
 
 def check_ask_the_docs(ctx: Ctx) -> None:   # assistant (template) → length → review
@@ -244,7 +260,9 @@ def check_tiny_finetune(ctx: Ctx) -> None:  # profile → train (ml flow) → ev
     _operator_gate_receipt(ctx, ("promote",))
     ctx.receipt("train", f"train.lora flow leg done (run {ids['train']}, model {ctx.rec['inputs'].get('base_model')}, "
                 f"held-out eval_loss={ctx.out('eval').get('eval_loss')})")
-    ctx.receipt("worker.pull", "no leg of hello-cairn targets the pull worker (`cairn worker --pull`)", proved=False)
+    ctx.receipt("worker.pull", "no hello-cairn leg is routed to the pull lane (an ML target `worker:<pool>` "
+                "on a remote-job leg) and no cell starts `cairn worker --pull`; only the worker's claim, "
+                "its token check and an empty queue are tested", proved=False)
     _cell_receipts(ctx)
 
 
@@ -256,22 +274,14 @@ def check_nightly_ops(ctx: Ctx) -> None:    # job (template over SSH) → summar
     found = ctx.out("job").get("findings") or {}
     assert found.get("secret_present") is True, found
     ctx.receipt("secrets.env", "secrets.store → secrets/env: HELLO_REPORT_TOKEN present (the value never enters the run)")
-    ctx.receipt("secrets.infisical", "the Infisical variant (profiles/hello-infisical.toml) needs a machine "
-                "identity, made by hand in Infisical's UI (scripts/oss/proof_seed.py); the env variant ran",
-                proved=False)
+    ctx.receipt("secrets.infisical", "no cell runs the Infisical variant (profiles/hello-infisical.toml): the "
+                "proof starts no Infisical server and seeds no machine identity (scripts/oss/proof_seed.py); "
+                "the env variant ran", proved=False)
     report = found.get("report") or {}
     assert str(found.get("job_exit_code")) == "0" and isinstance(report.get("lines"), int), \
         {k: found.get(k) for k in ("job_status", "job_exit_code", "job_error", "report")}
     ctx.receipt("ssh", f"remote/exec on compute.ssh `hello-ssh` (the proof sshd): host={found.get('job_host')!r}, "
                 f"metrics.json read back lines={report['lines']}")
-    hooks = ctx.srv.home / ".cairn" / "hello-cairn" / "receipts.jsonl"
-    if hooks.is_file():
-        lines = [line for line in hooks.read_text(encoding="utf-8").splitlines() if ctx.pid in line]
-        assert lines, f"no hook receipt names {ctx.pid}"
-        ctx.receipt("hooks", f"{len(lines)} hello-receipts lines for this pipeline at $CAIRN_HOME/hello-cairn/receipts.jsonl")
-    else:
-        ctx.receipt("hooks", "the hello-receipts listener is an entry point of the cairn-pack-hello wheel; "
-                    "a dev pack (CAIRN_PACK_PATH) declares none — install the `hello` extra", proved=False)
     _cell_receipts(ctx)
 
 

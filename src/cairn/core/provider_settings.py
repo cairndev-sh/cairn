@@ -28,9 +28,7 @@ def load_env() -> None:
 
     Required because litellm / the OpenAI SDK read ``OPENAI_API_KEY`` from
     ``os.environ`` directly, while pydantic-settings reads ``.env`` into the
-    Settings object, NOT into ``os.environ``. It also must run before
-    ``cairn.core.validate`` import (which stamps an offline dummy key via
-    ``os.environ.setdefault``), so a real key isn't shadowed.
+    Settings object, NOT into ``os.environ``.
     """
     load_dotenv(PROJECT_ROOT / ".env")
 

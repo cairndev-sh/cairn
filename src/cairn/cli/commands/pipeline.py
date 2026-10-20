@@ -93,10 +93,6 @@ def render_pipeline(d: PipelineDef) -> str:
             lines.append(f"       optional inputs: {', '.join(opt)} "
                          f"(omitted when their leg is routed off)")
         lines.append(f"       runtime: {_RUNTIME.get(kind, '?')}")
-    # honest surface: say what cannot run yet rather than failing later
-    if any(s.leg_kind == "flow" for s in d.all_steps()):
-        lines += ["", "  NOTE: `flow:` legs dispatch directly to engine adapters — "
-                      "that executor lands in #1127; template/gate legs run today."]
     return "\n".join(lines)
 
 

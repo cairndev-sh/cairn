@@ -52,8 +52,8 @@ if [ "$SERVICES" = 1 ]; then
     trap 'echo "feature_proof: tearing the proof project down"; compose down -v' EXIT
   fi
   # the services the cells reach — never the engine image (the matrix runs cairn-server on
-  # the host). The profile's Infisical services are not started: nothing reaches them until a
-  # machine identity exists, which is made by hand (scripts/oss/proof_seed.py), so the
+  # the host). The profile's Infisical services are not started and no machine identity is
+  # seeded (scripts/oss/proof_seed.py says how to make one through Infisical's API), so the
   # Infisical variant of nightly-ops is reported NOT PROVED.
   compose up -d --wait postgres pg-proxy sshd
   # the ports the cells reach; proof.env is the one source

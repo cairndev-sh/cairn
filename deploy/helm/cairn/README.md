@@ -22,33 +22,28 @@ ADR-0104's Consequences say there are exactly two, and both run the same image:
 
 Compose is not deprecated. If one VM is enough, use one VM.
 
-## Install, in five commands
+## Install, in four commands
 
 ```sh
 # 1. a namespace
 kubectl create namespace cairn
 
-# 2. a pull secret — ONLY while the GHCR package is private (see "Owner steps")
-kubectl -n cairn create secret docker-registry ghcr-pull \
-  --docker-server=ghcr.io --docker-username=<gh-user> --docker-password=<gh-pat-read:packages>
-
-# 3. your values, starting from a shipped example
+# 2. your values, starting from a shipped example
 cp deploy/helm/cairn/values-postgres.example.yaml my-values.yaml   # then edit every CHANGE-ME
 
-# 4. preflight BEFORE the cluster ever sees it
+# 3. preflight BEFORE the cluster ever sees it
 cairn deploy doctor --values my-values.yaml --strict
 
-# 5. install
+# 4. install
 helm upgrade --install cairn deploy/helm/cairn -n cairn -f my-values.yaml
 ```
 
 Then: `kubectl -n cairn rollout status deploy/cairn-server` and
-`curl -fsS https://<your host>/healthz`. The console is at `/console`, served by
-the server container out of `console/dist` inside the image — there is no second
-Deployment or Service for the UI.
+`curl -fsS https://<your host>/healthz`. The public engine image serves the API
+only; the web console is part of the cairn platform, not this chart.
 
-Once the chart is published (on a `v*` tag, by `.github/workflows/helm-lint.yml`)
-step 5 becomes `helm upgrade --install cairn oci://ghcr.io/cairndev-sh/charts/cairn --version <x.y.z>`.
+Without a clone, step 4 is `helm upgrade --install cairn oci://ghcr.io/cairndev-sh/charts/cairn --version <x.y.z> -n cairn -f my-values.yaml`
+(the chart is published on every `v*` tag by `.github/workflows/release.yml`).
 
 ## Values
 
@@ -176,18 +171,11 @@ the DSN is the same database before and after.
   `~/.cairn`, which is on the PVC) until the profile store moves onto
   `CAIRN_STORAGE`. Filed as an adjacent finding on the D4 PR, not fixed here.
 
-## Owner steps (manual, not automatable from CI)
+## Where the image and the chart come from
 
-1. **Make the engine image public.** `.github/workflows/engine-image.yml` pushes
-   `ghcr.io/cairndev-sh/cairn-engine` on every commit to main and on every `v*` tag,
-   but a new GHCR package is **private**. In GitHub → the `cairn-engine` package
-   → *Package settings* → **Change visibility → Public**. Until that is done,
-   every install needs `imagePullSecrets` (step 2 of the install above).
-2. **The first chart push.** `helm-lint.yml` runs `helm push` to
-   `oci://ghcr.io/cairndev-sh/charts` on tags only. The `charts/cairn` package is
-   likewise private on first push and needs the same visibility flip.
-3. **Verify a real cluster.** Nothing here has been applied to a live cluster —
-   see "Verified / not verified" below.
+`.github/workflows/release.yml` pushes `ghcr.io/cairndev-sh/cairn-engine:<version>` and
+the chart to `oci://ghcr.io/cairndev-sh/charts/cairn` on every `v*` tag. Both packages
+are public, so no pull secret is needed.
 
 ## Verified / not verified
 
@@ -197,6 +185,6 @@ external DSN and the Temporal runtime; the rendered server env carries every
 each refusal in `_helpers.tpl` actually refuses; `cairn deploy doctor --values`
 passes the examples and fails a values file with a missing secret.
 
-**Not verified:** no `helm install` against a live cluster, no image pulled from
-GHCR, no TLS issued. The chart has never run. Treat the first install as an
+**Not verified:** no `helm install` against a live cluster, no TLS issued (the 0.1.2
+verification pulled the image anonymously and rendered the published chart). The chart has never run. Treat the first install as an
 acceptance run, not a deploy.

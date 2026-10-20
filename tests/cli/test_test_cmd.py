@@ -17,7 +17,10 @@ def test_without_pytest_it_names_the_install(monkeypatch, capsys) -> None:
     with pytest.raises(typer.Exit) as e:
         test_cmd.cmd(str(EXAMPLE_PACK), None)
     assert e.value.exit_code == 1
-    assert "pytest is not installed: pip install pytest" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "pytest is not installed in cairn's environment" in err
+    # the installer's uv tool is isolated: the hint targets the interpreter cairn runs on
+    assert f"uv pip install --python {test_cmd.sys.executable} pytest pytest-asyncio" in err
 
 
 def test_a_pack_without_tests_says_where_they_go(monkeypatch, capsys) -> None:

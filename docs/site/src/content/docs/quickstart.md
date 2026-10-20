@@ -15,10 +15,13 @@ curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_EXTRAS=hello sh
 
 The installer puts `cairn` on your PATH as a [uv](https://docs.astral.sh/uv/)
 tool, installing uv first if it is missing. The `hello` extra adds the example
-pack, `hello-cairn`, with four pipelines to try. Without the script:
+pack, `hello-cairn`, with four pipelines to try. Without the script (until the
+packages are on PyPI, cairn's wheels come from the GitHub Release; third-party
+packages still come from PyPI):
 
 ```bash
-pip install 'cairndev[hello]'      # inside a virtual environment, Python 3.12 or later
+L=https://github.com/cairndev-sh/cairn/releases/expanded_assets/v0.1.3
+pip install 'cairndev[hello]==0.1.3' --find-links "$L"   # inside a virtual environment, Python 3.12 or later
 ```
 
 Check it: `cairn --version`, then `cairn pipeline ls` lists the example's

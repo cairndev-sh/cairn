@@ -18,11 +18,13 @@ nothing is printed but the paths and the key NAMES. Idempotent: an existing key 
 is kept, so re-running after the stack is up never rotates what the stack was started with.
 
 The Infisical machine identity (``INFISICAL_CLIENT_ID`` / ``_CLIENT_SECRET`` /
-``_PROJECT_ID``) is NOT made here: the server's first-admin sign-up needs SRP key material
-only its web UI (or the Infisical CLI) produces, so the matrix's Infisical variant of
-nightly-ops (``profiles/hello-infisical.toml``) stays NOT PROVED in ``FEATURE_PROOF.md``,
-naming this; the env-secrets variant runs. To try it by hand, make an identity in the UI at
-the published port and export the three keys to the engine.
+``_PROJECT_ID``) is NOT made here, and the proof starts no Infisical server, so the
+matrix's Infisical variant of nightly-ops (``profiles/hello-infisical.toml``) stays NOT
+PROVED in ``FEATURE_PROOF.md``; the env-secrets variant runs. It can be done without the
+web UI: start the stack with ``--profile infisical``, create the first admin and its
+organization with Infisical's ``POST /api/v1/admin/bootstrap``, then a project, the
+``HELLO_REPORT_TOKEN`` secret and a universal-auth machine identity through its API, and
+export the three keys to the engine (the 0.1.2 verification proved the variant that way).
 
 ``proof.env`` never carries ``INFISICAL_ENCRYPTION_KEY`` / ``_AUTH_SECRET`` /
 ``_DB_PASSWORD``: an older seed's copies are dropped on the next run (never moved into

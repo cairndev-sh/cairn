@@ -2,7 +2,7 @@
 # The DISTRIBUTION is `cairndev` (ADR-0121 D3, #2429); the import name `cairn` and the
 # `cairn` command do not change.
 name = "cairndev"
-version = "0.1.2"
+version = "0.1.3"
 description = "A governed control plane for AI and ML work: pipelines that fine-tune, evaluate, compress and serve models, with approval, policy, budget and lineage on every step"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -95,8 +95,9 @@ cairn-server = "cairn.core.triggers.main:main"
 # up workflows the server submits when CAIRN_RUNTIME=temporal. Needs the
 # runtime-temporal extra; runs as the `worker` service in the full local stack.
 cairn-worker = "cairn.core.runtime.temporal.worker:main"
-# Read-only admin UI over the run store (the `admin` extra). Serves /admin via
-# starlette-admin bound to the configured RunStore (sqlite or Postgres).
+# Read-only admin UI over the run store. Serves /admin via starlette-admin bound to
+# the configured RunStore (sqlite or Postgres). starlette-admin and itsdangerous are
+# not an extra: the command says how to add them to its environment.
 cairn-admin = "cairn.core.admin:main"
 # ADR-0137 D2 — the builtin dataflow engine's job-machine entrypoint (packages/cairn-operator-dataflow).
 cairn-dataflow-run = "operator_dataflow.engine.entry:main"
@@ -248,10 +249,6 @@ infisical = ["infisicalsdk>=1.0.0"]
 # sqlite-vec store, asyncssh and DBOS. The training stack is not in it
 # (cairndev[train]).
 hello = ["cairn-pack-hello[all]"]
-# Toad-style interactive terminal console (`cairn remote console`, #56):
-# a Textual TUI + Rich rendering + dropdown autocomplete over the server's
-# HTTP + SSE control plane. Optional — the base CLI stays lean. Install with
-# `pip install -e ".[tui]"` (or `uv pip install textual textual-autocomplete`).
 # #898 (epic #888) — the whole real fine-tuning stack in ONE install, so a
 # governed prod deployment doesn't have to hunt down 5 extras: presidio PII
 # (NER, not regex), the lm-eval benchmark harness, the MLflow registry, the

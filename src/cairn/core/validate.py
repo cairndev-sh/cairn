@@ -21,15 +21,15 @@ here (``validate_path`` etc.) are what a CI conformance test globs over and
 what the ``cairn validate`` CLI (:mod:`cairn.cli.commands.validate`)
 wraps for human use.
 
-Compiling constructs LLM client objects but never calls them, so a dummy API
-key is enough — set here so validation works fully offline.
+Compiling constructs LLM client objects but never calls them, and
+``build_chat_model`` gives a keyless model a compile-only placeholder, so
+validation works fully offline. Nothing here touches ``os.environ``: a dummy key
+stamped at import leaked into every ``cairn`` process (the CLI imports this
+module) and from there into ``cairn dev``'s engine, where it reached the vendor
+as a 401 instead of "no model configured".
 """
 
 from __future__ import annotations
-
-import os
-
-os.environ.setdefault("OPENAI_API_KEY", "sk-validate-offline")
 
 import importlib
 from dataclasses import dataclass, field

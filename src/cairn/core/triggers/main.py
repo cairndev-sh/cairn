@@ -110,7 +110,10 @@ def main() -> int:
                 "control plane must not be reachable from the network. Set "
                 "CAIRN_JWT_SECRET to enable auth (then the default bind is "
                 "0.0.0.0), or set CAIRN_TRIGGER_HOST to override this "
-                "deliberately."
+                "deliberately. Inside a container 127.0.0.1 is the container's "
+                "own loopback, so a published port answers nothing: turn auth "
+                "on, or for a keyless trial set CAIRN_TRIGGER_HOST=0.0.0.0 and "
+                "publish on the host's loopback (-p 127.0.0.1:9090:9090)."
             )
 
     log.info("trigger server starting on %s:%d", host, port)

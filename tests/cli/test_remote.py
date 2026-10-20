@@ -351,3 +351,28 @@ def test_watch_command_unknown_run_against_real_server(monkeypatch):
     res = cli.invoke(remote.app, ["approve", "no-such-run", "--watch", "--decision", "approve"])
     assert res.exit_code == 1
     assert "not found" in res.output or "404" in res.output
+
+
+def test_pipelines_lists_name_and_step_progress(monkeypatch):
+    """0.1.2 printed ``0/0 steps`` and no name for every pipeline: the CLI read
+    ``step_state``/``pipeline_name``, but ``GET /pipelines`` answers ``steps``/``name``.
+    Driven through the real route, so the row shape is the server's own."""
+    import asyncio
+
+    from cairn.core.storage import pipeline_store as ps
+
+    store = ps.InMemoryPipelineStore()
+    monkeypatch.setattr(ps, "_default_store", store)
+    rec = ps.PipelineRecord(
+        pipeline_name="profile-and-publish", status="running",
+        step_state={"profile": ps.StepState(status="done"),
+                    "data-ok": ps.StepState(status="done"),
+                    "review": ps.StepState(status="awaiting_approval"),
+                    "publish": ps.StepState(status="pending")})
+    asyncio.run(store.put(rec))
+    _patch_client(monkeypatch, build_app(Runner(), enable_scheduler=False, enable_spec_routes=False))
+    res = cli.invoke(remote.app, ["pipelines"])
+    assert res.exit_code == 0, res.output
+    line = next(ln for ln in res.output.splitlines() if rec.pipeline_id in ln)
+    assert "2/4 steps" in line, line
+    assert line.rstrip().endswith("profile-and-publish"), line

@@ -9,16 +9,15 @@
 
 # ── image ────────────────────────────────────────────────────────────────
 image:
-  # Published by .github/workflows/engine-image.yml. The GHCR package is
-  # PRIVATE until the owner flips it public (see README "Owner steps"); until
-  # then set `imagePullSecrets` below.
+  # Published by .github/workflows/release.yml on every `v*` tag, tagged with the
+  # bare version (`0.1.3`). The GHCR package is public: no pull secret needed.
   repository: ghcr.io/cairndev-sh/cairn-engine
   # Empty → Chart.appVersion. PIN A DIGEST OR TAG IN PROD — `--strict` fails
   # on `latest` because a rolling tag makes "what is deployed" unanswerable.
   tag: ""
   pullPolicy: IfNotPresent
 
-# e.g. [{name: ghcr-pull}] — required while the GHCR package is private.
+# e.g. [{name: ghcr-pull}] — only for a private registry or mirror.
 imagePullSecrets: []
 
 nameOverride: ""

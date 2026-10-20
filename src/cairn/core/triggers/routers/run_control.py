@@ -12,7 +12,7 @@ from fastapi import APIRouter, Body, Depends, Header, HTTPException
 from starlette.responses import StreamingResponse
 
 from cairn.core._time import utc_now_iso
-from cairn.core.dispatch.dispatcher import OrphanedGateError
+from cairn.core.dispatch.dispatcher import NotResumableError, OrphanedGateError
 from cairn.core.engine.schema import ApprovalRecord
 from cairn.core.triggers.auth import _oauth2_scheme, require_auth
 from cairn.core.triggers.routers.reviews import decision_actor
@@ -105,6 +105,10 @@ def build_run_control_router(dispatcher, *, pipeline_bridge=None) -> APIRouter:
         except OrphanedGateError as exc:
             # #365 — approving a gate whose checkpoint died with a previous
             # engine process would lie (nothing can resume). 409 + remediation.
+            raise HTTPException(status_code=409, detail=str(exc))
+        except NotResumableError as exc:
+            # A pipeline step gate (or a run with no template): the wrong verb for
+            # this run, not an engine fault. 409 + the door that works.
             raise HTTPException(status_code=409, detail=str(exc))
         except Exception as exc:  # noqa: BLE001
             logger.warning("resume failed for %s: %s", run_id, exc)

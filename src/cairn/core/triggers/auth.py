@@ -137,6 +137,48 @@ def _query_token_allowed(method: str, path: str) -> bool:
     return method == "GET" and _QUERY_TOKEN_PATH.match(path) is not None
 
 
+#: A credential carried in a query string. The stream route accepts
+#: ``?access_token=`` (above), so the server's own access log must never record
+#: its value: uvicorn logs the full path with its query string.
+_QUERY_CREDENTIAL = re.compile(
+    r"([?&](?:access_token|id_token|refresh_token|token)=)[^&#\s\"]*", re.IGNORECASE)
+
+
+def redact_query_credentials(text: str) -> str:
+    """``text`` with every query-string credential value replaced by ``***``."""
+    return _QUERY_CREDENTIAL.sub(r"\1***", text)
+
+
+class _AccessLogRedactor(logging.Filter):
+    """Redacts query-string credentials from a log record's message and args.
+
+    uvicorn's access logger emits ``'%s - "%s %s HTTP/%s" %d'`` with the path
+    and query string as one of the args, so both are scrubbed."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = redact_query_credentials(record.msg)
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                redact_query_credentials(a) if isinstance(a, str) else a for a in record.args)
+        return True
+
+
+#: The access loggers of the ASGI servers that run this app.
+_ACCESS_LOGGERS = ("uvicorn.access",)
+
+
+def install_access_log_redaction() -> None:
+    """Attach the redacting filter to the access loggers. Idempotent.
+
+    A logger-level filter survives uvicorn's own ``dictConfig`` at startup
+    (``logging.config`` replaces a configured logger's handlers, not its filters)."""
+    for name in _ACCESS_LOGGERS:
+        lg = logging.getLogger(name)
+        if not any(isinstance(f, _AccessLogRedactor) for f in lg.filters):
+            lg.addFilter(_AccessLogRedactor())
+
+
 #: #205 — the request-state key under which the bearer guard records the identity
 #: it authenticated, header or query string alike. ``_WorkspaceMiddleware`` (inside
 #: the guard) resolves the caller's tenant from THIS identity, so the identity the
@@ -695,6 +737,9 @@ def install_auth(app: FastAPI) -> None:
     still registers but waves every request through, with a one-time warning).
     Call once per app, inside ``build_app``.
     """
+    # The stream route takes the bearer in its query string: keep it out of the
+    # server's access log, auth on or off (a client may send one either way).
+    install_access_log_redaction()
     if not auth_enabled():
         if require_auth_enabled():
             # #391 hardening: prod refuses to start an open control plane.

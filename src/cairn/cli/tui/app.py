@@ -10,7 +10,8 @@ Ask is the platform's (ADR-0134 D6): its hooks here — the ``ask`` verb, the Wo
 tab and ``run``'s template completion — are offered only when a ``cairn.cli`` provider
 mounted ``ask`` (:func:`_ask_provided`), and ``ask`` runs through that mounted command.
 
-Behind the optional ``[tui]`` extra: ``pip install -e ".[tui]"``.
+Needs ``textual`` and ``textual-autocomplete``, which ``cairndev`` does not install
+(there is no ``tui`` extra); ``cairn remote console`` names the command that adds them.
 """
 from __future__ import annotations
 

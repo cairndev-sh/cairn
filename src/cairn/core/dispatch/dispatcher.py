@@ -114,6 +114,13 @@ class OrphanedGateError(RuntimeError):
     server maps this to 409 so the operator rejects to close it out instead."""
 
 
+class NotResumableError(ValueError):
+    """The run has no template interrupt to resume: a pipeline STEP gate (released
+    by advancing the step) or an in-process run with no template on record. The
+    caller used the wrong verb, so the server answers 409 with the door that works,
+    not a 502 that reads as an engine fault."""
+
+
 # Keys (substring match, case-insensitive) that bucket a result's *_usd cost
 # fields into the run's structured rollup (#242). `llm` is summed reliably from
 # RunResult.llm_cost_usd; gpu/storage are best-effort from whatever a compute /
@@ -1350,12 +1357,12 @@ class RunDispatcher:
             pid = str(getattr(run, PIPELINE_ID_KEY, "") or "")
             sid = str(getattr(run, "step_id", "") or "")
             if pid and sid:
-                raise ValueError(
+                raise NotResumableError(
                     f"run {run_id} is a pipeline STEP gate, not a resumable template run. "
                     f"Release it with: cairn remote advance {pid} {sid} --approver <you> "
                     f"(or POST /pipelines/{pid}/steps/{sid}/approve)"
                 )
-            raise ValueError(
+            raise NotResumableError(
                 f"cannot resume in_process run {run_id}: no template_name on record"
             )
         graph = self._recompile_graph(template_name)

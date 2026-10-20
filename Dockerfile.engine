@@ -3,10 +3,18 @@
 #
 # Multi-stage: uv resolves the full workspace (engine + all operator wheels,
 # non-editable) into a venv; the runtime stage carries only python + the venv.
-# Image name stays local/unpublished until the naming decision (ADR-0029).
+# Published as ghcr.io/cairndev-sh/cairn-engine:<version> (release.yml).
 #
 #   docker build -f Dockerfile.engine -t cairn-engine .
-#   docker run --rm -p 9090:9090 -e OPENAI_API_KEY=sk-... cairn-engine
+#
+# Auth on (the server then binds 0.0.0.0 inside the container):
+#   docker run --rm -p 9090:9090 -e CAIRN_JWT_SECRET="$(openssl rand -hex 32)" \
+#     -e CAIRN_API_PASSWORD=<choose one> -e OPENAI_API_KEY=sk-... cairn-engine
+# A keyless trial (auth off): the server binds 127.0.0.1 unless told otherwise, so say so
+# and publish on the host's loopback only:
+#   docker run --rm -p 127.0.0.1:9090:9090 -e CAIRN_TRIGGER_HOST=0.0.0.0 cairn-engine
+# The profile defaults to the packaged `secure` one (CMD below); runs are kept in memory
+# unless CAIRN_STORAGE is set (sqlite:///<path on a volume> or postgres://…).
 
 # ---------------------------------------------------------------------------
 # #1761 — LAYER ORDER. `uv sync --all-packages` needs a pyproject.toml for
@@ -313,9 +321,19 @@ RUN if [ "$PRODUCTION_TIER" = "1" ]; then \
       /app/.venv/bin/python -c "import torch, mlflow, lm_eval, peft, re2, datasketch; print('[verify] assembled production tier ok')"; \
     fi
 
+# The default profile the start command falls back to: the wheel's packaged `secure` profile
+# (redaction + the audit trail on top of local-dev; it binds builtins only, ADR-0134 D5).
+RUN test -f /app/.venv/lib/python3.13/site-packages/cairn/profiles/secure.toml \
+    || (echo "[verify] the packaged secure profile the CMD defaults to is missing" && exit 1)
+
 # CAIRN_BACKEND (mock) and CAIRN_TRIGGER_PORT (9090) are the code's own defaults. They are
-# not baked in as ENV: an image-level CAIRN_* value would shadow a deployment's CAIRN_* one,
-# which is still read until 1.0 (ADR-0122, #2429).
+# not baked in as ENV: an image-level CAIRN_* value would shadow a deployment's OBS_* one,
+# which is still read until 1.0 (ADR-0122, #2429). For the same reason the profile default is
+# applied by the start command, after a deployment's CAIRN_PROFILE and OBS_PROFILE: a bare
+# `docker run` starts (the server refuses without a profile, #2296), and any deployment that
+# names one keeps it. The bind address is NOT defaulted here: the server binds 0.0.0.0 when
+# auth is on and 127.0.0.1 when it is off (#1507), and an image default would open a keyless
+# control plane on every published port.
 ENV PATH="/app/.venv/bin:$PATH"
 EXPOSE 9090
-CMD ["cairn-server"]
+CMD ["sh", "-c", "export CAIRN_PROFILE=\"${CAIRN_PROFILE:-${OBS_PROFILE:-/app/.venv/lib/python3.13/site-packages/cairn/profiles/secure.toml}}\" && exec cairn-server"]

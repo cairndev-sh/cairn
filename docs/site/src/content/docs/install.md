@@ -16,7 +16,7 @@ sudo. Choose extras or pin a version with environment variables:
 
 ```bash
 curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_EXTRAS=hello,rag sh
-curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_VERSION=0.1.2 sh
+curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_VERSION=0.1.3 sh
 ```
 
 | Variable | Default | |
@@ -24,13 +24,13 @@ curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_VERSION=0.1.2 sh
 | `CAIRN_EXTRAS` | none | comma-separated extras, from the table below |
 | `CAIRN_VERSION` | the latest release | an exact version |
 | `CAIRN_PYTHON` | `3.13` | the Python uv provisions for the tool |
-| `CAIRN_RELEASE` | `CAIRN_VERSION`, else `0.1.2` | the GitHub Release whose wheels back the install; empty means PyPI only |
+| `CAIRN_RELEASE` | `CAIRN_VERSION`, else `0.1.3` | the GitHub Release whose wheels back the install; empty means PyPI only |
 
-The same without the script. Until the 0.1.2 packages are on PyPI, point the installer at the
+The same without the script. Until the 0.1.3 packages are on PyPI, point the installer at the
 release's wheels (third-party packages still come from PyPI):
 
 ```bash
-L=https://github.com/cairndev-sh/cairn/releases/expanded_assets/v0.1.2
+L=https://github.com/cairndev-sh/cairn/releases/expanded_assets/v0.1.3
 pip install cairndev --find-links "$L"            # inside a virtual environment, Python 3.12 or later
 uv tool install cairndev --find-links "$L"        # or: pipx install cairndev --pip-args="--find-links $L"
 ```
@@ -164,6 +164,32 @@ cairn deploy doctor --env .env
 | Update | `git pull && docker compose up -d --build` |
 | Change the port | `CAIRN_PORT=9000 docker compose up -d` |
 
+## The engine image on its own
+
+The image the compose file and the chart run, `ghcr.io/cairndev-sh/cairn-engine`, also
+runs with plain `docker run`. Without `CAIRN_PROFILE` it runs the packaged `secure`
+profile. The server binds every interface only when sign-in is on, so give it a JWT
+secret and an admin password:
+
+```bash
+docker run -d -p 9090:9090 \
+  -e CAIRN_JWT_SECRET="$(openssl rand -hex 32)" -e CAIRN_API_PASSWORD=<choose one> \
+  -e CAIRN_STORAGE=sqlite:////data/cairn.db -v cairn-data:/data \
+  ghcr.io/cairndev-sh/cairn-engine:0.1.3
+curl -s http://localhost:9090/healthz
+cairn remote login --endpoint http://localhost:9090 -u admin
+```
+
+With sign-in off the server listens on the container's own loopback, so a published
+port answers nothing. For a keyless try-out on your own machine, bind it explicitly
+and publish on the host's loopback only:
+
+```bash
+docker run --rm -p 127.0.0.1:9090:9090 -e CAIRN_TRIGGER_HOST=0.0.0.0 ghcr.io/cairndev-sh/cairn-engine:0.1.3
+```
+
+Without `CAIRN_STORAGE` runs are kept in memory and lost when the container stops.
+
 ## Kubernetes with Helm
 
 The chart in `deploy/helm/cairn` is a translation of the compose file, not a
@@ -189,7 +215,7 @@ The same chart is published as an OCI artifact, so you can install a released
 version without cloning the repository:
 
 ```bash
-helm upgrade --install cairn oci://ghcr.io/cairndev-sh/charts/cairn --version 0.1.2 -n cairn -f my-values.yaml
+helm upgrade --install cairn oci://ghcr.io/cairndev-sh/charts/cairn --version 0.1.3 -n cairn -f my-values.yaml
 ```
 
 Then `kubectl -n cairn rollout status deploy/cairn-server` and
