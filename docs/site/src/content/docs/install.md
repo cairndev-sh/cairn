@@ -206,8 +206,8 @@ event stream, `GET /runs/{id}/stream`, which also accepts it as `?access_token=`
 because a browser's `EventSource` cannot set headers; every other route refuses a
 token in the query string with `401`.
 Only `/healthz`, `/token`, the sign-up, invite and provider sign-in routes
-under `/auth/`, and webhook receivers that check their own signature answer
-without one.
+under `/auth/`, and webhook receivers that require a signature
+(`signature.required: true`) answer without one.
 
 **Who can sign up: `CAIRN_SIGNUP`.**
 

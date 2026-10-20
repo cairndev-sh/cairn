@@ -153,6 +153,18 @@ A pipeline can start on its own. Each entry has a `kind`:
 | `watch` | when a watched source changes or a signal crosses a threshold | `source` (`kind: dataset`, `s3` or `table`); `every`; `when`; `on_change` (`propose`, `start` or `none`); `inputs`; `enabled` (default `false`) |
 | `event` | when another pipeline's leg `emits` the topic | `topic`; `input`; `enabled` (default `false`) |
 
+With auth on (`CAIRN_JWT_SECRET` set), a webhook answers a sender without a
+bearer token only when its preset requires a signature (Slack, PagerDuty,
+GitHub) and the request carries a valid one. A preset whose signature is
+optional (`custom`, `gmail`) keeps the token check, so call it with
+`Authorization: Bearer <token>`.
+
+The Gmail preset is the one this affects in practice: Google's Pub/Sub push authenticates with
+its own OIDC token in `Authorization`, which is not a cairn token, so on a deployment with
+sign-in on, Gmail pushes are refused. Until cairn verifies Google's token itself, run Gmail
+push only on a deployment with sign-in off behind a private network, or relay it through a
+proxy that holds a cairn token.
+
 A `dataset` watch is armed by the open-source core; an `s3` or `table` watch
 needs cairn-platform's governed import. A pipeline may not start on a topic
 its own legs emit.

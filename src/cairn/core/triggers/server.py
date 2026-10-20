@@ -1093,23 +1093,26 @@ def _mount_trigger_routes(app: FastAPI, router: "TriggerRouter", *,
         )
         # #686: a signed webhook receiver authenticates by signature, not JWT —
         # a real Alertmanager/PagerDuty sender has no bearer token. Exempt it
-        # from the JWT guard so provider.verify() is the gate. A spec WITHOUT a
-        # signature block stays JWT-gated (no other authn to fall back on).
+        # from the JWT guard so provider.verify() is the gate. #59: only when
+        # the signature is REQUIRED — an optional one authenticates nothing (an
+        # unsigned payload passes verify), so that receiver, like one with no
+        # signature block, keeps the JWT guard when auth is on.
         sig = spec.ingress.signature
-        if sig is not None:
+        signature_authed = sig is not None and sig.required
+        if signature_authed:
             register_public_trigger_path(spec.ingress.path)
-            if not sig.required:
-                logger.warning(
-                    "trigger ingress %s is PUBLIC and accepts UNSIGNED payloads "
-                    "(signature.required=false) — set a webhook secret + "
-                    "required:true before exposing it on the open internet",
-                    spec.ingress.path,
-                )
+        elif sig is not None:
+            logger.warning(
+                "trigger ingress %s has signature.required=false, so it is NOT public: "
+                "with auth on it needs a bearer token. Set a webhook secret + "
+                "required: true for senders that sign but carry no token",
+                spec.ingress.path,
+            )
         logger.info(
             "mounted trigger route %s %s → %s%s",
             spec.ingress.method, spec.ingress.path,
             spec.run.template if spec.run else "(no run target)",
-            " [public: signature-authed]" if sig is not None else " [jwt-gated]",
+            " [public: signature-authed]" if signature_authed else " [jwt-gated]",
         )
 
 

@@ -105,8 +105,10 @@ _DOCS_PATHS = frozenset({
 # NOT a JWT — a real Alertmanager/PagerDuty/GitHub sender presents an HMAC
 # signature, never a bearer token, so JWT-gating them 401s every real webhook
 # before its signature is ever checked (issue #686). Populated at app-build time
-# by ``_mount_trigger_routes`` for each signed ingress; a receiver with no
-# ``signature`` block is NOT registered here and stays JWT-gated. The legacy
+# by ``_mount_trigger_routes`` for each ingress whose signature is REQUIRED; a
+# receiver with no ``signature`` block, or with ``signature.required: false``
+# (an unsigned payload passes, so it authenticates nothing — #59), is NOT
+# registered here and stays JWT-gated. The legacy
 # ``/triggers/manual`` · ``/triggers/scheduled`` · ``/triggers/inbox*`` routes
 # are console/CLI-facing and are never registered — they keep the JWT guard.
 _PUBLIC_TRIGGER_PATHS: set[str] = set()
@@ -175,7 +177,8 @@ def register_public_trigger_path(path: str) -> None:
 
     Its authn is signature verification in the trigger router (``provider.verify``
     — the mechanism real webhook senders use), so the JWT middleware must let it
-    through. Called by ``_mount_trigger_routes`` per signed ingress (#686).
+    through. Called by ``_mount_trigger_routes`` per ingress whose signature is
+    required (#686, #59).
     """
     _PUBLIC_TRIGGER_PATHS.add(path)
 
