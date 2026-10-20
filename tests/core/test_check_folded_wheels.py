@@ -86,6 +86,15 @@ def test_a_missing_operator_is_refused():
     assert problem.startswith("21 cairn.operators entry points, not 22")
 
 
+def test_a_second_distribution_declaring_a_builtin_name_is_refused():
+    """Duplicates are kept, not collapsed: a shadowing declaration of `data/profile` by another
+    distribution is refused even though the distinct names still number 22."""
+    pairs = list(OPERATORS.items()) + [("data/profile", "shadow-pack")]
+    problems = gate.operator_problems(pairs)
+    assert any(p.startswith("cairn.operators names declared more than once: {'data/profile'") for p in problems)
+    assert any("shadow-pack" in p for p in problems)
+
+
 def test_an_operator_from_another_distribution_is_refused():
     (problem,) = gate.operator_problems(OPERATORS | {"mcp/call": "cairn-operator-mcp"})
     assert problem == "operators not from cairndev: {'mcp/call': 'cairn-operator-mcp'}"
@@ -116,10 +125,18 @@ def _run() -> dict:
             _leg("engine-check", "flow", "flow:hello-cairn/engine-check"),
             _leg("stage", "task", "task:storage/put"), _leg("review", "gate", None),
             *(_leg(s, "task", f"task:{_TASKS[s]}") for s in ("promote", "publish", "audit"))]
-    return {"status": "done", "legs": legs, "prefix": PREFIX,
+    return {"status": "done", "legs": legs, "prefix": PREFIX, "approved": ["review", "promote"],
             "resolution": copy.deepcopy(SNAPSHOT),
             "invocations": [{"path": sid, "operator_ref": op, "capability_ref": _CAPS[op][0],
                              "distributions": [_CAPS[op][1]]} for sid, op in _TASKS.items()]}
+
+
+def test_a_run_that_did_not_approve_exactly_the_person_gates_is_refused():
+    """A fold regression that dropped promote's operator-declared gate still ends `done`; the gate
+    must notice that only `review` was approved."""
+    run = _run() | {"approved": ["review"]}
+    problems = gate.run_problems(run, OPERATORS, CONTRACTS, SNAPSHOT)
+    assert any(p.startswith("the run approved ['review'], not exactly the person gates") for p in problems)
 
 
 def _problems(run: dict) -> list[str]:

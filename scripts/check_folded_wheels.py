@@ -99,13 +99,21 @@ def contract_problems(resolved: list[str], hosts: Mapping[str, Iterable[str]], s
     return out
 
 
-def operator_problems(operators: Mapping[str, str], count: int = BUILTIN_OPERATORS) -> list[str]:
+def operator_problems(operators: Mapping[str, str] | Iterable[tuple[str, str]],
+                      count: int = BUILTIN_OPERATORS) -> list[str]:
     """D7.4: ``count`` ``cairn.operators`` entry points, every one from the engine wheel.
-    ``operators`` maps entry-point name to the distribution that declares it."""
+    ``operators`` is every ``(entry-point name, declaring distribution)`` pair, duplicates kept:
+    a second distribution declaring a builtin's name must be refused, not collapsed into it."""
+    pairs = list(operators.items()) if isinstance(operators, Mapping) else list(operators)
+    names = [name for name, _ in pairs]
     out = []
-    if len(operators) != count:
-        out.append(f"{len(operators)} cairn.operators entry points, not {count}: {sorted(operators)}")
-    foreign = {op: dist for op, dist in operators.items() if dist != ENGINE}
+    if len(pairs) != count:
+        out.append(f"{len(pairs)} cairn.operators entry points, not {count}: {sorted(names)}")
+    dupes = sorted({n for n in names if names.count(n) > 1})
+    if dupes:
+        out.append(f"cairn.operators names declared more than once: "
+                   f"{ {n: sorted(d for m, d in pairs if m == n) for n in dupes} }")
+    foreign = {op: dist for op, dist in pairs if dist != ENGINE}
     if foreign:
         out.append(f"operators not from {ENGINE}: {foreign}")
     return out
@@ -127,6 +135,9 @@ def run_problems(run: Mapping, operators: Mapping[str, str], hosted: Iterable[st
     closure without its invocations); ``prefix`` (the venv's)."""
     out = []
     hosted = set(hosted)
+    if sorted(run.get("approved", ())) != sorted(PERSON_GATES):
+        out.append(f"the run approved {sorted(run.get('approved', ()))}, not exactly the person gates "
+                   f"{sorted(PERSON_GATES)}")
     if run.get("status") != "done":
         out.append(f"the pipeline ended {run.get('status')!r}, not 'done': "
                    + str({leg["id"]: leg["status"] for leg in run.get("legs", ())}))
@@ -195,9 +206,10 @@ def _report(problems: list[str]) -> None:
 
 # ── the in-venv probes (this file under ``python -I --probe``) ─────────────────────────────
 
-def _builtin_operators() -> dict[str, str]:
+def _builtin_operators() -> list[tuple[str, str]]:
+    """Every ``cairn.operators`` entry point as ``(name, distribution)``, duplicates kept."""
     import importlib.metadata as md
-    return {ep.name: ep.dist.name for ep in md.entry_points(group="cairn.operators")}
+    return [(ep.name, ep.dist.name) for ep in md.entry_points(group="cairn.operators")]
 
 
 def _contract_hosts() -> dict[str, set[str]]:
@@ -309,7 +321,7 @@ def _probe_run(want: dict) -> None:
         raise SystemExit(f"the sample is not the cairn-pack-hello wheel's: {sample}")
     run = asyncio.run(_run_hello(str(sample)))
     hosted = [n for n, h in _contract_hosts().items() if h == {ENGINE}]
-    _report(run_problems(run, _builtin_operators(), hosted, want))
+    _report(run_problems(run, dict(_builtin_operators()), hosted, want))
     print(f"run: {PIPELINE} {run['pipeline_id']} ended {run['status']} in process "
           f"(approved {', '.join(run['approved'])})")
     for leg in run["legs"]:
