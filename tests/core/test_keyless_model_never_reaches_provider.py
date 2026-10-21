@@ -25,9 +25,10 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_openai import ChatOpenAI
+from pydantic import BaseModel
 
 from cairn.services.llm.factory import build_chat_model
-from cairn.services.llm.redacting import ModelNotConfiguredError
+from cairn.services.llm.redacting import MOCK_LLM_RESPONSE, ModelNotConfiguredError
 
 _KEY_ENVS = ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_BASE", "LLM_GATEWAY")
 
@@ -58,7 +59,12 @@ def provider(monkeypatch):
         calls.append(self.openai_api_key.get_secret_value() if self.openai_api_key else "")
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content="ok"))])
 
+    def _generate(self, messages, stop=None, run_manager=None, **kw):
+        calls.append(self.openai_api_key.get_secret_value() if self.openai_api_key else "")
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(content="ok"))])
+
     monkeypatch.setattr(ChatOpenAI, "_agenerate", _agenerate)
+    monkeypatch.setattr(ChatOpenAI, "_generate", _generate)
     for k in _KEY_ENVS:
         monkeypatch.delenv(k, raising=False)
     return calls
@@ -83,3 +89,75 @@ def test_a_real_key_is_used_as_given(provider, monkeypatch):
     llm = build_chat_model("gpt-4o-mini")
     assert asyncio.run(llm.ainvoke([HumanMessage(content="hi")])).content == "ok"
     assert provider == ["sk-real-looking"]
+
+
+def test_mock_mode_uses_a_deterministic_response_even_with_a_key(provider, monkeypatch):
+    from cairn.core.operator.runtime import mock_mode
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-real-looking")
+    llm = build_chat_model("gpt-4o-mini")
+    with mock_mode():
+        response = asyncio.run(llm.ainvoke([HumanMessage(content="hi")]))
+
+    assert response.content == MOCK_LLM_RESPONSE
+    assert provider == []
+
+
+def test_mock_mode_stubs_sync_and_streaming_calls(provider, monkeypatch):
+    from cairn.core.operator.runtime import mock_mode
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-real-looking")
+    llm = build_chat_model("gpt-4o-mini")
+    with mock_mode():
+        sync_response = llm.invoke([HumanMessage(content="hi")])
+        sync_chunks = list(llm.stream([HumanMessage(content="hi")]))
+        async_response = asyncio.run(llm.ainvoke([HumanMessage(content="hi")]))
+
+        async def _collect():
+            return [chunk async for chunk in llm.astream([HumanMessage(content="hi")])]
+
+        async_chunks = asyncio.run(_collect())
+
+    assert sync_response.content == MOCK_LLM_RESPONSE
+    assert "".join(chunk.content for chunk in sync_chunks) == MOCK_LLM_RESPONSE
+    assert async_response.content == MOCK_LLM_RESPONSE
+    assert "".join(chunk.content for chunk in async_chunks) == MOCK_LLM_RESPONSE
+    assert provider == []
+
+
+@pytest.mark.parametrize("method", ("json_schema", "function_calling"))
+def test_mock_mode_returns_parseable_structured_output(provider, monkeypatch, method):
+    from cairn.core.operator.runtime import mock_mode
+
+    class _Citation(BaseModel):
+        title: str
+
+    class _Node(BaseModel):
+        label: str
+        next: _Node | None
+
+    class _Review(BaseModel):
+        citation: _Citation
+        node: _Node
+        acceptable: bool
+        confidence: float
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-real-looking")
+    llm = build_chat_model("gpt-4o-mini").with_structured_output(_Review, method=method)
+
+    async def _invoke_and_stream():
+        result = await llm.ainvoke([HumanMessage(content="review")])
+        streamed = [chunk async for chunk in llm.astream([HumanMessage(content="review")])]
+        return result, streamed
+
+    with mock_mode():
+        result, streamed = asyncio.run(_invoke_and_stream())
+
+    assert result == _Review(
+        citation=_Citation(title="mock"),
+        node=_Node(label="mock", next=None),
+        acceptable=False,
+        confidence=0.0,
+    )
+    assert streamed[-1] == result
+    assert provider == []

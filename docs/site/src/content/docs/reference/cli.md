@@ -69,7 +69,7 @@ governed pipeline.
 | Option | Effect |
 |---|---|
 | `--dry-run` | compile, validate and print the execution plan; runs nothing |
-| `--mock` | operators that support it return mock results; no side effects |
+| `--mock` | deterministic LLM responses and `.mock()` for operators declaring `supports_mock`; refuses before execution if any reachable operator lacks mock support |
 | `--mode sandbox` | write operations are stubbed, reads run for real, spend stays near zero |
 | `--interactive` / `-I` | at each approval point, approve or reject in the terminal |
 

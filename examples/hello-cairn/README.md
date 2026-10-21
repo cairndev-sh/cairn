@@ -69,7 +69,8 @@ cairn remote login -u dev -p dev -e http://localhost:8471
 ```
 
 Any OpenAI-compatible endpoint works in place of a key: `OPENAI_BASE_URL`, or
-`LLM_GATEWAY=proxy` with `LLM_GATEWAY_URL`. The engine has no built-in mock model, and
+`LLM_GATEWAY=proxy` with `LLM_GATEWAY_URL`. The in-process `cairn run --mock` dev loop
+uses a deterministic model response; governed pipelines still use the configured provider.
 `CAIRN_BACKEND=mock` is the telemetry backend, not a model. `profile-and-publish` and
 `nightly-ops` call no model.
 
