@@ -50,12 +50,18 @@ an `obs.cost_scope` without the session backstop, and a stage that made at least
 `cost_usd` is the kernel's own value when the kernel reported one, else `llm_usd`. They are
 added after the raw output check and ride the descriptor and findings like any stat
 (`<stage>_llm_usd`). As each stage or mapped item progresses, the runner writes the cumulative
-known positive cost to `metrics.json`, including metered calls made before a stage fails. Each
-engine exposes that terminal metric on failed and cancelled jobs. The control plane settles
-each attempt's reservation at its known cost and adds earlier attempts to a retry's next
-reservation. The final known total is written on the leg's `Run` (`llm_cost_usd` → `Run.cost`,
-`leg_hooks.flow_leg_record`, both owners). Unknown cost remains absent, never $0; a succeeded
-leg whose engine reports no cost (a GPU train stage today) still records no `Run.cost`.
+known positive cost to `metrics.json`, including metered calls made before a stage fails. The
+builtin local/SSH and Metaflow file paths can expose that progress; SkyPilot reads the fetched
+runner metrics at teardown. This is stage-reported cost, including metered LLM spend, not an
+engine invoice: SkyPilot's cluster/GPU charge is not included in `DataflowResult.cost_usd` or
+`Run.cost` (its launch estimate is recorded separately). Other remote status paths may be
+unable to read partial metrics, so terminal cost can be absent. The control plane settles each
+attempt's known positive spend, including failed or cancelled attempts, and adds earlier
+attempt spend to the next reservation. For checkpoint retries it subtracts frozen spend already
+settled on the earlier attempt before settling the resumed attempt. The final known total is
+written on the leg's `Run` (`llm_cost_usd` → `Run.cost`, `leg_hooks.flow_leg_record`, both
+owners). Unknown cost remains absent, never $0; a succeeded leg whose engine reports no cost
+(a GPU train stage today) still records no `Run.cost`.
 
 ## What cairn owns
 Admission and governance before submit, the record, the handle for re-attach

@@ -1,8 +1,6 @@
 """#131 — failed spend is persisted by both flow-leg owners and governs later legs."""
 from __future__ import annotations
 
-import types
-import sys
 from types import SimpleNamespace
 
 import pytest
@@ -33,12 +31,6 @@ class _Dispatcher:
 
     async def _emit(self, run_id, event, payload, **kwargs):
         self.events.append((run_id, event, payload))
-
-
-def _stub_unused_file_lock_import(monkeypatch):
-    """The owner tests use memory stores and never exercise the POSIX lock."""
-    if sys.platform == "win32" and "fcntl" not in sys.modules:
-        monkeypatch.setitem(sys.modules, "fcntl", types.ModuleType("fcntl"))
 
 
 def _run(run_id: str, step_id: str) -> Run:
@@ -72,7 +64,6 @@ def _paid_outcomes() -> tuple[LegOutcome, LegOutcome]:
 
 
 async def test_bridge_persists_failed_cost_for_next_leg_reservation(monkeypatch):
-    _stub_unused_file_lock_import(monkeypatch)
     from cairn.core.dispatch import pipeline_bridge as bridge_module
 
     run_store = InMemoryRunStore()
@@ -114,7 +105,6 @@ async def test_bridge_persists_failed_cost_for_next_leg_reservation(monkeypatch)
 
 async def test_temporal_owner_persists_failed_cost_for_next_leg_reservation(monkeypatch):
     pytest.importorskip("temporalio")
-    _stub_unused_file_lock_import(monkeypatch)
     from cairn.core.runtime.temporal import pipeline_activities as activities
     from cairn.core.dispatch import dispatcher as dispatcher_module
     from cairn.core.dispatch import leg_executor, leg_hooks

@@ -388,6 +388,7 @@ async def execute_leg(
         retriable = False
         attempt_cost_usd = 0.0
         status = None
+        resumed_cost_usd = 0.0
         try:
             # H6c (#1248, ADR-0088) — resume selection: before EVERY attempt,
             # ask for the newest durable checkpoint of this exact spec. Fresh
@@ -406,12 +407,16 @@ async def execute_leg(
                     except Exception:  # noqa: BLE001 — announcing must not break adopting
                         logger.debug("leg %s: on_adopt emit failed", ref, exc_info=True)
             else:
+                spec.resume_from = None
                 if resume_provider is not None:
                     try:
                         from cairn.core.dataflow.checkpoints import spec_key  # noqa: PLC0415 - cycle: checkpoints → contract ← this module
                         rf = await resume_provider(spec_key(spec))
+                        spec.resume_from = rf
                         if rf is not None:
-                            spec.resume_from = rf
+                            resumed_cost_usd = _settled_resume_cost(
+                                spec, known_attempt_cost_usd,
+                            )
                             if on_resume is not None:
                                 await on_resume(rf)
                     except Exception:  # noqa: BLE001 — no-resume is always a safe fallback
@@ -434,12 +439,28 @@ async def execute_leg(
                         await on_submit(handle)
                     except Exception:  # noqa: BLE001
                         logger.debug("leg %s: on_submit persistence failed", ref, exc_info=True)
-            status = await _poll_until_terminal(engine, handle, poll_budget_s, heartbeat=heartbeat)
-            attempt_cost_usd = _reported_metrics_cost(getattr(status, "metrics", {}) or {})
+            def _remember_status(polled: Any) -> None:
+                nonlocal status
+                status = polled
+
+            status = await _poll_until_terminal(
+                engine, handle, poll_budget_s, heartbeat=heartbeat,
+                on_status=_remember_status,
+            )
+            attempt_cost_usd = max(
+                0.0,
+                _reported_metrics_cost(getattr(status, "metrics", {}) or {})
+                - resumed_cost_usd,
+            )
             if str(getattr(status, "state", "")) == "succeeded":
                 result = await engine.result(handle)
-                result_cost_usd = _reported_cost(result)
-                attempt_cost_usd = max(attempt_cost_usd, result_cost_usd)
+                reported_attempt_cost_usd = max(
+                    _reported_metrics_cost(getattr(status, "metrics", {}) or {}),
+                    _reported_cost(result),
+                )
+                attempt_cost_usd = max(
+                    0.0, reported_attempt_cost_usd - resumed_cost_usd,
+                )
                 out = LegOutcome(
                     state="succeeded", handle=handle,
                     stats=dict(getattr(result, "stats", {}) or {}),
@@ -487,7 +508,11 @@ async def execute_leg(
             logger.exception("leg %s failed", ref)
             attempt_cost_usd = max(
                 attempt_cost_usd,
-                _reported_metrics_cost(getattr(status, "metrics", {}) or {}),
+                max(
+                    0.0,
+                    _reported_metrics_cost(getattr(status, "metrics", {}) or {})
+                    - resumed_cost_usd,
+                ),
             )
             out = LegOutcome(
                 state="failed", error=f"{type(e).__name__}: {e}",
@@ -536,6 +561,30 @@ def _reported_metrics_cost(metrics: Any) -> float:
     except (OverflowError, TypeError, ValueError):
         return 0.0
     return value if 0.0 < value < float("inf") else 0.0
+
+
+def _settled_resume_cost(spec: DataflowSpec, settled_usd: float) -> float:
+    """Checkpoint cost already settled by an earlier attempt of this leg.
+
+    The runner restores the checkpoint stage's frozen stats, so a resumed
+    result includes that cost again. Only trust a checkpoint for this exact
+    spec, and only subtract spend already settled in this retry loop.
+    """
+    resume = spec.resume_from
+    if resume is None or settled_usd <= 0:
+        return 0.0
+    try:
+        from cairn.core.dataflow.checkpoints import spec_key  # noqa: PLC0415 - cycle: checkpoints → contract ← this module
+        if resume.spec_key != spec_key(spec):
+            return 0.0
+        frozen = {int(item.get("index", -1)): item for item in resume.completed}
+        checkpoint_cost = sum(
+            _reported_metrics_cost(frozen.get(index, {}).get("stats", {}))
+            for index in range(min(resume.stage_index + 1, len(spec.stages)))
+        )
+    except (AttributeError, TypeError, ValueError):
+        return 0.0
+    return round(min(checkpoint_cost, settled_usd), 6)
 
 
 def _adopt_handle(persisted: Optional[dict]) -> Any:
@@ -684,6 +733,7 @@ async def _resolve_uri_parents(descriptors: list, artifact_store) -> None:
 async def _poll_until_terminal(
     engine: Any, handle: Any, budget_s: float,
     *, heartbeat: Optional[Callable[[], Awaitable[None]]] = None,
+    on_status: Optional[Callable[[Any], None]] = None,
 ) -> Any:
     """Poll to a terminal state or the budget. The engine owns the work; if the
     control plane restarts mid-leg, a re-attach by handle resumes this loop
@@ -700,6 +750,8 @@ async def _poll_until_terminal(
     last_beat = 0.0
     while True:
         status = await engine.poll(handle)
+        if on_status is not None:
+            on_status(status)
         if heartbeat is not None and loop.time() - last_beat >= _HEARTBEAT_MIN_S:
             # ADR-0086 H1 (#1239) — "I am still watching this engine": stamped
             # AFTER a poll returned, so the beat vouches for the whole chain

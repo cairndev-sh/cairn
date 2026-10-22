@@ -186,8 +186,10 @@ def test_bridge_persists_partial_cost_on_failed_metaflow_task(tmp_path, monkeypa
         assert json.loads((tmp_path / "result.json").read_text(encoding="utf-8")) == {
             "error": "RuntimeError: stage failed after paid call",
         }
+        flow.finish()
+        assert flow.next_step == flow.end
         with pytest.raises(RuntimeError, match="stage failed after paid call"):
-            flow.failed()
+            flow.end()
     finally:
         sys.modules.pop(module_name, None)
 

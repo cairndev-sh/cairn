@@ -14,8 +14,10 @@ Budget enforcement was **check-then-submit**, which loses two ways:
    ALREADY overspent, so a $300 series happily admitted a $500 run.
 
 Both close with one primitive: **reserve the estimate atomically at admission**,
-then ``release`` on failure/cancel or ``settle`` on success (the spend becomes
-real in the ledger, so keeping the reservation would double-count it).
+then ``settle`` any attempt with known positive spend (including failure or
+cancellation), and ``release`` only when no positive spend was reported. The
+actual spend becomes real in the ledger, so keeping the reservation would
+double-count it.
 
 **#1530 — where the reservations LIVE.** The original implementation held them
 in a module-global dict behind one ``asyncio.Lock``, and said so honestly: the
