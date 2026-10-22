@@ -486,41 +486,47 @@ async def pipeline_mirror_state(pipeline_id: str, step_state: dict, status: str)
             StepState,
             default_pipeline_store,
         )
+        from cairn.core.dispatch.coordination import pipeline_sections_for  # noqa: PLC0415
 
         store = default_pipeline_store()
-        rec = await store.get(pipeline_id)
-        if rec is None:
-            # #2223 — never INVENT a record: a synthesized one (empty governance, the
-            # "default" workspace) would let the next leg run ungoverned. The bridge
-            # writes the record before the workflow starts; absent means deleted.
-            logger.warning("pipeline_mirror_state: no record for %s; not recreating it", pipeline_id)
-            return
-        now = _now()
-        merged: dict[str, StepState] = {}
-        for sid, st in (step_state or {}).items():
-            incoming = {k: v for k, v in st.items() if k in StepState.model_fields}
-            prev = rec.step_state.get(sid)
-            if prev is not None:
-                keep = prev.model_dump()
-                # activity-owned fields win when the workflow has nothing newer
-                for k in ("handle", "run_id", "started_at", "ended_at", "approver", "awaiting_since"):
-                    if incoming.get(k) is None and keep.get(k) is not None:
-                        incoming[k] = keep[k]
-            new = StepState(**incoming)
-            was = str(getattr(prev, "status", "") or "pending")
-            if new.status == "running" and not new.started_at:
-                new.started_at = now
-            if new.status in _STEP_TERMINAL and not new.ended_at and (was != new.status or prev is None):
-                new.ended_at = now
-            if new.status.startswith("awaiting_") and not new.awaiting_since:
-                new.awaiting_since = now
-            merged[sid] = new
-        rec.step_state = merged
-        rec.status = status
-        rec.updated_at = now
-        if status in ("done", "failed", "cancelled") and not rec.ended_at:
-            rec.ended_at = now
-        await store.put(rec)
+        # The mirror is a whole-record read-modify-write. It must use the same
+        # section as pin/handle/approver writers or a stale workflow snapshot can
+        # put those fields back after a sibling leg updates them.
+        sections = pipeline_sections_for(_dispatcher())
+        async with sections.hold(pipeline_id):
+            rec = await store.get(pipeline_id)
+            if rec is None:
+                # #2223 — never INVENT a record: a synthesized one (empty governance, the
+                # "default" workspace) would let the next leg run ungoverned. The bridge
+                # writes the record before the workflow starts; absent means deleted.
+                logger.warning("pipeline_mirror_state: no record for %s; not recreating it", pipeline_id)
+                return
+            now = _now()
+            merged: dict[str, StepState] = {}
+            for sid, st in (step_state or {}).items():
+                incoming = {k: v for k, v in st.items() if k in StepState.model_fields}
+                prev = rec.step_state.get(sid)
+                if prev is not None:
+                    keep = prev.model_dump()
+                    # activity-owned fields win when the workflow has nothing newer
+                    for k in ("handle", "run_id", "started_at", "ended_at", "approver", "awaiting_since"):
+                        if incoming.get(k) is None and keep.get(k) is not None:
+                            incoming[k] = keep[k]
+                new = StepState(**incoming)
+                was = str(getattr(prev, "status", "") or "pending")
+                if new.status == "running" and not new.started_at:
+                    new.started_at = now
+                if new.status in _STEP_TERMINAL and not new.ended_at and (was != new.status or prev is None):
+                    new.ended_at = now
+                if new.status.startswith("awaiting_") and not new.awaiting_since:
+                    new.awaiting_since = now
+                merged[sid] = new
+            rec.step_state = merged
+            rec.status = status
+            rec.updated_at = now
+            if status in ("done", "failed", "cancelled") and not rec.ended_at:
+                rec.ended_at = now
+            await store.put(rec)
     except Exception as e:  # noqa: BLE001 — read-model, never fail the workflow on it
         logger.debug("pipeline_mirror_state failed for %s: %s", pipeline_id, e)
 

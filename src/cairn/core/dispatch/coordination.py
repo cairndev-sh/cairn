@@ -227,7 +227,9 @@ class CriticalSections:
         restarted after a Postgres outage retries instead of staying local
         forever."""
         self._pool = None
-        self._local.clear()
+        # Keep lock objects alive while holders unwind. Clearing this map while
+        # another owner still has a key held would let a new holder create a
+        # second asyncio.Lock for the same key and bypass local exclusion.
 
 
 def pipeline_sections_for(owner: Any) -> CriticalSections:
