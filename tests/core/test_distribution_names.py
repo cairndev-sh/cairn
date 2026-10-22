@@ -33,6 +33,23 @@ def test_version_lookups_and_install_hints_name_the_distribution():
     assert 'version("cairndev")' in (ENGINE / "core/settings.py").read_text()
 
 
+#: An install command naming the bare ``cairn`` distribution: on PyPI that name belongs to an
+#: unrelated project (ADR-0029), so a user following such a line installs someone else's code.
+_BARE_CAIRN_INSTALL = re.compile(
+    r"""(?:(?:pip|pipx|uv tool|uv pip) install(?:\s+-[-\w=]+)*|uv add)\s+["']?cairn(?:[\[\s"'=<>~!]|$)""", re.M)
+
+
+def test_install_lines_never_name_the_bare_cairn_distribution():
+    roots = [REPO / "README.md", REPO / "CONTRIBUTING.md", REPO / "examples", REPO / "docs/site/src",
+             REPO / "docs/site/public", REPO / "src", REPO / "tests", REPO / "packages"]
+    files = [p for r in roots if r.exists() for p in ([r] if r.is_file() else r.rglob("*"))
+             if p.is_file() and p.suffix in {".md", ".mdx", ".yml", ".yaml", ".sh", ".toml", ".py"}
+             and p.resolve() != Path(__file__).resolve()]  # this file names the patterns it forbids
+    bad = [f"{f.relative_to(REPO).as_posix()}: {m.group(0).strip()}"
+           for f in files for m in _BARE_CAIRN_INSTALL.finditer(f.read_text(errors="ignore"))]
+    assert not bad, bad
+
+
 def test_the_pack_loader_checks_compat_against_the_engine_distribution():
     """#2512: ``[compat] cairn_engine`` is checked against ``ENGINE_DISTRIBUTION``; naming a
     distribution that is not the engine's makes every pack's check "cannot verify"."""

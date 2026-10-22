@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="./assets/logo.svg" alt="cairn" width="88">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./assets/logo-dark.svg">
+    <img src="./assets/logo.svg" alt="cairn" width="72">
+  </picture>
 </p>
 
 <h1 align="center">cairn</h1>
@@ -13,12 +16,14 @@
 <p align="center">
   <a href="https://docs.cairndev.sh"><img alt="Docs" src="https://img.shields.io/badge/docs-cairndev.sh-3b82f6"></a>
   <a href="https://cairndev.sh"><img alt="Website" src="https://img.shields.io/badge/website-cairndev.sh-111827"></a>
+  <a href="https://demo.cairndev.sh"><img alt="Live demo" src="https://img.shields.io/badge/live%20demo-demo.cairndev.sh-16a34a"></a>
   <img alt="Python" src="https://img.shields.io/badge/python-3.12%2B-3776ab">
   <img alt="Status" src="https://img.shields.io/badge/status-early%20access-f59e0b">
 </p>
 
 <p align="center">
   <a href="https://docs.cairndev.sh">Docs</a> ·
+  <a href="https://demo.cairndev.sh">Live demo</a> ·
   <a href="https://docs.cairndev.sh/installation/">Install</a> ·
   <a href="https://docs.cairndev.sh/modelops/">ModelOps lifecycle</a> ·
   <a href="https://docs.cairndev.sh/governance/">Governance</a> ·

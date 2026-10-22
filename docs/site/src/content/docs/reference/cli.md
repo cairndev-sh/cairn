@@ -69,7 +69,7 @@ governed pipeline.
 | Option | Effect |
 |---|---|
 | `--dry-run` | compile, validate and print the execution plan; runs nothing |
-| `--mock` | operators that support it return mock results; no side effects |
+| `--mock` | deterministic LLM responses and `.mock()` for operators declaring `supports_mock`; refuses before execution if any reachable operator lacks mock support |
 | `--mode sandbox` | write operations are stubbed, reads run for real, spend stays near zero |
 | `--interactive` / `-I` | at each approval point, approve or reject in the terminal |
 
@@ -124,7 +124,8 @@ Every `remote` command takes `--endpoint` / `-e`, `--token` and `--profile`.
 |---|---|
 | `cairn deploy doctor` | Checks a deployment's `.env` (`--env`) or Helm values (`--values`) before it starts: required values, and that the runtime matches the enabled services. `--strict` fails on warnings. |
 | `cairn remote hash-password` | Prints the password hash for `CAIRN_API_PASSWORD_HASH` (the `auth` extra). |
-| `cairn worker --pull` | Runs a worker that claims jobs from the control plane over HTTP: `--engine-url`, `--token` (an operator token: the per-run token the engine hands a job's container can only post that run's events, read its control requests and heartbeat its job, and gets `403` anywhere else), `-c gpu=T4` to say what the machine offers, `--once` for a single job. Without `--pull` it polls a Temporal task queue. |
+| `cairn remote worker-token --name <name>` | Prints a worker-pool token for `cairn worker --pull --token`. Run it where the control plane's `CAIRN_JWT_SECRET` is set: it signs the token with that secret. `--days` sets how long it is valid (default 30). The token claims and heartbeats pull-lane jobs and gets `403` on every other route. |
+| `cairn worker --pull` | Runs a worker that claims jobs from the control plane over HTTP: `--engine-url`, `--token`, `-c gpu=T4` to say what the machine offers, `--once` for a single job. With sign-in on, `--token` must be a worker credential: a worker-pool token from `cairn remote worker-token`, or the deployment admin's (`CAIRN_API_USER`) token. A signed-in user's token gets `403`, whatever their role. The per-run token the engine hands a job's container can only post that run's events, read its control requests and heartbeat its job, and gets `403` anywhere else. Without `--pull` it polls a Temporal task queue. |
 
 ## Next
 

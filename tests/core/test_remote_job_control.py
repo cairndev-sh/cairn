@@ -144,7 +144,7 @@ async def test_build_default_poll_resolves_op_and_threads_compute(monkeypatch):
 
     from cairn.core.connections import ResolvedConnection
 
-    async def fake_resolve(name, *, store=None):
+    async def fake_resolve(name, *, store=None, account_id=None):
         return ResolvedConnection(name=name, kind="compute.runpod", config={"gpu": "A100"}, secrets={})
 
     monkeypatch.setattr("cairn.core.connections.resolve_connection", fake_resolve)

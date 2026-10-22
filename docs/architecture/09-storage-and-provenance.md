@@ -23,7 +23,7 @@ carries only `runs`, `memory`, `rag` (+ lazily-built trigger stores).
 | Judges, judge labels, reviews, eval ledger | `storage/judges.py`, `judge_labels.py`, `reviews.py`, `eval_ledger.py` | triad (+Null) | versioned judges; HITL reviews; scores |
 | Capture, fingerprints, knowledge corpora, rag catalog, suggestions, episodic memory | `storage/*.py` | triad / Null | traces; MinHash fingerprints; workspace corpora |
 | Workflow registry (install-then-run, ADR-0047) | `src/cairn/core/workflow_registry.py` | triad | `InstalledWorkflow` (schema by hash), `WorkflowSchema`, pipeline enable/sync |
-| Registry install, profiles, policies, features, accounts, connections, pilots, OAuth tokens, remote jobs, workspaces, workflow config, schedules/triggers/inbox | `registry_install.py`, `profile_store.py`, `policy/store.py`, `features.py`, `account.py`, `connections.py`, `pilot.py`, `pilot_ledger.py`, `oauth/store.py`, `operator/job_store.py`, `workspace.py`, `workflow_config_store.py`, `storage/{schedule_store,trigger_store,trigger_inbox}.py` | triads | |
+| Registry install, profiles, policies, features, accounts, console refresh tokens (ADR-0142), connections, pilots, OAuth tokens, remote jobs, workspaces, workflow config, schedules/triggers/inbox | `registry_install.py`, `profile_store.py`, `policy/store.py`, `features.py`, `account.py`, `refresh_tokens.py`, `connections.py`, `pilot.py`, `pilot_ledger.py`, `oauth/store.py`, `operator/job_store.py`, `workspace.py`, `workflow_config_store.py`, `storage/{schedule_store,trigger_store,trigger_inbox}.py` | triads | |
 | Migrations | `storage/migrations.py` (sqlite helpers), `pg_schema_init.py` | | `CREATE TABLE IF NOT EXISTS` + additive column repair |
 
 ## Provenance chain (OBSERVED)
@@ -92,3 +92,4 @@ lazily by any module calling a factory.
 | Tags are the only mutable artifact state | DOCUMENTED (`artifacts.py`); not separately tested (UNCLEAR) |
 | Every store follows `CAIRN_STORAGE` | PARTIALLY — legacy knobs remain; `storage/__init__.py:74` documents the fallback ladder |
 | Prod HA needs Postgres for every store | DOCUMENTED gap (P13); several stores have sqlite-only or Null tiers (e.g. `playground/upload_store.py`, `judge_labels.py`) |
+| Knowledge corpora are workspace-scoped (ADR-0062): role composition lists the installed packs' corpora plus the current workspace's own corpora only; a workspace corpus is indexed into its own workspace's collection (`workspace_collection`, one unambiguous prefix per workspace; `default` keeps bare names) whatever context indexes it | CONFIRMED (`services/rag/roles.py list_roles`, `services/rag/byo.py`; `test_workspace_scoped_knowledge.py`) |

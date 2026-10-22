@@ -54,6 +54,10 @@ class InboxRecord(BaseModel):
     source: str
     template: str
     input: dict[str, Any] = Field(default_factory=dict)
+    #: #212 — the workspace that declared the receiver, where the queued run starts.
+    #: ``None`` (a pack/overlay receiver, or a row an older server queued) binds
+    #: nothing: the run starts in the process default, as an inline delivery does.
+    workspace: Optional[str] = None
     status: str = PENDING  # pending | done | dead
     attempts: int = 0
     max_attempts: int = 5
@@ -72,7 +76,7 @@ Handler = Callable[[InboxRecord], Awaitable[Any]]
 class TriggerInbox(Protocol):
     """Durable at-least-once inbox for inbound triggers."""
 
-    async def enqueue(self, source: str, template: str, input: dict[str, Any], *, max_attempts: int = 5) -> InboxRecord: ...
+    async def enqueue(self, source: str, template: str, input: dict[str, Any], *, max_attempts: int = 5, workspace: Optional[str] = None) -> InboxRecord: ...
     async def claim_due(self, *, now: str, limit: int = 50) -> list[InboxRecord]: ...
     async def mark_done(self, record_id: str) -> None: ...
     async def mark_retry(self, record_id: str, *, attempts: int, next_retry_at: str, error: str) -> None: ...
@@ -90,8 +94,9 @@ class InMemoryTriggerInbox:
     def __init__(self) -> None:
         self._by_id: dict[str, InboxRecord] = {}
 
-    async def enqueue(self, source: str, template: str, input: dict[str, Any], *, max_attempts: int = 5) -> InboxRecord:
-        rec = InboxRecord(source=source, template=template, input=dict(input), max_attempts=max_attempts)
+    async def enqueue(self, source: str, template: str, input: dict[str, Any], *, max_attempts: int = 5, workspace: Optional[str] = None) -> InboxRecord:
+        rec = InboxRecord(source=source, template=template, input=dict(input), max_attempts=max_attempts,
+                          workspace=workspace)
         self._by_id[rec.id] = rec
         return rec
 
@@ -174,8 +179,9 @@ class SqliteTriggerInbox:
         )
         self._conn.commit()
 
-    async def enqueue(self, source: str, template: str, input: dict[str, Any], *, max_attempts: int = 5) -> InboxRecord:
-        rec = InboxRecord(source=source, template=template, input=dict(input), max_attempts=max_attempts)
+    async def enqueue(self, source: str, template: str, input: dict[str, Any], *, max_attempts: int = 5, workspace: Optional[str] = None) -> InboxRecord:
+        rec = InboxRecord(source=source, template=template, input=dict(input), max_attempts=max_attempts,
+                          workspace=workspace)
         async with self._lock:
             await asyncio.to_thread(self._put_sync, rec)
         return rec
@@ -303,9 +309,10 @@ class NatsJetStreamTriggerInbox:
             config=ConsumerConfig(ack_wait=self._ack_wait, ack_policy=AckPolicy.EXPLICIT),
         )
 
-    async def enqueue(self, source: str, template: str, input: dict[str, Any], *, max_attempts: int = 5) -> InboxRecord:
+    async def enqueue(self, source: str, template: str, input: dict[str, Any], *, max_attempts: int = 5, workspace: Optional[str] = None) -> InboxRecord:
         await self._ensure()
-        rec = InboxRecord(source=source, template=template, input=dict(input), max_attempts=max_attempts)
+        rec = InboxRecord(source=source, template=template, input=dict(input), max_attempts=max_attempts,
+                          workspace=workspace)
         await self._js.publish(self._subject, rec.model_dump_json().encode(), headers={"Cairn-Id": rec.id})
         return rec
 
@@ -411,13 +418,27 @@ async def drain_once(
     return {"dispatched": dispatched, "retried": retried, "dead": dead, "claimed": len(due)}
 
 
-async def replay_since(inbox: TriggerInbox, *, since: str, limit: int = 500) -> int:
+def record_workspace(rec: InboxRecord) -> str:
+    """The workspace a record belongs to: the one it carries, else ``default``
+    (a pack/overlay receiver's delivery, or one an older server queued) — #218."""
+    from cairn.core.workspace import DEFAULT_WORKSPACE  # noqa: PLC0415 — as the other storage modules
+
+    return rec.workspace or DEFAULT_WORKSPACE
+
+
+async def replay_since(inbox: TriggerInbox, *, since: str, limit: int = 500,
+                       workspace: Optional[str] = None) -> int:
     """Re-enqueue terminal (done/dead) records created at/after ``since`` as fresh
-    pending records. Returns how many were re-enqueued."""
+    pending records. ``workspace`` set → only that workspace's records
+    (:func:`record_workspace`); ``None`` → every workspace's. Returns how many were
+    re-enqueued."""
     count = 0
     for rec in await inbox.list(since=since, limit=limit):
+        if workspace is not None and record_workspace(rec) != workspace:
+            continue
         if rec.status in (DONE, DEAD):
-            await inbox.enqueue(rec.source, rec.template, rec.input, max_attempts=rec.max_attempts)
+            await inbox.enqueue(rec.source, rec.template, rec.input, max_attempts=rec.max_attempts,
+                                workspace=rec.workspace)
             count += 1
     return count
 
@@ -466,6 +487,7 @@ __all__ = [
     "TriggerInbox",
     "drain_once",
     "get_trigger_inbox",
+    "record_workspace",
     "replay_since",
     "run_drain_loop",
 ]

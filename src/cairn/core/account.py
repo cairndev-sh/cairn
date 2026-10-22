@@ -678,7 +678,12 @@ async def set_password(user_id: str, password: str, *, store: Any = None) -> Use
     if user is None:
         raise KeyError(f"user {user_id!r} not found")
     user.password_hash = hash_password(password)
-    return await store.put_user(user)
+    saved = await store.put_user(user)
+    # ADR-0142 — a new password ends every console sign-in the old one started.
+    from cairn.core.refresh_tokens import revoke_user  # noqa: PLC0415 — lazy, like hash_password
+
+    await revoke_user(user_id)
+    return saved
 
 
 async def set_disabled(user_id: str, disabled: bool, *, store: Any = None) -> User:
@@ -691,7 +696,14 @@ async def set_disabled(user_id: str, disabled: bool, *, store: Any = None) -> Us
     if user is None:
         raise KeyError(f"user {user_id!r} not found")
     user.disabled = disabled
-    return await store.put_user(user)
+    saved = await store.put_user(user)
+    if disabled:
+        # ADR-0142 — a disabled user's console sign-ins end now, not when they
+        # next try to renew one.
+        from cairn.core.refresh_tokens import revoke_user  # noqa: PLC0415 — lazy, like hash_password
+
+        await revoke_user(user_id)
+    return saved
 
 
 async def add_member(account_id: str, user_id: str, role: str = "member", *, store: Any = None) -> Membership:

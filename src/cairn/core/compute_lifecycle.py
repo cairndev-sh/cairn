@@ -169,8 +169,9 @@ class ComputeBox:
         return self.instance_id
 
 
-async def load_box(name: str) -> ComputeBox:
-    """Resolve a connection NAME to its lifecycle facts.
+async def load_box(name: str, *, account_id: Optional[str] = None) -> ComputeBox:
+    """Resolve a connection NAME to its lifecycle facts, in ``account_id`` (when
+    omitted, the current run's account — see ``resolve_connection``).
 
     By name rather than off ``ctx.compute`` because a pipeline TASK leg carries
     no compute binding (#1459) — the acquire leg's whole job is to name the box
@@ -180,7 +181,7 @@ async def load_box(name: str) -> ComputeBox:
     # which the CLI loads for `cairn compute sweep`.
     from cairn.core.connections import resolve_connection  # noqa: PLC0415
 
-    conn = await resolve_connection(name)
+    conn = await resolve_connection(name, account_id=account_id)
     if conn is None:
         raise ComputeLifecycleError(
             f"compute connection {name!r} did not resolve to an enabled "

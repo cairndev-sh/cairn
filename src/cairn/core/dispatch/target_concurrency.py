@@ -68,12 +68,15 @@ async def target_cap(target: str, *, store: Any = None) -> Optional[int]:
     if not name:
         return None
     try:
-        from cairn.core.connections import default_connection_store  # noqa: PLC0415 - cycle: connections → secrets stack
+        from cairn.core.connections import (  # noqa: PLC0415 - cycle: connections → secrets stack
+            lookup_account, default_connection_store, run_account,
+        )
 
+        account = lookup_account(await run_account())  # the leg's account resolves the target
         owned = store is None
         store = store or default_connection_store()
         try:
-            conn = await store.get_by_name(name)
+            conn = await store.get_by_name(name, account_id=account)
         finally:
             close = getattr(store, "close", None)
             if owned and callable(close):

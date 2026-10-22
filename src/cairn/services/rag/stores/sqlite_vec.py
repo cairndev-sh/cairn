@@ -206,6 +206,9 @@ class SqliteVecStore(VectorStore):
         self._conn: Optional[sqlite3.Connection] = None
         self._lock = asyncio.Lock()
         self._collection: Optional[str] = None
+        #: collections this store already created, by dim: callers select the
+        #: collection before every store call, so the DDL runs once per process
+        self._ready: dict[str, int] = {}
 
     @staticmethod
     def _safe_collection(collection: str) -> str:
@@ -260,9 +263,13 @@ class SqliteVecStore(VectorStore):
 
     async def initialize(self, collection: str, dim: int) -> None:
         table = self._safe_collection(collection)
+        if self._ready.get(table) == dim:
+            self._collection = table
+            return
         async with self._lock:
             await asyncio.to_thread(self._initialize_sync, table, dim)
         self._collection = table
+        self._ready[table] = dim
         logger.info("sqlite-vec collection ready: %s (dim=%d)", table, dim)
 
     async def upsert(
@@ -404,3 +411,4 @@ class SqliteVecStore(VectorStore):
         if self._conn is not None:
             self._conn.close()
             self._conn = None
+        self._ready.clear()  # a reopened (e.g. in-memory) database may not have them

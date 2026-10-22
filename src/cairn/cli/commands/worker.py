@@ -36,7 +36,7 @@ def worker_cmd(
         None, "--engine-url", envvar="CAIRN_ENGINE_URL", help="--pull: the control plane's base URL.",
     ),
     token: Optional[str] = typer.Option(
-        None, "--token", envvar="CAIRN_ENGINE_TOKEN", help="--pull: an operator bearer token (a per-run worker token only reports its own run; it cannot claim).",
+        None, "--token", envvar="CAIRN_ENGINE_TOKEN", help="--pull: a worker credential: a worker-pool token (cairn remote worker-token) or the deployment admin's token. A user's token, and a per-run worker token, cannot claim.",
     ),
     capabilities: Optional[List[str]] = typer.Option(
         None, "--capabilities", "-c", help="--pull: what this machine offers, e.g. gpu=T4 (repeatable).",

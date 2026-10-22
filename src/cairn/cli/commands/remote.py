@@ -816,6 +816,27 @@ def hash_password_cmd(
         _fail(str(e))
 
 
+@app.command(name="worker-token")
+def worker_token_cmd(
+    name: str = typer.Option(..., "--name", "-n", help="names the worker or pool, e.g. gpu-a"),
+    days: int = typer.Option(30, "--days", help="how long the token is valid (1-365 days)"),
+):
+    """Print a worker-pool token for `cairn worker --pull --token` (cairn-platform#224).
+
+    Only a worker credential claims pull-lane jobs: this token, or the deployment
+    admin's. It is signed locally with the deployment's CAIRN_JWT_SECRET, so run
+    this where that secret is set (the control plane's environment); the token
+    reaches only /jobs/claim and /jobs/{id}/heartbeat."""
+    try:
+        from cairn.core.triggers.auth import auth_enabled, mint_worker_pool_token
+        if not auth_enabled():
+            _fail("CAIRN_JWT_SECRET is not set: run this where the control plane's signing "
+                  "secret is (with auth off a pull worker needs no token)")
+        typer.echo(mint_worker_pool_token(name, days))
+    except ValueError as e:
+        _fail(str(e))
+
+
 # ─── pipelines (#1195 slice 2 — the multi-leg surface, client-backed) ──────
 # The ADR-0084 runnable surface driven remotely: launch a pack pipeline,
 # watch its legs chain, resolve the HITL gate — the same loop the prod E2E

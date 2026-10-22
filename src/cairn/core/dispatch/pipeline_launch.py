@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, Optional
 
 from cairn.core.engine.bundle_pipeline import (
@@ -354,6 +356,56 @@ def _with_invocations(plan: PipelinePlan, resolution: ContractResolution) -> Con
     return resolution.model_copy(update={"invocations": tuple(entries)}) if entries else resolution
 
 
+def _read_only(value: Any) -> Any:
+    """A read-only copy for a ``pipeline.launching`` payload: mappings become
+    ``MappingProxyType`` over a fresh dict, lists and tuples become tuples, all
+    the way down. A provider can read what the launch will use, never change it."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({k: _read_only(v) for k, v in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_read_only(v) for v in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_read_only(v) for v in value)
+    return value
+
+
+async def _ask_launch_hooks(
+    *, pipeline_ref: str, workspace_id: str, environment: Optional[str], trigger: dict,
+    preset: str, inputs: dict, supplied: dict, admission: Any,
+) -> None:
+    """Fire ``pipeline.launching`` (see :mod:`cairn.core.pack.run_hooks`) and turn a
+    provider's refusal into this door's admission refusal, before any record exists.
+    No provider installed: nothing is resolved and nothing is fired."""
+    from cairn.core.pack import run_hooks  # noqa: PLC0415 — off the hot import path, as in the dispatcher
+
+    if not run_hooks.load_run_hooks():
+        return
+    from cairn.core.workspace import workspace_account  # noqa: PLC0415 — off the hot import path
+
+    try:
+        account_id = await workspace_account(workspace_id)
+    except Exception:  # noqa: BLE001 — the account is context for the provider, "" = unknown
+        account_id = ""
+    try:
+        await run_hooks.fire(
+            run_hooks.PIPELINE_LAUNCHING,
+            pipeline_ref=pipeline_ref, workspace_id=workspace_id, account_id=account_id,
+            environment=environment or "", source=str(trigger.get("source") or ""),
+            trigger=_read_only(trigger), preset=preset,
+            inputs=_read_only(inputs), supplied=_read_only(supplied),
+        )
+    except run_hooks.AdmissionRefused as e:
+        from datetime import datetime, timezone  # noqa: PLC0415
+
+        from cairn.core.admission_door import REFUSED, AdmissionDecision  # noqa: PLC0415
+
+        raise AdmissionRefusedError(AdmissionDecision(
+            verdict=REFUSED, refusing_reasons=[e.reason], environment=environment or "",
+            workspace_id=workspace_id, policy=dict(getattr(admission, "policy", {}) or {}),
+            decided_at=datetime.now(timezone.utc).isoformat(),
+        )) from None
+
+
 async def launch_pipeline_def(
     d: PipelineDef,
     *,
@@ -467,12 +519,25 @@ async def launch_pipeline_def(
         if preset_overrides:
             trig["preset_overrides"] = preset_overrides
 
+    # `pipeline.launching` — an installed run hook sees this launch (its ref,
+    # inputs, workspace, account and trigger) and may refuse it. Asked LAST among
+    # the refusals, after the policy gates, the service doors and the admission
+    # decision, and before the record: a refusal leaves nothing behind, and it
+    # reaches every caller as the admission refusal they already handle. Nothing
+    # above takes a side effect (the preset is touched only after the record),
+    # so there is nothing to release here. The event fails closed.
+    stamp = bundle_ref or f"{PIPELINE_PREFIX}{d.pack}/{d.name}"
+    await _ask_launch_hooks(
+        pipeline_ref=stamp, workspace_id=workspace_id, environment=environment, trigger=trig,
+        preset=preset_name, inputs=merged, supplied=supplied, admission=admission,
+    )
+
     logger.info("launching pipeline %s/%s (%d legs)%s", d.pack, d.name, len(plan.steps),
                 f" from preset {preset_name!r} ({preset_source})" if preset_name else "")
     rec = await bridge.start_pipeline(
         plan,
         inputs=merged,
-        bundle_ref=bundle_ref or f"{PIPELINE_PREFIX}{d.pack}/{d.name}",
+        bundle_ref=stamp,
         environment=environment,
         workspace_id=workspace_id,
         trigger=trig,

@@ -45,8 +45,12 @@ tests inside the pack.
 `platform-demo` also answers `POST /demo/seed?showcase=1` with `showcase=True`) ·
 `cairn.model_catalogs` (the licence door's catalogue providers, ADR-0120 D4,
 `src/cairn/core/pack/model_catalogs.py`) · `cairn.run_hooks` (the run/leg event listeners the
-dispatch layer fires, plus the one query-shaped `run.admitting` whose provider may refuse
-with `AdmissionRefused`, and `workspace.created`, fired by the admin router, #2421; ADR-0120
+dispatch layer fires, plus the two query-shaped events whose provider may refuse with
+`AdmissionRefused`: `run.admitting` (a template run, before its record; a provider failure
+is logged and ignored) and `pipeline.launching` (a pipeline launch, fired by the launch door
+before the pipeline record, with the launch's ref, inputs, workspace, account and trigger
+as read-only copies; a refusal is the door's `AdmissionRefusedError`, and a provider failure
+refuses the launch too); and `workspace.created`, fired by the admin router, #2421; ADR-0120
 D4, `src/cairn/core/pack/run_hooks.py`) · `cairn.routers`
 (HTTP surfaces beyond the public API, ADR-0120 D4, `src/cairn/core/triggers/router_providers.py`) ·
 `cairn.cli` (commands beyond the public CLI — a provider returns a `typer.Typer` or a list of

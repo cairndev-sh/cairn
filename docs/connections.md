@@ -30,6 +30,102 @@ cairn connect rm <name>
 produces a working `api_key` connection pointed at `OPENAI_API_KEY` with no
 flags. Aliases: `hf`→huggingface, `claude`→anthropic, `google`→gemini, `k8s`→kube.
 
+## Accounts
+
+With auth on, a connection belongs to the account that created it. A connection
+of any account other than the deployment's own `default` resolves only the secret
+references stored for that account (`mint_ref(conn, key, account_id=…)` makes
+`cairn://secrets#<account>/<conn>-<KEY>`; `resolve_secret(ref, account_id=…)` and
+`put_secret(ref, value, account_id=…)` hold to it). A bare name or `${env:NAME}`
+(the server's environment), the deployment's stored secrets and another account's
+resolve to nothing, the catalog's environment-variable defaults are not applied
+(`connection_from_provider(…, account_id=…)` refuses a reference from outside the
+account), and an OAuth connection reads the token stored under its own name. The
+`default` account, and with it every single-node or auth-off deployment, is
+unchanged, and references stored before accounts were namespaced keep resolving
+for it.
+
+A run resolves connections and secrets in its own account: the account that owns
+the run's workspace (`workspace_account(workspace_id)`). These run in the workspace
+their record names (`workspace_scope`), so the account follows the record rather
+than whichever request or worker happens to execute them: a template run, an
+in-process resume, a pipeline's template, task and flow legs (in-process and under
+the Temporal owner), and a remote job's poll and relaunch. With auth on, a record
+that names no workspace, or a workspace no store holds, is refused rather than
+resolved as the deployment's, and so is a lookup made outside any workspace scope
+(no request and no run scoped from its record, as for a template's operation
+nodes on a durable runtime's worker): it raises `WorkspaceScopeRequired`. The
+deployment's own tools (`cairn connect test`, `cairn doctor`, `cairn compute
+status`) look up the deployment's connections explicitly. Work an operator starts
+from inside a run (`ctx.launch`) starts in the run's workspace; with auth on and
+no workspace in scope it is refused. With auth on, a pipeline step whose record
+names no workspace ends failed (verdict `workspace_unresolved`) and fails its
+pipeline once; a leg in that state marks its run failed.
+`resolve_connection(name, account_id=…)` looks a name up in one account only:
+when `account_id` is omitted it is the current run's (`run_account()`). A tenant
+account's run finds only its own rows; the deployment (`default`) finds only the
+deployment's. No row is shared across accounts by name. The same holds for
+`target_cap`, the model licence gate's token check, preflight's connection
+warnings and the templates contract's connected-MCP list. A profile-bound backend
+connection (`backends.<field>_connection`) is the deployment's and always resolves
+in `default`. A flow leg's engine target (`dataflow_target` / `ml_target`) is
+looked up in the run's account, so a tenant's flow legs run on targets in its own
+account. A target bound in the deployment's profile is a deployment connection: a
+tenant's flow leg that names it does not resolve it, and the leg fails.
+
+An operator's declared secrets (`secrets:` in its binding) are resolved in the
+run's account too (ADR-0143). For the deployment they are bridged into the process
+environment as before (`inject_declared_secrets`). A tenant account's values are
+never written to the process environment: `declared_secret_values` reads them
+from the account's own connections, and they back that invocation's
+`ctx.secrets` alone; the deployment's bound SecretStore is not consulted. A
+declared key matches a tenant connection's secret when the logical key is the
+declared name, or when the provider catalog entry the connection is named after
+maps that key to it (`kaggle`: `KEY` → `KAGGLE_KEY`). An operator that reads a
+credential from `os.environ` instead of `ctx.secrets` receives nothing for a
+tenant run.
+
+Connection names are still unique across the whole deployment (the `connections`
+table's `name` column and the id derived from it), so two accounts cannot use the
+same name.
+
+An MCP connection becomes a client spec through `mcp_server_spec`, which fails
+closed: a `stdio` server (a command run on the cairn server) is built only when
+the caller passes `allow_stdio=True`, and an http/sse `url` must pass the probe's
+address guard (no loopback, link-local, cloud metadata or private address) unless
+the caller passes `allow_private_network=True`. Only the deployment's own callers
+pass either. Without `allow_private_network` the spec also carries an
+`httpx_client_factory` whose client does not follow redirects, so the checked
+address is the only one the client connects to; with it the spec keeps the MCP
+SDK's default client. A tenant spec therefore holds a callable and is not
+JSON-serialisable.
+
+A knowledge corpus source (`resolve_corpus_source`, `index_workspace_corpus`) is
+cloned only from a public `https://` git URL unless the caller passes
+`allow_local=True`. The clone is limited to https, does not follow redirects, and
+runs without the server's system or global git config (credential helpers, extra
+headers, URL rewrites), credential helper, askpass or a terminal prompt. Its
+environment is an allowlist: `PATH`, `LANG` / `LC_*`, `TMPDIR`, the proxy
+variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, either case) and the CA
+variables (`SSL_CERT_FILE`, `SSL_CERT_DIR`, `GIT_SSL_CAINFO`,
+`REQUESTS_CA_BUNDLE`); `HOME` and `XDG_CONFIG_HOME` point at an empty temporary
+directory. So a deployment that sets `http.proxy` or `http.sslCAInfo` only in its
+gitconfig must set the matching environment variable for tenant clones to use it.
+
+Known limits of the address guard, shared by the probe, MCP specs and corpus
+clones: it resolves the host once, before connecting, so it does not defend
+against a DNS answer that changes between the check and the connection (DNS
+rebinding); and a host that does not resolve at check time passes it. Setting
+`CAIRN_PROBE_ALLOW_PRIVATE` lifts the private-address rule for all three, so on a
+multi-tenant deployment it also lets tenant MCP URLs and corpus clones reach
+private addresses (loopback, link-local and cloud metadata stay refused).
+
+Library callers: `mcp_server_spec`, `resolve_corpus_source` and
+`index_workspace_corpus` now default to the tenant-safe behaviour. Code that
+calls them for the deployment itself and relied on stdio servers, internal MCP
+URLs or local / ssh corpus sources must pass `allow_stdio=True`,
+`allow_private_network=True` or `allow_local=True`.
+
 ## OAuth connections (ADR-0037)
 
 Providers that use OAuth 2.0 (GitHub, Slack, Jira, Notion, Google) are brokered.

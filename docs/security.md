@@ -9,9 +9,21 @@ live in `deploy/light/README.md`; connections in `docs/connections.md`.
 | Control plane (server, dispatcher, bridge, stores) | its own database and profile | anything a box returns beyond scalars + descriptors (ADR-0081 D3) | `DataflowResult` shape (`src/cairn/core/dataflow/contract.py:262`); registration control-side |
 | Execution box / engine subprocess | the spec it was handed | ambient credentials (engines never read them; `engine.py:76` docstring) | scoped secret injection (ADR-0089 D3); `CAIRN_DATAFLOW_SPEC` env |
 | Packs and operator packs | — installed packs are **trusted code** (entry points execute on load) | — | install is the trust decision; manifest ↔ class drift tests; `cairn.lock` pins the shipped closure |
-| Console / API clients | a bearer token (`CAIRN_JWT_SECRET`) and workspace membership (`assert_can_write_workspace`) | the `X-Cairn-Workspace` header alone (`routers/start.py:150-157`) | `require_auth`; workspace middleware |
-| Webhook senders | a valid signature over the body, keyed with a non-empty secret, on the receiver's own method + path under `/triggers/` | an empty secret (refused, never public); any other method or route at that path; the `X-Cairn-Workspace` header (the run lands in the workspace that declared the receiver; with the durable trigger inbox on, a queued delivery runs in the default workspace for now) | `_mount_trigger_routes` (`triggers/server.py`); `verify_signature` (`triggers/router.py`); `ingress_path_problem` (`engine/triggers_spec.py`) |
+| Console / API clients | a bearer token (`CAIRN_JWT_SECRET`) and workspace membership (`assert_can_write_workspace`) | the `X-Cairn-Workspace` header alone (`routers/start.py:150-157`); a workspace id no store holds, with auth on (404, like another account's); the implicit workspace (`CAIRN_WORKSPACE`, else `default`) when the caller's account does not own it or it does not exist (the request acts in the account's home workspace, or 404 without one) | `require_auth`; workspace middleware (`_WorkspaceMiddleware`, `triggers/server.py`); `assert_workspace_allowed` (`workspace.py`) |
+| Webhook senders | a valid signature over the body, keyed with a non-empty secret, on the receiver's own method + path under `/triggers/` | an empty secret (refused, never public); any other method or route at that path; the `X-Cairn-Workspace` header (the run lands in the workspace that declared the receiver, queued or inline); a webhook path, trigger id or name another workspace already holds (not armed; a path that still reaches the router from two workspaces mounts no receiver). Exception: a workspace's webhook still replaces a pack/overlay receiver at the same path | `_mount_trigger_routes` (`triggers/server.py`); `verify_signature` and `TriggerRouter.from_installed` (`triggers/router.py`); `_converge` (`engine/triggers_grammar.py`) and the trigger store's `create` (`storage/trigger_store.py`); `ingress_path_problem` (`engine/triggers_spec.py`) |
 | Human approvers | the identity recorded on the gate (`StepState.approver`); the gate's `approvers:` (a username or a role; owner/admin always; an unknown name → owner/admin only, #2393) | a body `approver` field (#2310); a name the gate does not list (403, audited `operation.approval` `deny`); `/advance` on a gate (409, #2388) | `POST /pipelines/{id}/steps/{step}/approve` (auth-required, `_assert_may_decide`; declared gate steps only) |
+
+**Console sign-ins (ADR-0142).** A console sign-in is a short access token plus an httpOnly,
+`SameSite=Strict` refresh cookie (`Path=/auth`); the server stores only the cookie token's
+SHA-256 (`src/cairn/core/refresh_tokens.py`). `POST /auth/refresh` needs `X-Cairn-Refresh: 1`
+and a same-origin `Origin`/`Referer`, rotates the token, and revokes the whole family when a
+rotated token comes back ten seconds or more after its rotation; within ten seconds it renews
+instead, revoking the child that rotation issued, so a replay inside that window is not
+detected as theft at first (ADR-0144); the displaced child presented ten seconds or more later
+revokes the family and logs a WARNING (ADR-0145); `POST /auth/logout` (same header and origin check), a password
+change and disabling a user revoke the user's families
+(`triggers/auth.py`, `account.py`). An issued access token stays valid until it expires, and
+rotating `CAIRN_JWT_SECRET` does not end refresh families.
 
 **Known gap:** with `CAIRN_JWT_SECRET` unset the control plane starts OPEN and says so at
 startup (`AUTH DISABLED …`, `src/cairn/core/triggers/server.py`); any authenticated user can

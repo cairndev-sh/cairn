@@ -321,7 +321,8 @@ class InstallRequest(BaseModel):
 
 class WorkspaceCreate(BaseModel):
     """Payload for POST /workspaces (#228). ``id`` is optional — derived as a
-    slug from ``name`` when omitted."""
+    slug from ``name`` when omitted. The id assigned is at most
+    ``MAX_WORKSPACE_ID_LEN`` (40) characters: a longer slug is cut."""
     name: str = Field(..., min_length=1)
     id: Optional[str] = None
 
@@ -405,6 +406,29 @@ class ResumeRequest(BaseModel):
     note: str | None = Field(None, description="free-text note recorded into the audit chain")
 
 
+#: #220 — where an authenticated request acts when it names no workspace and its
+#: account has no active one: an id no workspace can have (``~`` never survives
+#: :func:`_slug_workspace_id`) and so no store row. Only the account-level routes
+#: (:func:`_account_level_route`) are served there; every other route answers 404,
+#: so no record is ever written under it.
+_NO_WORKSPACE = "~no-workspace"
+
+
+def _account_level_route(method: str, path: str) -> bool:
+    """The routes an account with no active workspace may still call (#220): who am I
+    (``/auth/me``; the other ``/auth/*`` routes are public and never get here), listing
+    and creating its workspaces (``/workspaces``),
+    archiving or restoring one (``/workspaces/{id}``, which checks ownership itself,
+    #157), and the operator report list. None of them writes a workspace-scoped
+    record; everything else needs a workspace and answers 404 without one."""
+    if path in ("/auth/me", "/workspaces"):
+        return True
+    if path == "/operators/reports":
+        return method == "GET"
+    rest = path[len("/workspaces/"):] if path.startswith("/workspaces/") else None
+    return bool(rest) and "/" not in rest.strip("/") and method in ("PATCH", "DELETE", "GET")
+
+
 def _slug_workspace_id(raw: str) -> str:
     """Slug-safe workspace id: lowercase, ``[a-z0-9-]``, collapsed dashes."""
     s = "".join(c if (c.isalnum() or c == "-") else "-" for c in (raw or "").strip().lower())
@@ -472,15 +496,15 @@ class _WorkspaceMiddleware:
         # a bad token, or auth switched off all resolve to None, which
         # `assert_workspace_allowed` treats as "no tenant boundary to enforce".
         if ws:
+            # #205 — the identity the bearer guard (outermost) authenticated:
+            # it may have come from `?access_token=` on the run stream, and
+            # the tenant check must judge that same credential. #209 — the
+            # guard's decoded claims, not its token, so no second decode can
+            # fail in between and skip the check. The header parse remains
+            # for requests the guard did not authenticate.
+            claims = authenticated_claims(scope)
             try:
                 from cairn.core.triggers.console_support import account_from_claims, caller_account
-                # #205 — the identity the bearer guard (outermost) authenticated:
-                # it may have come from `?access_token=` on the run stream, and
-                # the tenant check must judge that same credential. #209 — the
-                # guard's decoded claims, not its token, so no second decode can
-                # fail in between and skip the check. The header parse remains
-                # for requests the guard did not authenticate.
-                claims = authenticated_claims(scope)
                 if claims is not None:
                     acct = await account_from_claims(claims)
                 else:
@@ -488,7 +512,15 @@ class _WorkspaceMiddleware:
                     raw = hdrs.get(b"authorization", b"").decode("latin-1")
                     bearer = raw.split(" ", 1)[1].strip() if raw.lower().startswith("bearer ") else None
                     acct = await caller_account(bearer) if bearer else None
-            except Exception:  # noqa: BLE001 — unauthenticated is not unauthorized
+            except Exception as e:  # noqa: BLE001 — unauthenticated is not unauthorized
+                if claims is not None:
+                    # The guard authenticated this caller, so failing to resolve
+                    # their account fails CLOSED (503), as the implicit branch
+                    # does, never "act in the named workspace unchecked".
+                    logger.error("workspace middleware: could not resolve the caller's account (%s)",
+                                 type(e).__name__)
+                    await self._unavailable(send)
+                    return
                 acct = None
             if acct:
                 try:
@@ -498,12 +530,64 @@ class _WorkspaceMiddleware:
                     # (ADR-0051 §4, same choice as `_run_in_ws_or_404`).
                     await self._not_found(send)
                     return
+        elif auth_enabled() and (claims := authenticated_claims(scope)) is not None:
+            # #220 — a request that names no workspace still acts in one: the
+            # implicit `CAIRN_WORKSPACE`, else `default`. Nothing checked that the
+            # caller's account owns it, so a member of ANY account read `default`
+            # (the default account's) by sending no header. The implicit workspace
+            # is authorized like a named one; a caller whose account does not own
+            # it acts in their account's home workspace (the one sign-in lands in);
+            # an account with no active workspace acts in none (``_NO_WORKSPACE``).
+            # Only the guard's claims count, so public paths are untouched.
+            #
+            # Fails CLOSED: the guard authenticated this caller, so a failure to
+            # decide where they act is a 503, never "act in the implicit workspace
+            # unchecked".
+            try:
+                ws = await self._implicit_workspace_for(claims)
+            except Exception as e:  # noqa: BLE001 — the class is logged, never the token
+                logger.error("workspace middleware: could not resolve the caller's workspace (%s)",
+                             type(e).__name__)
+                await self._unavailable(send)
+                return
+            if ws == _NO_WORKSPACE and not _account_level_route(scope.get("method", ""), scope.get("path", "")):
+                await self._not_found(send)
+                return
 
         token = set_current_workspace(ws)
         try:
             await self.app(scope, receive, send)
         finally:
             reset_current_workspace(token)
+
+    @staticmethod
+    async def _implicit_workspace_for(claims: dict[str, Any]) -> str:
+        """Where an authenticated request that names no workspace acts (#220).
+
+        The implicit workspace (``CAIRN_WORKSPACE``, else ``default``) when the
+        caller's account owns it; otherwise the account's home workspace;
+        ``_NO_WORKSPACE`` when the account has no active one, where only the
+        account-level routes answer (the caller 404s everything else). With auth on,
+        ``assert_workspace_allowed`` refuses a workspace with no row (#156), so
+        a ``CAIRN_WORKSPACE`` that names none (a misconfiguration, warned about
+        at startup) sends every caller to their home workspace."""
+        from cairn.core.triggers.console_support import account_from_claims, home_workspace  # noqa: PLC0415
+
+        acct = await account_from_claims(claims)
+        implicit = current_workspace()
+        try:
+            await assert_workspace_allowed(implicit, acct)
+        except WorkspaceForbidden:
+            return await home_workspace(acct) or _NO_WORKSPACE
+        return implicit
+
+    @staticmethod
+    async def _unavailable(send: Any) -> None:
+        body = b'{"detail":"could not resolve the workspace for this request; try again"}'
+        await send({"type": "http.response.start", "status": 503,
+                    "headers": [(b"content-type", b"application/json"),
+                                (b"content-length", str(len(body)).encode())]})
+        await send({"type": "http.response.body", "body": body})
 
     @staticmethod
     async def _not_found(send: Any) -> None:
@@ -702,6 +786,21 @@ def build_app(
             _hash_problem = password_hash_problem()
             if _hash_problem:
                 raise RuntimeError(_hash_problem)
+            # #220/#156 — with auth on, `CAIRN_WORKSPACE` must name a workspace that
+            # exists: one that does not is refused, so every header-less request
+            # acts in its caller's home workspace instead. Said once, at boot.
+            _implicit_ws = getenv("CAIRN_WORKSPACE", "").strip()
+            if _implicit_ws:
+                try:
+                    from cairn.core.workspace import get_workspace_store  # noqa: PLC0415
+                    if await get_workspace_store().get(_implicit_ws) is None:
+                        logger.warning(
+                            "CAIRN_WORKSPACE=%r names no workspace: with auth on it is refused, "
+                            "and requests that name no workspace act in each caller's home "
+                            "workspace instead. Create it (POST /workspaces) or unset "
+                            "CAIRN_WORKSPACE.", _implicit_ws)
+                except Exception as e:  # noqa: BLE001 — a store hiccup must not stop the boot
+                    logger.warning("could not check CAIRN_WORKSPACE at startup (%s)", type(e).__name__)
         from contextlib import AsyncExitStack
         _stack = AsyncExitStack()
         for _sub_lifespan in _router_lifespans:
@@ -842,10 +941,18 @@ def build_app(
         # CAIRN_TRIGGER_DURABLE made the router build an inbox (else inline as before).
         if router is not None and getattr(router, "inbox", None) is not None:
             from cairn.core.storage.trigger_inbox import run_drain_loop
-            from cairn.core.triggers.router import start_template_run
 
             async def _dispatch_record(rec):
-                await start_template_run(rec.template, rec.input)
+                # #212 — the run starts in the workspace that declared its receiver,
+                # as the inline delivery does (``None`` → the process default).
+                # #217 — through the launch door the inline delivery takes (the
+                # router's starter), never a bare compile-and-run: plan-time policy
+                # gates, admission and the run records apply to a queued delivery too.
+                ws_token = set_current_workspace(getattr(rec, "workspace", None))
+                try:
+                    await router.start_queued(rec.template, rec.input)
+                finally:
+                    reset_current_workspace(ws_token)
 
             _inbox_drain["task"] = asyncio.create_task(run_drain_loop(router.inbox, _dispatch_record))
             logging.getLogger(__name__).info("[inbox] durable trigger drain started")

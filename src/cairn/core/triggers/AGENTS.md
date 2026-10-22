@@ -38,7 +38,9 @@ than keyless — test with `CAIRN_JWT_SECRET` set when touching auth or admin. T
 datasets and judges routers left for `packages/cairn-platform` (#2421); their tests went with them.
 
 **Common mistakes.** Handlers as 300-line closures inside `build_*_router` (existing debt;
-put logic in a module); reading stores directly for a mutation that has a door; forgetting
-`assert_can_write_workspace`; a governance-config write without `require_admin`.
+put logic in a module); reading stores directly for a mutation that has a door; a
+workspace write or execute route without `Depends(console_support.writable_workspace)` (#221;
+`tests/core/test_write_route_workspace_guard.py` fails it unless `EXEMPT` says why); a
+governance-config write without `require_admin`.
 
 **Read.** `docs/architecture/01-system-map.md`, ADR-0085 D1/D4, ADR-0094, ADR-0101 D1.

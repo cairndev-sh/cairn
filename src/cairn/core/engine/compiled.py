@@ -111,6 +111,7 @@ class CompiledTemplate:
     flow_type: Literal["prompt", "agent_loop", "state_machine"]
     runnable: RunFn
     content_hash: str = ""
+    unsupported_mock_operators: tuple[str, ...] = ()
 
     async def run(self, input_data: dict[str, Any]) -> dict[str, Any]:
         """Invoke the compiled template with the given input."""

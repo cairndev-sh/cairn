@@ -26,12 +26,17 @@ from cairn.core.backend_connections import apply_backend_connection
 from cairn.core.provider_settings import get_settings
 from cairn.core.workspace import workspace_collection
 from cairn.services.rag.embeddings import get_embedder
-from cairn.services.rag.stores import build_vector_store
+from cairn.services.rag.stores import StoreLock, build_vector_store, on_collection
 
 logger = logging.getLogger(__name__)
 
 DEDUP_THRESHOLD = 0.85
 _RECORD_TYPE = "episodic_memory"
+
+#: Guards the process-wide memory store (:func:`_get_store`), which every
+#: workspace's memory collection shares: each store call selects its collection
+#: under this lock (:func:`on_collection`); embedding and merging run outside it.
+_STORE_LOCK = StoreLock()
 
 
 @lru_cache(maxsize=1)
@@ -64,7 +69,7 @@ def _generic_merge(existing: dict, new: dict) -> dict:
     return merged
 
 
-async def _ensure_collection() -> None:
+async def _ensure_collection() -> str:
     # #336: resolve profile-bound store connections (memory's own, and the RAG
     # store it inherits from by default) into the env BEFORE the cached store
     # is built; unbound → env fallback unchanged.
@@ -74,11 +79,13 @@ async def _ensure_collection() -> None:
     store = _get_store()
     embedder = get_embedder()
     # Namespace episodic memory by workspace (#237) so one tenant never recalls
-    # another's memories. save/recall/list call this first, so the shared store's
-    # active collection (`self._coll`) is the workspace's. Default unchanged.
-    # Concurrency caveat (#224 H): a process-cached store holds one active
-    # collection — concurrent cross-workspace recalls need per-workspace stores.
-    await store.initialize(workspace_collection(s.memory_collection_name), embedder.dim)
+    # another's memories. Default unchanged. The store is process-wide:
+    # save/recall/list select the returned collection again for each store
+    # call, under `_STORE_LOCK`.
+    coll = workspace_collection(s.memory_collection_name)
+    async with on_collection(store, coll, embedder.dim, _STORE_LOCK):
+        pass
+    return coll
 
 
 async def save_episodic(
@@ -96,14 +103,15 @@ async def save_episodic(
 
     Returns ``{action: "created"|"merged", id: str, detail: str}``.
     """
-    await _ensure_collection()
+    coll = await _ensure_collection()
     store = _get_store()
     embedder = get_embedder()
 
     dense = await embedder.embed_one(embed_text)
     sparse = await embedder.embed_sparse_one(embed_text)
 
-    existing = await store.search(dense, sparse, top_k=3)
+    async with on_collection(store, coll, embedder.dim, _STORE_LOCK):
+        existing = await store.search(dense, sparse, top_k=3)
 
     now = utc_now_iso()
     full_payload = {
@@ -126,12 +134,14 @@ async def save_episodic(
         mid = dedup_id or _stable_id(embed_text)
         m_dense = await embedder.embed_one(embed_text)
         m_sparse = await embedder.embed_sparse_one(embed_text)
-        await store.upsert([mid], [m_dense], [m_sparse] if m_sparse else None, [merged])
+        async with on_collection(store, coll, embedder.dim, _STORE_LOCK):
+            await store.upsert([mid], [m_dense], [m_sparse] if m_sparse else None, [merged])
         logger.info("Merged episodic memory %s (score=%.3f)", mid, hit.get("score", 0))
         return {"action": "merged", "id": mid, "detail": f"Merged (similarity={hit['score']:.2f})"}
 
     mid = dedup_id or _stable_id(embed_text)
-    await store.upsert([mid], [dense], [sparse] if sparse else None, [full_payload])
+    async with on_collection(store, coll, embedder.dim, _STORE_LOCK):
+        await store.upsert([mid], [dense], [sparse] if sparse else None, [full_payload])
     logger.info("Created episodic memory %s", mid)
     return {"action": "created", "id": mid, "detail": "New memory stored"}
 
@@ -143,22 +153,24 @@ async def recall_episodic(
     filters: dict | None = None,
 ) -> list[dict[str, Any]]:
     """Semantic search over episodic memory."""
-    await _ensure_collection()
+    coll = await _ensure_collection()
     store = _get_store()
     embedder = get_embedder()
 
     dense = await embedder.embed_one(query)
     sparse = await embedder.embed_sparse_one(query)
 
-    results = await store.search(dense, sparse, top_k=top_k * 2, filters=filters)
+    async with on_collection(store, coll, embedder.dim, _STORE_LOCK):
+        results = await store.search(dense, sparse, top_k=top_k * 2, filters=filters)
     return [hit for hit in results if hit.get("type") == _RECORD_TYPE][:top_k]
 
 
 async def list_episodic(limit: int = 20) -> list[dict[str, Any]]:
     """List stored episodic memories (via the backend's ``list_sources``)."""
-    await _ensure_collection()
+    coll = await _ensure_collection()
     store = _get_store()
-    docs = await store.list_sources(limit=limit * 5)
+    async with on_collection(store, coll, get_embedder().dim, _STORE_LOCK):
+        docs = await store.list_sources(limit=limit * 5)
     memories = [d for d in docs if d.get("source_type") == _RECORD_TYPE]
     return memories[:limit]
 

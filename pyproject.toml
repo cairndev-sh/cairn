@@ -2,7 +2,7 @@
 # The DISTRIBUTION is `cairndev` (ADR-0121 D3, #2429); the import name `cairn` and the
 # `cairn` command do not change.
 name = "cairndev"
-version = "0.1.3"
+version = "0.1.4"
 description = "A governed control plane for AI and ML work: pipelines that fine-tune, evaluate, compress and serve models, with approval, policy, budget and lineage on every step"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -29,6 +29,10 @@ dependencies = [
     # records; imports NOTHING from cairn.core (the golden tests in tests/core
     # hold compiler and loader together).
     "fastapi[standard]>=0.115.0",
+    # #207 — 1.0.1 is the first Starlette that ignores a malformed Host header when
+    # building request.url. The auth guard keys on scope['path'] either way; the
+    # floor keeps every other request.url reader honest too.
+    "starlette>=1.0.1",
     "langgraph>=0.4.0",
     "langchain-core>=0.3.0",
     "langchain-openai>=0.3.0",
@@ -65,7 +69,7 @@ dependencies = [
     # Token *verification* is the hot path; password *hashing* for POST /token is pwdlib, below.
     "pyjwt>=2.8.0",
     # CLI dispatcher — backs the `cairn` script entry point. Light enough
-    # to be a base dep so `pip install cairn` gives users the CLI.
+    # to be a base dep so `pip install cairndev` gives users the CLI.
     "typer>=0.12.0",
     # ADR-0137 D2 — the builtin operator packs (packages/cairn-operator-<name>) and the core
     # contracts (packages/cairn-contracts-<name>) ship INSIDE this wheel: their import roots,

@@ -95,14 +95,16 @@ in this process, without a pipeline:
 
 ```bash
 cairn run hello-cairn/assistant --input input.json --dry-run       # the plan; nothing runs
-cairn run hello-cairn/assistant --input input.json --mock          # operators take their mock path
+cairn run hello-cairn/assistant --input input.json --mock          # stub model calls and mock-capable operators
 cairn run hello-cairn/assistant --input input.json --interactive   # approve or reject gates at the prompt
 ```
 
 These runs write **no pipeline record and no run row**. `--mock` and
 `--interactive` write a local trace instead, which `cairn replay <run-id>`
-prints. `--mock` replaces operators only: a prompt node's model call is still
-made, and needs a model endpoint.
+prints. `--mock` returns a deterministic response for every LLM call and uses
+`.mock()` for operators that declare `supports_mock`. It refuses before running
+any node when a reachable operator does not declare mock support, and needs no
+provider key or endpoint.
 
 The dev loop runs agentic flows only. Try a data or ML flow through a wrapper
 pipeline in the sandbox, as [Write a flow](/guides/write-a-flow/) shows.

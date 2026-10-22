@@ -11,7 +11,7 @@ dataset-gate:
   script:
     # `[pii]` pulls in Presidio for real PII detection; drop it for the
     # zero-dependency regex fallback.
-    - pip install "cairn[pii]"
+    - pip install "cairndev[pii]"
     # Run the read-only gate; keep its exit code, always keep the report.
     - set +e
     - cairn gate dataset-readiness/check --set path=data/train.jsonl --json > gate.json

@@ -9,30 +9,54 @@ implemented unless a PR is named.
 
 ### Identity — two layers
 - **Artifact** (bytes): a content-addressed `ArtifactRecord` whose `id` is the sha256 of the
-  bytes (`src/cairn/core/storage/artifacts.py:55-70`) — see [artifacts.md](artifacts.md).
+  bytes (`src/cairn/core/storage/artifacts.py:53-71`) — see [artifacts.md](artifacts.md).
 - **Dataset version** (name): an append-only row `name@N` over one artifact
-  (`register_dataset_version`, `artifacts.py:94-101`; columns `artifacts.py:395-398`:
+  (`register_dataset_version`, `artifacts.py:93-100`; columns `artifacts.py:404-407`:
   `name, version, artifact_id, created_at, created_by, role, schema, column_mapping,
   parent_version, split_policy, workspace_id, verdict, verdict_reasons, verdict_report,
   verdict_at, dated_at, origin, origin_detail`). Re-registering the artifact already at a
-  name's head is a no-op, never a new version (`artifacts.py:92-94`). A version never moves.
+  name's head in the same workspace is a no-op, never a new version (`artifacts.py:640-656`). A version never moves.
 
 ### Roles and declared metadata
 `role ∈ {training, validation, test, golden}`, a declared `schema` and `column_mapping`,
 inherited from the dataset name's defaults unless the producer declares otherwise
-(`set_dataset_meta` / `set_dataset_version_meta`, `artifacts.py:120-135`; ADR-0102 D1).
-`origin` is a fact about the bytes and cannot be re-declared (`artifacts.py:121-126`);
+(`set_dataset_meta` / `set_dataset_version_meta`, `artifacts.py:122-154`; ADR-0102 D1).
+`origin` is a fact about the bytes and cannot be re-declared (`artifacts.py:126-129`);
 `dated_at` says when the material is from.
 
 ### References and resolution
 A leg input may be a path, an `s3://` URI, an HF id or a **registered ref**
 `dataset:<name>[@N]`. Refs resolve on the control plane before the engine sees them
-(`src/cairn/core/dispatch/leg_executor.py:185-201`): `resolve_dataset_refs_in_config`
-rewrites each ref to `<uri>#sha256=<content_hash>` (`artifacts.py:1238-1272`); an unknown
+(flow legs `src/cairn/core/dispatch/leg_executor.py:229-246`, task legs
+`src/cairn/core/dispatch/pipeline_bridge.py:2029-2031`): `resolve_dataset_refs_in_config`
+rewrites each ref to `<uri>#sha256=<content_hash>` (`artifacts.py:1287-1325`); an unknown
 ref fails the leg at launch (`KeyError`). The consuming kernel strips the fragment and
 **verifies the bytes** it read against it, refusing on mismatch (`ingest.normalize`,
 `cairn/operators/official/dataset_checks/src/operator_dataset_checks/dataflow_stages.py:70-85`);
 `file://` and `file:/` forms are local paths (`_io.py:54-68`, fixed by #2171).
+
+### Workspace scope
+A ref resolves within one workspace: the run's (scoped from its record), or the one passed
+as `workspace_id`. The name, a pinned `@N` and `@latest` see only that workspace's
+versions; another workspace's version reads as not found, the same as an unknown ref.
+With auth on, resolving outside any workspace scope raises `WorkspaceScopeRequired`.
+The registry's by-name reads (`get_dataset_version`, `list_dataset_versions`,
+`get_dataset_version_meta`, `list_datasets`) and writes (`set_dataset_version_meta`,
+`set_dataset_version_verdict`) take an optional `workspace_id` and otherwise answer in the
+current workspace; a write never changes another workspace's version. Any workspace may
+register under any name. The identical-bytes no-op compares with, and updates only, the
+registering workspace's own head. A leg registers its exports, and stamps their intake
+verdicts, in the run's workspace.
+
+What is shared per name across workspaces:
+- **Version numbers.** The key is `(name, version)`: one sequence per name, so a
+  workspace's versions of a name need not be consecutive. Registrations of one name are
+  serialised (a per-name advisory lock on Postgres; on SQLite a number taken by another
+  process is re-read and retried a bounded number of times).
+- **Name-level metadata.** `set_dataset_meta` keeps one row per name: description, labels
+  and the declared defaults (role, schema, column mapping). `list_datasets` returns the
+  description and labels of that row. A version registered without an explicit role,
+  schema or column mapping inherits the name's defaults, whichever workspace registers it.
 
 ### Producer → consumer rules
 - A readiness/intake leg's export is described by the engine as an `ArtifactDescriptor`

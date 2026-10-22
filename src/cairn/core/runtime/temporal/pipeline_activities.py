@@ -112,11 +112,48 @@ async def pipeline_submit_step(
 
     if leg_kind_of(ref) == "flow":
         return await _run_flow_leg(ref, resolved, pipeline_id, step_id, environment, step or {})
-    run = await _dispatcher().run_template(
-        ref, resolved, environment=environment or None,
-        bundle_pipeline_id=pipeline_id, step_id=step_id,
-    )
+    from cairn.core.storage.pipeline_store import default_pipeline_store  # noqa: PLC0415 — cycle
+    from cairn.core.workspace import workspace_scope  # noqa: PLC0415 — engine code stays out of workflow imports
+
+    # Bridge parity (`_submit_step` runs in its record's workspace): the worker has no
+    # request context, so the pipeline record names the leg's workspace — the one the
+    # leg's run is stamped with and its connections and secrets resolve in.
+    rec = await _leg_pipeline_record(default_pipeline_store(), pipeline_id, step_id)
+    with workspace_scope(getattr(rec, "workspace_id", "") or ""):
+        run = await _dispatcher().run_template(
+            ref, resolved, environment=environment or None,
+            bundle_pipeline_id=pipeline_id, step_id=step_id,
+        )
     return run.id
+
+
+async def _leg_pipeline_record(pstore: Any, pipeline_id: str, step_id: str) -> Any:
+    """The pipeline record a leg runs under (governance, workspace). #2223 — an
+    UNREADABLE store is not an ABSENT record: a read failure retries (Temporal's
+    backoff) with nothing created or submitted, and a missing or undecodable record
+    refuses. Neither ever runs the leg ungoverned or outside its workspace."""
+    from pydantic import ValidationError  # noqa: PLC0415
+    from temporalio.exceptions import ApplicationError  # noqa: PLC0415 — engine code stays out of workflow imports
+
+    try:
+        rec = await pstore.get(pipeline_id)
+    except ValidationError as e:   # read fine, cannot be decoded: retrying will not fix it
+        raise ApplicationError(f"pipeline {pipeline_id}: record cannot be decoded; refusing to run leg "
+                               f"{step_id} on corrupt state", type=RECORD_CORRUPT, non_retryable=True) from e
+    except Exception as e:  # noqa: BLE001 — any read failure is "unknown", never "absent"
+        raise ApplicationError(f"pipeline {pipeline_id}: record unreadable ({type(e).__name__}); "
+                               f"leg {step_id} not submitted, retrying", type=STORE_UNAVAILABLE) from e
+    if rec is None:
+        raise ApplicationError(f"pipeline {pipeline_id}: no pipeline record; refusing to run leg "
+                               f"{step_id} without its governance", type=RECORD_MISSING, non_retryable=True)
+    from cairn.core.auth_tokens import auth_enabled  # noqa: PLC0415 — engine code stays out of workflow imports
+
+    if not str(getattr(rec, "workspace_id", "") or "").strip() and auth_enabled():
+        # bridge parity: with auth on a record that names no workspace runs nothing —
+        # refused before any run record exists, and retrying cannot fix it
+        raise ApplicationError(f"pipeline {pipeline_id}: record names no workspace; refusing to run "
+                               f"leg {step_id}", type=RECORD_CORRUPT, non_retryable=True)
+    return rec
 
 
 async def _gate_flow_leg(
@@ -233,20 +270,7 @@ async def _run_flow_leg(
     prior_run_id = ""
     prior_handle: dict | None = None
     approver: str | None = None
-    rec = None
-    from pydantic import ValidationError  # noqa: PLC0415
-
-    try:
-        rec = await pstore.get(pipeline_id)
-    except ValidationError as e:   # read fine, cannot be decoded: retrying will not fix it
-        raise ApplicationError(f"pipeline {pipeline_id}: record cannot be decoded; refusing to run leg "
-                               f"{step_id} on corrupt state", type=RECORD_CORRUPT, non_retryable=True) from e
-    except Exception as e:  # noqa: BLE001 — any read failure is "unknown", never "absent"
-        raise ApplicationError(f"pipeline {pipeline_id}: record unreadable ({type(e).__name__}); "
-                               f"leg {step_id} not submitted, retrying", type=STORE_UNAVAILABLE) from e
-    if rec is None:
-        raise ApplicationError(f"pipeline {pipeline_id}: no pipeline record; refusing to run leg "
-                               f"{step_id} without its governance", type=RECORD_MISSING, non_retryable=True)
+    rec = await _leg_pipeline_record(pstore, pipeline_id, step_id)
     gov = dict(getattr(rec, "governance", None) or {})
     workspace_id = getattr(rec, "workspace_id", "") or ""
     # #1441 S4 — parity with the bridge: the reservation is checked against what
@@ -350,18 +374,23 @@ async def _run_flow_leg(
         logger.info("flow leg %s/%s: adopting engine job %s (attempt %s) — not resubmitting",
                     pipeline_id, step_id, prior_handle.get("job_id"), activity.info().attempt)
 
-    task = asyncio.ensure_future(execute_leg(
-        ref, inputs=resolved, engine=engine,
-        run_id=run.id,
-        series_id=series_id,
-        estimated_usd=float(gov.get("estimated_usd", 0.0) or 0.0),
-        spent_usd=spent_usd,
-        budget_usd=budget_usd,
-        poll_budget_s=float(step.get("timeout_s") or _FLOW_LEG_DEFAULT_BUDGET_S),
-        # ADR-0118 D8 — stage entries reach the leg exactly as through the bridge.
-        stage_contracts=recorded_stage_contracts(getattr(rec, "plan", None), step_id),
-        **hooks.execute_kwargs(retry=retry_policy, adopt=prior_handle),
-    ))
+    from cairn.core.workspace import workspace_scope  # noqa: PLC0415 — engine code stays out of workflow imports
+
+    # The worker has no request context: the record's workspace is the leg's, and
+    # with it the account its connections and secrets resolve in (bridge parity).
+    with workspace_scope(workspace_id):  # the task copies this context at creation
+        task = asyncio.ensure_future(execute_leg(
+            ref, inputs=resolved, engine=engine,
+            run_id=run.id,
+            series_id=series_id,
+            estimated_usd=float(gov.get("estimated_usd", 0.0) or 0.0),
+            spent_usd=spent_usd,
+            budget_usd=budget_usd,
+            poll_budget_s=float(step.get("timeout_s") or _FLOW_LEG_DEFAULT_BUDGET_S),
+            # ADR-0118 D8 — stage entries reach the leg exactly as through the bridge.
+            stage_contracts=recorded_stage_contracts(getattr(rec, "plan", None), step_id),
+            **hooks.execute_kwargs(retry=retry_policy, adopt=prior_handle),
+        ))
     while not task.done():
         activity.heartbeat()
         await asyncio.wait({task}, timeout=5.0)

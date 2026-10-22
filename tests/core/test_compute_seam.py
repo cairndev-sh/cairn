@@ -55,7 +55,7 @@ def _stub_op(captured: dict):
 
 
 def _patch_resolve(monkeypatch, seen: dict, *, returns="runpod"):
-    async def fake_resolve(name, *, store=None):
+    async def fake_resolve(name, *, store=None, account_id=None):
         seen["name"] = name
         if returns is None:
             return None

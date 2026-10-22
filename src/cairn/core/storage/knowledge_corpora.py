@@ -40,6 +40,26 @@ def _new_id() -> str:
     return f"wkb-{uuid.uuid4().hex[:12]}"
 
 
+#: Longest corpus name a store accepts on ``add``. The name is part of the corpus's
+#: vector-collection name (``rag_<name>__<embedder>``, after the workspace prefix),
+#: so an unbounded name makes an unbounded table name.
+MAX_CORPUS_NAME_LEN = 48
+
+
+def corpus_name_problem(name: str) -> Optional[str]:
+    """Why ``name`` cannot name a new corpus, or ``None``. Callers that take a name
+    from a user check this first (a store's ``add`` refuses the same names)."""
+    if len(name or "") > MAX_CORPUS_NAME_LEN:
+        return f"a corpus name is at most {MAX_CORPUS_NAME_LEN} characters"
+    return None
+
+
+def _check_new(corpus: "WorkspaceCorpus") -> None:
+    problem = corpus_name_problem(corpus.name)
+    if problem:
+        raise ValueError(problem)
+
+
 class WorkspaceCorpus(BaseModel):
     """A drop-in knowledge corpus registered against a workspace."""
 
@@ -77,6 +97,7 @@ class InMemoryWorkspaceCorpusStore:
         self._lock = asyncio.Lock()
 
     async def add(self, corpus: WorkspaceCorpus) -> WorkspaceCorpus:
+        _check_new(corpus)
         async with self._lock:
             self._rows[corpus.corpus_id] = corpus.model_copy(deep=True)
         return corpus
@@ -136,6 +157,7 @@ class SqliteWorkspaceCorpusStore:
         self._conn.commit()
 
     async def add(self, corpus: WorkspaceCorpus) -> WorkspaceCorpus:
+        _check_new(corpus)
         async with self._lock:
             await asyncio.to_thread(self._add_sync, corpus)
         return corpus
@@ -224,6 +246,7 @@ class PostgresWorkspaceCorpusStore(PgSchemaInit):
             await c.execute(_CREATE_PG_INDEX_SQL)
 
     async def add(self, corpus: WorkspaceCorpus) -> WorkspaceCorpus:
+        _check_new(corpus)
         pool = await self._get_pool()
         async with pool.acquire() as c:
             await c.execute(
@@ -284,6 +307,7 @@ def get_workspace_corpus_store() -> WorkspaceCorpusStore:
 
 
 __all__ = [
+    "MAX_CORPUS_NAME_LEN", "corpus_name_problem",
     "WorkspaceCorpus", "WorkspaceCorpusStore",
     "InMemoryWorkspaceCorpusStore", "SqliteWorkspaceCorpusStore",
     "get_workspace_corpus_store",

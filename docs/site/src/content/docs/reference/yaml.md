@@ -98,7 +98,7 @@ Fields any step can carry:
 | Field | Meaning |
 |---|---|
 | `id` | The step's id. Gates and loops are named by their `gate:` / `loop:` value instead. |
-| `with` | Inputs passed to the leg. `$input.<name>` reads a pipeline input; `$steps.<id>.<field>` reads an earlier leg's output. |
+| `with` | Inputs passed to the leg. `$input.<name>` reads a pipeline input; `$steps.<id>.<field>` reads an earlier leg's output. A value keeps its YAML type, and wires inside maps and lists are checked like top-level ones (the input must be declared, the step must exist and run earlier). Inside a map or list, write the explicit `$steps.<id>.<field>`: a bare `<id>.<field>` there is refused as ambiguous (it could be a literal such as `train.jsonl`). At the top level the bare form still works. |
 | `depends_on` | Steps that must finish first. |
 | `when` | An expression. False skips this leg (recorded as routed off) and the pipeline continues. |
 | `label` | A human-readable name for the run page and the graph. Display only. |
@@ -177,9 +177,27 @@ enabled. A receiver shipped as a pack or overlay file, with no such record,
 runs in the server's default workspace. The `X-Cairn-Workspace` header does not
 change this, and a signed request without a token ignores it. A caller with a
 token must belong to the receiver's workspace, or the receiver answers `404`.
-One exception today: with the durable trigger inbox on (`CAIRN_TRIGGER_DURABLE`),
-a queued delivery does not yet carry its receiver's workspace, so its run starts in
-the default workspace.
+With the durable trigger inbox on (`CAIRN_TRIGGER_DURABLE`), a queued delivery
+keeps its receiver's workspace, and so does a replayed one. A queued delivery
+starts its pipeline the way an inline one does: policy gates, admission and the
+pipeline and run records apply. A delivery the launch refuses (a policy `deny`,
+a ref that names no pipeline) is retried and then dead-lettered; it never runs.
+A delivery is done once its pipeline is launched: a leg that fails later is the
+pipeline's to retry, not the inbox's.
+`GET /triggers/inbox`
+lists only the caller's workspace's deliveries (one with no workspace belongs to
+`default`). `POST /triggers/inbox/replay` needs an owner or admin and replays only
+the caller's workspace; only the deployment's admin (`CAIRN_API_USER`) replays
+every workspace's. Any other caller gets `403`.
+
+A webhook declared by a pipeline belongs to the workspace that enabled it first.
+Enabling a pipeline in a second workspace does not arm a webhook whose path, or
+whose trigger record, another workspace already holds: that workspace keeps it,
+and the server logs an error naming the path and both workspaces. Give the second
+workspace's webhook its own `path`. If records from two workspaces still reach the
+server at one path, it mounts no receiver there and logs the same kind of error.
+One exception: a webhook enabled in any workspace still replaces a receiver shipped
+as a pack or overlay file at the same path.
 
 The Gmail preset is the one this affects in practice: Google's Pub/Sub push authenticates with
 its own OIDC token in `Authorization`, which is not a cairn token, so on a deployment with

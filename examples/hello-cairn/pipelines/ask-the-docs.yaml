@@ -11,8 +11,9 @@
 # reads it before anyone relies on it.
 #
 # What this needs from the engine (README "ask-the-docs"):
-#   * a model: OPENAI_API_KEY (or LLM_GATEWAY=proxy + LLM_GATEWAY_URL for any
-#     OpenAI-compatible gateway). The engine has no built-in mock model.
+#   * a model for this governed pipeline: OPENAI_API_KEY (or LLM_GATEWAY=proxy +
+#     LLM_GATEWAY_URL for any OpenAI-compatible gateway). The local `cairn run --mock`
+#     dev loop has a deterministic stub; governed pipelines use the configured provider.
 #   * an embedder for retrieval and memory: RAG_EMBED_PROVIDER=openai (or gemini).
 #   * the corpus indexed: CAIRN_RAG_AUTOINDEX=1 on the server indexes every declared
 #     corpus at boot (needs the `rag` extra). There is no indexing operator; an

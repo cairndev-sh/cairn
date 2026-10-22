@@ -13,8 +13,7 @@ SCRIPT = Path(__file__).resolve().parents[2] / "docs/site/public/install.sh"
 SH = shutil.which("sh")
 pytestmark = pytest.mark.skipif(SH is None, reason="needs a POSIX sh")
 LINKS = "https://github.com/cairndev-sh/cairn/releases/expanded_assets/v{}"
-INSTALL = (f"tool install --upgrade --force --python 3.13 --find-links {LINKS.format('0.1.3')} "
-           "--with cairn-client==0.1.3 cairndev==0.1.3")
+INSTALL = "tool install --upgrade --force --python 3.13 cairndev"
 
 
 def _stub(path: Path, body: str) -> None:
@@ -72,13 +71,11 @@ def test_extras_and_a_pinned_version_reach_the_spec(env):
     e, log, _, _ = env
     r = _run(e, CAIRN_EXTRAS="hello,metaflow", CAIRN_VERSION="0.1.0", CAIRN_PYTHON="3.12")
     assert r.returncode == 0, r.stderr
-    assert log.read_text().strip() == ("tool install --upgrade --force --python 3.12 "
-                                       f"--find-links {LINKS.format('0.1.0')} --with cairn-client==0.1.0 "
-                                       "cairndev[hello,metaflow]==0.1.0")
+    assert log.read_text().strip() == "tool install --upgrade --force --python 3.12 cairndev[hello,metaflow]==0.1.0"
 
 
 def test_an_empty_release_installs_from_pypi_alone(env):
-    """CAIRN_RELEASE= switches the GitHub Release fallback off: the plain PyPI install."""
+    """CAIRN_RELEASE= (empty) is the same as unset: the plain PyPI install."""
     e, log, _, _ = env
     r = _run(e, CAIRN_RELEASE="")
     assert r.returncode == 0, r.stderr
@@ -86,12 +83,13 @@ def test_an_empty_release_installs_from_pypi_alone(env):
 
 
 def test_the_github_fallback_pins_the_engine_and_the_client_to_the_release(env):
-    """While the wheels come from GitHub, a higher version of cairndev or cairn-client published on
-    PyPI by someone else must not win: both are pinned to the release."""
+    """CAIRN_RELEASE=<version> takes cairn's wheels from that GitHub Release; a higher version of
+    cairndev or cairn-client on PyPI must not win, so both are pinned to the release."""
     e, log, _, _ = env
     r = _run(e, CAIRN_RELEASE="0.1.2", CAIRN_EXTRAS="hello")
     assert r.returncode == 0, r.stderr
     line = log.read_text().strip()
+    assert f"--find-links {LINKS.format('0.1.2')} " in line, line
     assert line.endswith("--with cairn-client==0.1.2 cairndev[hello]==0.1.2"), line
 
 

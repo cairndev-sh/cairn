@@ -14,6 +14,7 @@ from cairn.core.approval.enforce import approver_allowed, approver_names
 from cairn.core.dispatch.pipeline_bridge import findings_of, reconstruct_step_output
 from cairn.core.engine.pipeline_gate import required_approvers
 from cairn.core.refs import bare_ref, pack_key, ref_key  # ONE ref spelling (#2126)
+from cairn.core.triggers import console_support as support
 from cairn.core.triggers.auth import _oauth2_scheme, auth_enabled, caller_identity, require_auth
 from cairn.core.triggers.routers.reviews import decision_actor
 from cairn.core.workspace import current_workspace
@@ -500,7 +501,7 @@ def build_pipelines_router(dispatcher, pipeline_bridge) -> APIRouter:
 
         return await _off_loop(_listing)
 
-    @r.post("/pipelines/launch", dependencies=[Depends(require_auth)])
+    @r.post("/pipelines/launch", dependencies=[Depends(require_auth), Depends(support.writable_workspace)])
     async def launch_installed_pipeline(body: dict[str, Any]) -> dict[str, Any]:
         """Launch an INSTALLED pipeline by ref (#1136, ADR-0084 D9).
 
@@ -644,7 +645,7 @@ def build_pipelines_router(dispatcher, pipeline_bridge) -> APIRouter:
         return {"ref": canon, "count": len(rows),
                 "presets": [preset_row(p, src) for p, src in rows]}
 
-    @r.post("/pipelines/presets", dependencies=[Depends(require_auth)])
+    @r.post("/pipelines/presets", dependencies=[Depends(require_auth), Depends(support.writable_workspace)])
     async def save_pipeline_preset(body: dict[str, Any]) -> dict[str, Any]:
         """Save (or replace) a named input set for a pipeline.
 
@@ -693,7 +694,7 @@ def build_pipelines_router(dispatcher, pipeline_bridge) -> APIRouter:
         saved = await default_workflow_config_store().put_input_preset(preset)
         return preset_row(saved, SOURCE_SAVED)
 
-    @r.delete("/pipelines/presets", dependencies=[Depends(require_auth)])
+    @r.delete("/pipelines/presets", dependencies=[Depends(require_auth), Depends(support.writable_workspace)])
     async def delete_pipeline_preset(ref: str, name: str) -> dict[str, Any]:
         """Delete a SAVED preset. A pack-shipped seed of the same name is not
         removed — it reappears in the listing, which is the intended way to undo
@@ -831,7 +832,7 @@ def build_pipelines_router(dispatcher, pipeline_bridge) -> APIRouter:
             f"(or an owner/admin); {username or 'the caller'} has role {role!r} "
             f"and is not among them"))
 
-    @r.post("/pipelines/{pipeline_id}/steps/{step_id}/advance", dependencies=[Depends(require_auth)])
+    @r.post("/pipelines/{pipeline_id}/steps/{step_id}/advance", dependencies=[Depends(require_auth), Depends(support.writable_workspace)])
     async def advance_pipeline_step(pipeline_id: str, step_id: str) -> dict[str, Any]:
         rec = await _pipeline_in_ws_or_404(pipeline_id)
         # #2388 — this door releases a step parked `awaiting_advance`; it records no
@@ -851,7 +852,7 @@ def build_pipelines_router(dispatcher, pipeline_bridge) -> APIRouter:
             raise HTTPException(status_code=409, detail=str(e))
         return {"pipeline_id": pipeline_id, "step_id": step_id, "status": rec.status}
 
-    @r.post("/pipelines/{pipeline_id}/steps/{step_id}/approve", dependencies=[Depends(require_auth)])
+    @r.post("/pipelines/{pipeline_id}/steps/{step_id}/approve", dependencies=[Depends(require_auth), Depends(support.writable_workspace)])
     async def approve_pipeline_step(
         pipeline_id: str, step_id: str, req: PipelineApproveRequest,
         token: Annotated[Optional[str], Depends(_oauth2_scheme)] = None,
@@ -868,7 +869,7 @@ def build_pipelines_router(dispatcher, pipeline_bridge) -> APIRouter:
             raise HTTPException(status_code=409, detail=str(e))
         return {"pipeline_id": pipeline_id, "step_id": step_id, "status": rec.status}
 
-    @r.post("/pipelines/{pipeline_id}/cancel", dependencies=[Depends(require_auth)])
+    @r.post("/pipelines/{pipeline_id}/cancel", dependencies=[Depends(require_auth), Depends(support.writable_workspace)])
     async def cancel_pipeline_route(pipeline_id: str) -> dict[str, Any]:
         await _pipeline_in_ws_or_404(pipeline_id)
         rec = await pipeline_bridge.cancel_pipeline(pipeline_id)

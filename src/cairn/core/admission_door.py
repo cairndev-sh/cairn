@@ -148,7 +148,8 @@ async def decide_admission(
         meta = None
         if parsed is not None:
             try:
-                meta = await store.get_dataset_version_meta(parsed[0], parsed[1])
+                meta = await store.get_dataset_version_meta(
+                    parsed[0], parsed[1], workspace_id=workspace_id)
             except Exception:  # noqa: BLE001 — a lookup failure is reported, never hidden
                 meta = None
         checks = dict(((meta or {}).get("verdict_report") or {}).get("checks") or {})

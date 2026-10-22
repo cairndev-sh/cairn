@@ -26,6 +26,9 @@ class QdrantStore(VectorStore):
     def __init__(self) -> None:
         self._client = None
         self._collection: str | None = None
+        #: collections this store already checked or created: callers select the
+        #: collection before every store call, so the check runs once per process
+        self._ready: set[str] = set()
 
     def _get_client(self):
         if self._client is None:
@@ -47,6 +50,9 @@ class QdrantStore(VectorStore):
             SparseVectorParams,
             VectorParams,
         )
+        if collection in self._ready:
+            self._collection = collection
+            return
         client = self._get_client()
         collections_response = await _await_maybe(client.get_collections())
         existing = {c.name for c in collections_response.collections}
@@ -66,6 +72,7 @@ class QdrantStore(VectorStore):
             logger.info("Created hybrid collection: %s", collection)
         else:
             logger.info("Using existing collection: %s", collection)
+        self._ready.add(collection)
 
     async def upsert(
         self,
@@ -194,3 +201,4 @@ class QdrantStore(VectorStore):
         if self._client:
             await self._client.close()
             self._client = None
+        self._ready.clear()

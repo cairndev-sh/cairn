@@ -2,7 +2,7 @@
 #
 # Blocks a PR when the training dataset fails cairn's readiness gate, and posts
 # the cited findings as a PR comment. No cairn server, no separate Action — just
-# `pip install cairn && cairn gate …`. Copy this into .github/workflows/.
+# `pip install cairndev && cairn gate …`. Copy this into .github/workflows/.
 name: cairn gate
 
 on:
@@ -23,7 +23,7 @@ jobs:
 
       # `[pii]` pulls in Presidio for real PII detection; drop it for the
       # zero-dependency regex fallback (faster, coarser).
-      - run: pip install "cairn[pii]"
+      - run: pip install "cairndev[pii]"
 
       # Run the read-only gate. It exits non-zero on FAIL — captured, not fatal
       # yet, so the comment step still runs. The final step re-raises it.

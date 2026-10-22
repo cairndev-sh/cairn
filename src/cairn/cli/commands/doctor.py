@@ -1195,7 +1195,8 @@ async def check_compute_targets() -> list[CheckResult]:
             continue
         try:
             import cairn.core.connections as _connections  # noqa: PLC0415 - cli → core
-            resolved = await _connections.resolve_connection(target)
+            # the profile's targets are the deployment's own connections
+            resolved = await _connections.resolve_connection(target, account_id=_connections.DEFAULT_ACCOUNT)
         except Exception as e:  # noqa: BLE001 — an unreachable store is a warn, not a crash
             out.append(CheckResult(
                 f"compute_target:{key}", "warn",

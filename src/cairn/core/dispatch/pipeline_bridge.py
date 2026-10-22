@@ -33,6 +33,7 @@ is Phase 4.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -50,6 +51,7 @@ from cairn.core.dispatch.leg_executor import LegOutcome, execute_leg, leg_kind_o
 from cairn.core.dispatch.leg_hooks import FlowLegHooks, flow_leg_record, pipeline_spent_usd
 from cairn.core.dispatch.pipeline_resume import plan_resume
 from cairn.core.dispatch.target_concurrency import in_flight_on_target, target_cap
+from cairn.core.workspace import WorkspaceScopeRequired, workspace_scope
 from cairn.core.engine.pipeline_gate import GATE_STATUS, gate_context_for
 # #1791 — the approval-notification subscriber. Core→core; `gate_notify` pulls
 # the profile and the notifier registry lazily, so this adds no import weight.
@@ -322,6 +324,37 @@ def _run_options(rec: PipelineRecord) -> dict[str, Any]:
     raw = (getattr(rec, "trigger", None) or {}).get("run_options") or {}
     return {k: raw[k] for k in _RUN_OPTION_KEYS if k in raw}
 
+def _in_record_workspace(method):
+    """Run a bridge method whose first argument is the pipeline record in that
+    record's workspace (``current_workspace()``). A leg is advanced off a bus
+    event, re-adopted at boot or resumed from a gate — never reliably inside the
+    request that launched it — so the record is what names the workspace, and
+    with it the account the leg's connections and secrets resolve in (#1639's
+    "from the RECORD" rule, applied to execution)."""
+
+    @functools.wraps(method)
+    async def wrapper(self: Any, rec: Any, *args: Any, **kwargs: Any) -> Any:
+        try:
+            scope = workspace_scope(getattr(rec, "workspace_id", "") or "")
+        except WorkspaceScopeRequired:
+            # auth on and the record names no workspace: fail closed AND visibly —
+            # the leg or the pipeline ends failed with the reason, nothing runs.
+            # `_REFUSED` tells a `_submit_step` caller to stop, as a blocked gate does.
+            await self._refuse_unscoped(method.__name__, rec, *args)
+            return _REFUSED
+        with scope:
+            return await method(self, rec, *args, **kwargs)
+
+    return wrapper
+
+
+_NO_WORKSPACE_REASON = "record names no workspace"
+_NO_WORKSPACE_VERDICT = "workspace_unresolved"
+#: What a refused ``_submit_step`` returns (it otherwise returns ``None``): the
+#: pipeline is already failed and persisted, so the caller stops right there.
+_REFUSED = False
+
+
 class PipelineBridge:
     """Core-owned enforcer that advances bundle pipelines off run completions."""
 
@@ -444,8 +477,9 @@ class PipelineBridge:
             for sid in sorted(released):
                 s, st = rec.plan.step(sid), rec.step_state.get(sid)
                 if s is not None and st is not None and st.status == "pending":
-                    await self._submit_step(
-                        rec, s, iteration_view(raw, sid, rec.plan.loops or {}))
+                    if await self._submit_step(
+                            rec, s, iteration_view(raw, sid, rec.plan.loops or {})) is _REFUSED:
+                        return  # the pipeline is failed and persisted
             rec.status = "running"  # `_advance`'s `_settle` recomputes it
             await self._advance(pipeline_id, _rec=rec)
 
@@ -1509,10 +1543,39 @@ class PipelineBridge:
                 await self._subscribe_event(rec.pipeline_id, s.id, s.trigger[len("on:"):])
             elif after_restart and not self._rerun_is_safe(s):
                 await self._park_after_restart(rec, s)
-            else:
-                await self._submit_step(rec, s, outputs, after_restart=after_restart)
+            elif await self._submit_step(rec, s, outputs, after_restart=after_restart) is _REFUSED:
+                return  # failed and persisted, like a blocked gate
         await self._settle(rec)
 
+    async def _refuse_unscoped(self, method: str, rec: PipelineRecord, s: Any, *rest: Any) -> None:
+        """The visible half of :func:`_in_record_workspace`'s refusal. A step about
+        to be submitted fails its pipeline (audited, as a wire that cannot resolve
+        does); a leg already created marks its run failed and emits the terminal
+        event its pipeline advances on."""
+        if method == "_submit_step":
+            st = rec.step_state.get(s.id) or StepState()
+            st.status = "failed"
+            st.verdict = _NO_WORKSPACE_VERDICT
+            st.ended_at = _now()
+            rec.step_state[s.id] = st
+            await self._audit(rec, s.id, _NO_WORKSPACE_VERDICT, {"error": _NO_WORKSPACE_REASON})
+            # Once: a finalizer reached here because the pipeline is already ending
+            # (`_run_finalizers` runs only under a terminal intent); failing it again
+            # would re-enter the finalizers. The step is terminal, so it is not retried.
+            if not rec.terminal_intent and rec.status not in PIPELINE_TERMINAL:
+                await self._fail_pipeline(rec, _NO_WORKSPACE_REASON)
+            return
+        run = rest[0]
+        try:
+            await self.dispatcher.store.update(run.id, status="failed", ended_at=_now(),
+                                               error=_NO_WORKSPACE_REASON)
+            await self.dispatcher._emit(
+                run.id, "failed", {"leg": s.ref, "step_id": s.id, "error": _NO_WORKSPACE_REASON},
+                pipeline_id=rec.pipeline_id)
+        except Exception:  # noqa: BLE001 — nothing left to do but log
+            logger.exception("leg %s (%s): failed to terminalize", s.ref, run.id)
+
+    @_in_record_workspace
     async def _submit_step(self, rec: PipelineRecord, s: Any, outputs: dict, *,
                            after_restart: bool = False) -> None:
         """Resolve a ready step's inputs from persisted output + submit it as its OWN
@@ -1797,6 +1860,7 @@ class PipelineBridge:
             run_id=rec.pipeline_id,
         )
 
+    @_in_record_workspace
     async def _run_flow_leg(self, rec: PipelineRecord, s: Any, run: Any, resolved: dict,
                             *, adopt: Optional[dict] = None) -> None:
         """The background half of a flow leg: execute → persist outcome → emit the
@@ -1938,6 +2002,7 @@ class PipelineBridge:
             return None
         return run
 
+    @_in_record_workspace
     async def _run_task_leg(self, rec: PipelineRecord, s: Any, run: Any, resolved: dict) -> None:
         """The background half: resolve the op → validate → run → persist →
         emit terminal. An op failure is an OUTCOME (run `failed`, pipeline
@@ -2628,7 +2693,8 @@ class PipelineBridge:
                 await self._audit(rec, s.id, "finalizer_skipped", {"error": str(e)})
                 continue
             try:
-                await self._submit_step(rec, s, outputs)
+                if await self._submit_step(rec, s, outputs) is _REFUSED:
+                    continue  # the step is failed with its reason; nothing started
                 await self._audit(rec, s.id, "finalizer_started",
                                   {"terminal_intent": rec.terminal_intent})
             except Exception as e:  # noqa: BLE001 — a finalizer that cannot even
@@ -2805,7 +2871,10 @@ class PipelineBridge:
                 await self.store.put(rec)
                 await self._audit(rec, step_id, "fire_recorded", {"fired_key": fire_key})
             self._cleanup_step_triggers(pipeline_id, step_id)  # a schedule/event step is now firing
-            await self._submit_step(rec, step, outputs)
+            if await self._submit_step(rec, step, outputs) is _REFUSED:
+                await self._decide_review(pipeline_id, step_id, "rejected", reviewer=approver or "",
+                                          rationale=_NO_WORKSPACE_REASON)
+                return await self.store.get(pipeline_id)  # type: ignore[return-value]
             await self._audit(rec, step_id, "approved" if approver else "advanced",
                               {"approver": approver})
             if approver:

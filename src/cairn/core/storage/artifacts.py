@@ -46,7 +46,7 @@ from cairn.core.intake import VERDICTS, normalize_verdict
 from cairn.core.pg_schema_init import schema_init_lock
 from cairn.core.storage.artifact_bytes import relay as _relay_bytes
 from cairn.core.storage.migrations import add_missing_columns
-from cairn.core.workspace import DEFAULT_WORKSPACE, current_workspace
+from cairn.core.workspace import DEFAULT_WORKSPACE, current_workspace, scoped_workspace
 
 
 @dataclass
@@ -98,13 +98,22 @@ class ArtifactStore(Protocol):
         dated_at: Optional[str] = None, origin: Optional[str] = None,
         origin_detail: Optional[dict] = None,
     ) -> int: ...
-    async def get_dataset_version(self, name: str, version: Optional[int] = None) -> Optional[tuple[int, ArtifactRecord]]: ...
-    async def list_dataset_versions(self, name: str) -> list[dict]: ...
-    async def list_datasets(self) -> list[dict]: ...
+    #: Reads by NAME answer within ONE workspace: ``workspace_id``, else the
+    #: current one (:func:`~cairn.core.workspace.current_workspace`). Another
+    #: workspace's name, version or head reads as "not found". Any workspace may
+    #: register under any name: version numbers are one sequence per name (the
+    #: key is ``(name, version)``), and each workspace sees only its own versions.
+    async def get_dataset_version(
+        self, name: str, version: Optional[int] = None, *, workspace_id: Optional[str] = None,
+    ) -> Optional[tuple[int, ArtifactRecord]]: ...
+    async def list_dataset_versions(self, name: str, *, workspace_id: Optional[str] = None) -> list[dict]: ...
+    async def list_datasets(self, *, workspace_id: Optional[str] = None) -> list[dict]: ...
     #: #2020 (ADR-0102 D1) — the role/schema/mapping + lineage sidecar of ONE
     #: version, joined to the artifact's uri so the holdout door can read rows
     #: without a second round trip.
-    async def get_dataset_version_meta(self, name: str, version: Optional[int] = None) -> Optional[dict]: ...
+    async def get_dataset_version_meta(
+        self, name: str, version: Optional[int] = None, *, workspace_id: Optional[str] = None,
+    ) -> Optional[dict]: ...
     #: Every version in ``workspace_id`` carrying one of ``roles`` — the holdout
     #: door's question ("what is held out here?"). Workspace-scoped at the
     #: STORE, so a cross-tenant comparison is not reachable from the door.
@@ -121,7 +130,7 @@ class ArtifactStore(Protocol):
     async def set_dataset_version_meta(
         self, name: str, version: int, *, role: Optional[str] = None,
         schema: Optional[str] = None, column_mapping: Optional[dict] = None,
-        dated_at: Optional[str] = None) -> dict: ...
+        dated_at: Optional[str] = None, workspace_id: Optional[str] = None) -> dict: ...
     #: #2021 (ADR-0102 D1) — stamp the INTAKE VERDICT and its structured report
     #: on a version. Written control-side by the leg that registered it (the
     #: box has no database, ADR-0081 D3); read by the launch door
@@ -129,7 +138,8 @@ class ArtifactStore(Protocol):
     #: bytes, so it lands on the existing row — never a second table.
     async def set_dataset_version_verdict(
         self, name: str, version: int, *, verdict: str,
-        reasons: Optional[list[str]] = None, report: Optional[dict] = None) -> dict: ...
+        reasons: Optional[list[str]] = None, report: Optional[dict] = None,
+        workspace_id: Optional[str] = None) -> dict: ...
     #: #1969 — human-facing metadata on a dataset NAME (description + labels),
     #: editable at any time, independent of the append-only version rows.
     #: #2020 adds the DECLARED defaults: what this dataset IS (role), the shape
@@ -189,28 +199,28 @@ class _NullArtifactStore:
         raise RuntimeError("dataset registry not configured (CAIRN_STORAGE unset) — "
                            f"cannot register {name!r} (a named registration must never silently vanish)")
 
-    async def get_dataset_version(self, name, version=None):
+    async def get_dataset_version(self, name, version=None, *, workspace_id=None):
         return None
 
-    async def list_dataset_versions(self, name) -> list[dict]:
+    async def list_dataset_versions(self, name, *, workspace_id=None) -> list[dict]:
         return []
 
-    async def list_datasets(self) -> list[dict]:
+    async def list_datasets(self, *, workspace_id=None) -> list[dict]:
         return []
 
-    async def get_dataset_version_meta(self, name, version=None) -> Optional[dict]:
+    async def get_dataset_version_meta(self, name, version=None, *, workspace_id=None) -> Optional[dict]:
         return None
 
     async def list_dataset_versions_by_role(self, roles, *, workspace_id=None) -> list[dict]:
         return []
 
     async def set_dataset_version_meta(self, name, version, *, role=None, schema=None,
-                                       column_mapping=None, dated_at=None) -> dict:
+                                       column_mapping=None, dated_at=None, workspace_id=None) -> dict:
         raise RuntimeError("dataset registry not configured (CAIRN_STORAGE unset) — "
                            f"cannot set the role of {name!r}@{version}")
 
     async def set_dataset_version_verdict(self, name, version, *, verdict, reasons=None,
-                                          report=None) -> dict:
+                                          report=None, workspace_id=None) -> dict:
         raise RuntimeError("no artifact storage configured — "
                            f"cannot stamp the intake verdict of {name!r}@{version}")
 
@@ -428,6 +438,17 @@ def _version_row(row: Sequence) -> dict[str, Any]:
     }
 
 
+#: How often a registration re-reads the next version number after another
+#: writer took it (SQLite shared by several processes).
+_VERSION_INSERT_ATTEMPTS = 5
+
+
+def _dataset_workspace(workspace_id: Optional[str]) -> str:
+    """The workspace a by-name dataset read or write answers in: the one named,
+    else the current one (the request's or the run's)."""
+    return (workspace_id or "").strip() or current_workspace() or DEFAULT_WORKSPACE
+
+
 async def _declare(store, name: str, role, schema, column_mapping) -> tuple:
     """Resolve a registration's declaration: explicit → the NAME's declared
     default → the fallback (``training`` / undeclared).
@@ -592,8 +613,8 @@ class SqliteArtifactStore:
         rec = await self.get(artifact_id)
         if rec is None:
             raise KeyError(f"artifact {artifact_id!r} not registered — cannot version as {name!r}")
+        ws = _dataset_workspace(workspace_id)
         role, schema, column_mapping = await _declare(self, name, role, schema, column_mapping)
-        ws = (workspace_id or current_workspace() or DEFAULT_WORKSPACE)
         origin = normalize_origin(origin)
         # #2033 — the never-trainable rule, at the WRITE. Before the golden
         # guard because it is cheaper and because a caller asking for a
@@ -604,73 +625,93 @@ class SqliteArtifactStore:
         detail_json = json.dumps(detail) if detail else None
         await _guard_golden(role, name, rec, ws)
         async with self._lock:
-            head = self._conn.execute(
-                "SELECT version, artifact_id FROM dataset_versions WHERE name=? "
-                "ORDER BY version DESC LIMIT 1", (name,)).fetchone()
-            if head and head[1] == artifact_id:
-                # Identical bytes at the head — no new version (immutability by
-                # construction). The DECLARATION still lands: a re-register that
-                # names a role is how a caller says what the head is for, and
-                # dropping it would be the silent-vanish this store refuses to do.
-                self._conn.execute(
-                    "UPDATE dataset_versions SET role=?, schema=?, column_mapping=?, "
-                    "parent_version=?, split_policy=?, dated_at=COALESCE(?, dated_at), "
-                    "origin=COALESCE(?, origin), origin_detail=COALESCE(?, origin_detail) "
-                    "WHERE name=? AND version=?",
-                    (role, schema,
-                     json.dumps(column_mapping) if column_mapping else None,
-                     parent_version or "",
-                     json.dumps(split_policy) if split_policy else None,
-                     dated, origin, detail_json,
-                     name, int(head[0])))
-                self._conn.commit()
-                return int(head[0])
-            version = (int(head[0]) + 1) if head else 1
-            self._conn.execute(
-                "INSERT INTO dataset_versions (name, version, artifact_id, created_at, created_by, "
-                "role, schema, column_mapping, parent_version, split_policy, workspace_id, "
-                "dated_at, origin, origin_detail) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (name, version, artifact_id, utc_now_iso(), actor, role, schema,
-                 json.dumps(column_mapping) if column_mapping else None,
-                 parent_version or "",
-                 json.dumps(split_policy) if split_policy else None, ws,
-                 dated, origin, detail_json))
-            self._conn.commit()
-        return version
+            # The lock serialises this process; another process on the same file
+            # can take the same next number between the read and the insert, so
+            # a duplicate key is retried (bounded) with the numbers re-read.
+            for attempt in range(_VERSION_INSERT_ATTEMPTS):
+                # The no-op compares with THIS workspace's head; the next number
+                # is the name's, since (name, version) is the key.
+                head = self._conn.execute(
+                    "SELECT version, artifact_id FROM dataset_versions WHERE name=? AND workspace_id=? "
+                    "ORDER BY version DESC LIMIT 1", (name, ws)).fetchone()
+                last = self._conn.execute(
+                    "SELECT MAX(version) FROM dataset_versions WHERE name=?", (name,)).fetchone()
+                if head and head[1] == artifact_id:
+                    # Identical bytes at the head — no new version (immutability by
+                    # construction). The DECLARATION still lands: a re-register that
+                    # names a role is how a caller says what the head is for, and
+                    # dropping it would be the silent-vanish this store refuses to do.
+                    self._conn.execute(
+                        "UPDATE dataset_versions SET role=?, schema=?, column_mapping=?, "
+                        "parent_version=?, split_policy=?, dated_at=COALESCE(?, dated_at), "
+                        "origin=COALESCE(?, origin), origin_detail=COALESCE(?, origin_detail) "
+                        "WHERE name=? AND version=? AND workspace_id=?",
+                        (role, schema,
+                         json.dumps(column_mapping) if column_mapping else None,
+                         parent_version or "",
+                         json.dumps(split_policy) if split_policy else None,
+                         dated, origin, detail_json,
+                         name, int(head[0]), ws))
+                    self._conn.commit()
+                    return int(head[0])
+                version = (int(last[0]) + 1) if last and last[0] is not None else 1
+                try:
+                    self._conn.execute(
+                        "INSERT INTO dataset_versions (name, version, artifact_id, created_at, "
+                        "created_by, role, schema, column_mapping, parent_version, split_policy, "
+                        "workspace_id, dated_at, origin, origin_detail) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (name, version, artifact_id, utc_now_iso(), actor, role, schema,
+                         json.dumps(column_mapping) if column_mapping else None,
+                         parent_version or "",
+                         json.dumps(split_policy) if split_policy else None, ws,
+                         dated, origin, detail_json))
+                    self._conn.commit()
+                except sqlite3.IntegrityError:
+                    self._conn.rollback()
+                    if attempt + 1 == _VERSION_INSERT_ATTEMPTS:
+                        raise
+                    continue
+                return version
+        raise AssertionError("unreachable")  # pragma: no cover — the loop returns or raises
 
-    async def get_dataset_version(self, name, version=None):
+    async def get_dataset_version(self, name, version=None, *, workspace_id=None):
+        ws = _dataset_workspace(workspace_id)
         async with self._lock:
             if version is None:
                 row = self._conn.execute(
-                    "SELECT version, artifact_id FROM dataset_versions WHERE name=? "
-                    "ORDER BY version DESC LIMIT 1", (name,)).fetchone()
+                    "SELECT version, artifact_id FROM dataset_versions WHERE name=? AND workspace_id=? "
+                    "ORDER BY version DESC LIMIT 1", (name, ws)).fetchone()
             else:
                 row = self._conn.execute(
-                    "SELECT version, artifact_id FROM dataset_versions WHERE name=? AND version=?",
-                    (name, int(version))).fetchone()
+                    "SELECT version, artifact_id FROM dataset_versions "
+                    "WHERE name=? AND version=? AND workspace_id=?",
+                    (name, int(version), ws)).fetchone()
         if row is None:
             return None
         rec = await self.get(row[1])
         return (int(row[0]), rec) if rec else None
 
-    async def list_dataset_versions(self, name) -> list[dict]:
+    async def list_dataset_versions(self, name, *, workspace_id=None) -> list[dict]:
+        ws = _dataset_workspace(workspace_id)
         async with self._lock:
             rows = self._conn.execute(
                 f"SELECT {_DV_COLS} FROM dataset_versions "
-                "WHERE name=? ORDER BY version DESC", (name,)).fetchall()
+                "WHERE name=? AND workspace_id=? ORDER BY version DESC", (name, ws)).fetchall()
         return [_version_row(r) for r in rows]
 
-    async def get_dataset_version_meta(self, name, version=None) -> Optional[dict]:
+    async def get_dataset_version_meta(self, name, version=None, *, workspace_id=None) -> Optional[dict]:
+        ws = _dataset_workspace(workspace_id)
         async with self._lock:
             if version is None:
                 row = self._conn.execute(
-                    f"SELECT {_DV_COLS} FROM dataset_versions WHERE name=? "
-                    "ORDER BY version DESC LIMIT 1", (name,)).fetchone()
+                    f"SELECT {_DV_COLS} FROM dataset_versions WHERE name=? AND workspace_id=? "
+                    "ORDER BY version DESC LIMIT 1", (name, ws)).fetchone()
             else:
                 row = self._conn.execute(
-                    f"SELECT {_DV_COLS} FROM dataset_versions WHERE name=? AND version=?",
-                    (name, int(version))).fetchone()
+                    f"SELECT {_DV_COLS} FROM dataset_versions "
+                    "WHERE name=? AND version=? AND workspace_id=?",
+                    (name, int(version), ws)).fetchone()
         if row is None:
             return None
         out = _version_row(row)
@@ -683,7 +724,7 @@ class SqliteArtifactStore:
         wanted = [str(r) for r in roles]
         if not wanted:
             return []
-        ws = workspace_id or current_workspace() or DEFAULT_WORKSPACE
+        ws = _dataset_workspace(workspace_id)
         marks = ",".join("?" for _ in wanted)
         async with self._lock:
             rows = self._conn.execute(
@@ -697,8 +738,9 @@ class SqliteArtifactStore:
         return out
 
     async def set_dataset_version_meta(self, name, version, *, role=None, schema=None,
-                                       column_mapping=None, dated_at=None) -> dict:
-        cur = await self.get_dataset_version_meta(name, int(version))
+                                       column_mapping=None, dated_at=None, workspace_id=None) -> dict:
+        cur = await self.get_dataset_version_meta(
+            name, int(version), workspace_id=_dataset_workspace(workspace_id))
         if cur is None:
             raise KeyError(f"dataset {name!r}@{version} not found")
         new_role = cur["role"] if role is None else normalize_role(role, default=None)
@@ -715,16 +757,17 @@ class SqliteArtifactStore:
         async with self._lock:
             self._conn.execute(
                 "UPDATE dataset_versions SET role=?, schema=?, column_mapping=?, dated_at=? "
-                "WHERE name=? AND version=?",
+                "WHERE name=? AND version=? AND workspace_id=?",
                 (new_role, new_schema, json.dumps(new_map) if new_map else None, new_dated,
-                 name, int(version)))
+                 name, int(version), cur["workspace_id"]))
             self._conn.commit()
         return {**cur, "role": new_role, "schema": new_schema, "column_mapping": new_map,
                 "dated_at": new_dated}
 
     async def set_dataset_version_verdict(self, name, version, *, verdict, reasons=None,
-                                          report=None) -> dict:
-        cur = await self.get_dataset_version_meta(name, int(version))
+                                          report=None, workspace_id=None) -> dict:
+        cur = await self.get_dataset_version_meta(
+            name, int(version), workspace_id=_dataset_workspace(workspace_id))
         if cur is None:
             raise KeyError(f"dataset {name!r}@{version} not found")
         value = normalize_verdict(verdict)
@@ -734,19 +777,20 @@ class SqliteArtifactStore:
         async with self._lock:
             self._conn.execute(
                 "UPDATE dataset_versions SET verdict=?, verdict_reasons=?, verdict_report=?, "
-                "verdict_at=? WHERE name=? AND version=?",
+                "verdict_at=? WHERE name=? AND version=? AND workspace_id=?",
                 (value, json.dumps(list(reasons or [])), json.dumps(report or {}),
-                 stamped, name, int(version)))
+                 stamped, name, int(version), cur["workspace_id"]))
             self._conn.commit()
         return {**cur, "verdict": value, "verdict_reasons": list(reasons or []),
                 "verdict_report": report or {}, "verdict_at": stamped}
 
-    async def list_datasets(self) -> list[dict]:
+    async def list_datasets(self, *, workspace_id=None) -> list[dict]:
+        ws = _dataset_workspace(workspace_id)
         async with self._lock:
             rows = self._conn.execute(
                 "SELECT v.name, MAX(v.version), MAX(v.created_at), m.description, m.labels "
                 "FROM dataset_versions v LEFT JOIN dataset_meta m ON m.name = v.name "
-                "GROUP BY v.name ORDER BY v.name").fetchall()
+                "WHERE v.workspace_id=? GROUP BY v.name ORDER BY v.name", (ws,)).fetchall()
         return [{"name": r[0], "latest_version": r[1], "updated_at": r[2],
                  "description": r[3] or "", "labels": json.loads(r[4]) if r[4] else []} for r in rows]
 
@@ -977,8 +1021,8 @@ class PostgresArtifactStore:
         rec = await self.get(artifact_id)
         if rec is None:
             raise KeyError(f"artifact {artifact_id!r} not registered — cannot version as {name!r}")
+        ws = _dataset_workspace(workspace_id)
         role, schema, column_mapping = await _declare(self, name, role, schema, column_mapping)
-        ws = (workspace_id or current_workspace() or DEFAULT_WORKSPACE)
         origin = normalize_origin(origin)
         assert_role_allowed_for_origin(role, origin)  # #2033 — see the sqlite twin
         dated = normalize_dated_at(dated_at)
@@ -990,9 +1034,18 @@ class PostgresArtifactStore:
         pool = await self._pool()
         async with pool.acquire() as conn:
             async with conn.transaction():
+                # One registration per name at a time (held to commit), so two
+                # concurrent writers never compute the same next number. See the
+                # sqlite twin: the no-op compares with this workspace's head; the
+                # next number is the name's.
+                await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                                   f"cairn.dataset_versions:{name}")
+                last = await conn.fetchrow(
+                    "SELECT version FROM dataset_versions WHERE name=$1 "
+                    "ORDER BY version DESC LIMIT 1 FOR UPDATE", name)
                 head = await conn.fetchrow(
                     "SELECT version, artifact_id FROM dataset_versions WHERE name=$1 "
-                    "ORDER BY version DESC LIMIT 1 FOR UPDATE", name)
+                    "AND workspace_id=$2 ORDER BY version DESC LIMIT 1", name, ws)
                 if head and head["artifact_id"] == artifact_id:
                     # Identical bytes at the head — no new version; the
                     # DECLARATION still lands (see the sqlite twin).
@@ -1001,12 +1054,12 @@ class PostgresArtifactStore:
                         "parent_version=$4, split_policy=$5::jsonb, "
                         "dated_at=COALESCE($6, dated_at), origin=COALESCE($7, origin), "
                         "origin_detail=COALESCE($8::jsonb, origin_detail) "
-                        "WHERE name=$9 AND version=$10",
+                        "WHERE name=$9 AND version=$10 AND workspace_id=$11",
                         role, schema, mapping_json, parent_version or "", policy_json,
                         dated, origin, detail_json,
-                        name, int(head["version"]))
+                        name, int(head["version"]), ws)
                     return int(head["version"])
-                version = (int(head["version"]) + 1) if head else 1
+                version = (int(last["version"]) + 1) if last else 1
                 await conn.execute(
                     "INSERT INTO dataset_versions (name, version, artifact_id, created_at, created_by, "
                     "role, schema, column_mapping, parent_version, split_policy, workspace_id, "
@@ -1017,44 +1070,49 @@ class PostgresArtifactStore:
                     dated, origin, detail_json)
         return version
 
-    async def get_dataset_version(self, name, version=None):
+    async def get_dataset_version(self, name, version=None, *, workspace_id=None):
+        ws = _dataset_workspace(workspace_id)
         await self.ensure_schema()
         pool = await self._pool()
         async with pool.acquire() as conn:
             if version is None:
                 row = await conn.fetchrow(
                     "SELECT version, artifact_id FROM dataset_versions WHERE name=$1 "
-                    "ORDER BY version DESC LIMIT 1", name)
+                    "AND workspace_id=$2 ORDER BY version DESC LIMIT 1", name, ws)
             else:
                 row = await conn.fetchrow(
-                    "SELECT version, artifact_id FROM dataset_versions WHERE name=$1 AND version=$2",
-                    name, int(version))
+                    "SELECT version, artifact_id FROM dataset_versions "
+                    "WHERE name=$1 AND version=$2 AND workspace_id=$3",
+                    name, int(version), ws)
         if row is None:
             return None
         rec = await self.get(row["artifact_id"])
         return (int(row["version"]), rec) if rec else None
 
-    async def list_dataset_versions(self, name) -> list[dict]:
+    async def list_dataset_versions(self, name, *, workspace_id=None) -> list[dict]:
+        ws = _dataset_workspace(workspace_id)
         await self.ensure_schema()
         pool = await self._pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(
                 f"SELECT {_DV_COLS_PG} FROM dataset_versions "
-                "WHERE name=$1 ORDER BY version DESC", name)
+                "WHERE name=$1 AND workspace_id=$2 ORDER BY version DESC", name, ws)
         return [_version_row(tuple(r)) for r in rows]
 
-    async def get_dataset_version_meta(self, name, version=None) -> Optional[dict]:
+    async def get_dataset_version_meta(self, name, version=None, *, workspace_id=None) -> Optional[dict]:
+        ws = _dataset_workspace(workspace_id)
         await self.ensure_schema()
         pool = await self._pool()
         async with pool.acquire() as conn:
             if version is None:
                 row = await conn.fetchrow(
                     f"SELECT {_DV_COLS_PG} FROM dataset_versions WHERE name=$1 "
-                    "ORDER BY version DESC LIMIT 1", name)
+                    "AND workspace_id=$2 ORDER BY version DESC LIMIT 1", name, ws)
             else:
                 row = await conn.fetchrow(
-                    f"SELECT {_DV_COLS_PG} FROM dataset_versions WHERE name=$1 AND version=$2",
-                    name, int(version))
+                    f"SELECT {_DV_COLS_PG} FROM dataset_versions "
+                    "WHERE name=$1 AND version=$2 AND workspace_id=$3",
+                    name, int(version), ws)
         if row is None:
             return None
         out = _version_row(tuple(row))
@@ -1068,7 +1126,7 @@ class PostgresArtifactStore:
         if not wanted:
             return []
         await self.ensure_schema()
-        ws = workspace_id or current_workspace() or DEFAULT_WORKSPACE
+        ws = _dataset_workspace(workspace_id)
         pool = await self._pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(
@@ -1082,8 +1140,9 @@ class PostgresArtifactStore:
         return out
 
     async def set_dataset_version_meta(self, name, version, *, role=None, schema=None,
-                                       column_mapping=None, dated_at=None) -> dict:
-        cur = await self.get_dataset_version_meta(name, int(version))
+                                       column_mapping=None, dated_at=None, workspace_id=None) -> dict:
+        cur = await self.get_dataset_version_meta(
+            name, int(version), workspace_id=_dataset_workspace(workspace_id))
         if cur is None:
             raise KeyError(f"dataset {name!r}@{version} not found")
         new_role = cur["role"] if role is None else normalize_role(role, default=None)
@@ -1098,15 +1157,16 @@ class PostgresArtifactStore:
         async with pool.acquire() as conn:
             await conn.execute(
                 "UPDATE dataset_versions SET role=$1, schema=$2, column_mapping=$3::jsonb, "
-                "dated_at=$4 WHERE name=$5 AND version=$6",
+                "dated_at=$4 WHERE name=$5 AND version=$6 AND workspace_id=$7",
                 new_role, new_schema, json.dumps(new_map) if new_map else None, new_dated,
-                name, int(version))
+                name, int(version), cur["workspace_id"])
         return {**cur, "role": new_role, "schema": new_schema, "column_mapping": new_map,
                 "dated_at": new_dated}
 
     async def set_dataset_version_verdict(self, name, version, *, verdict, reasons=None,
-                                          report=None) -> dict:
-        cur = await self.get_dataset_version_meta(name, int(version))
+                                          report=None, workspace_id=None) -> dict:
+        cur = await self.get_dataset_version_meta(
+            name, int(version), workspace_id=_dataset_workspace(workspace_id))
         if cur is None:
             raise KeyError(f"dataset {name!r}@{version} not found")
         value = normalize_verdict(verdict)
@@ -1117,13 +1177,15 @@ class PostgresArtifactStore:
         async with pool.acquire() as conn:
             await conn.execute(
                 "UPDATE dataset_versions SET verdict=$1, verdict_reasons=$2::jsonb, "
-                "verdict_report=$3::jsonb, verdict_at=$4 WHERE name=$5 AND version=$6",
+                "verdict_report=$3::jsonb, verdict_at=$4 WHERE name=$5 AND version=$6 "
+                "AND workspace_id=$7",
                 value, json.dumps(list(reasons or [])), json.dumps(report or {}),
-                stamped, name, int(version))
+                stamped, name, int(version), cur["workspace_id"])
         return {**cur, "verdict": value, "verdict_reasons": list(reasons or []),
                 "verdict_report": report or {}, "verdict_at": stamped}
 
-    async def list_datasets(self) -> list[dict]:
+    async def list_datasets(self, *, workspace_id=None) -> list[dict]:
+        ws = _dataset_workspace(workspace_id)
         await self.ensure_schema()
         pool = await self._pool()
         async with pool.acquire() as conn:
@@ -1131,7 +1193,7 @@ class PostgresArtifactStore:
                 "SELECT v.name, MAX(v.version) AS v, MAX(v.created_at) AS t, "
                 "MAX(m.description) AS d, MAX(m.labels::text) AS l "
                 "FROM dataset_versions v LEFT JOIN dataset_meta m ON m.name = v.name "
-                "GROUP BY v.name ORDER BY v.name")
+                "WHERE v.workspace_id=$1 GROUP BY v.name ORDER BY v.name", ws)
         return [{"name": r["name"], "latest_version": r["v"], "updated_at": r["t"],
                  "description": r["d"] or "", "labels": json.loads(r["l"]) if r["l"] else []} for r in rows]
 
@@ -1200,17 +1262,25 @@ def parse_dataset_ref(ref: str) -> Optional[tuple[str, Optional[int]]]:
     return name, int(ver)
 
 
-async def resolve_dataset_ref(store: ArtifactStore, ref: str) -> Optional[dict]:
+async def resolve_dataset_ref(store: ArtifactStore, ref: str, *,
+                              workspace_id: Optional[str] = None) -> Optional[dict]:
     """Resolve a ``dataset:`` ref against the registry: the concrete location
     PLUS the hash the bytes must match — the retrieval rule that makes a name
     a guarantee, not just a pointer (#1466). ``None`` when ``ref`` isn't a
     dataset ref; raises ``KeyError`` when the name/version doesn't exist
-    (fail-closed: never silently run on unresolved data)."""
+    (fail-closed: never silently run on unresolved data).
+
+    The ref resolves within ONE workspace: ``workspace_id``, else the one in
+    scope (the run's, scoped from its record). The name, a pinned version and
+    ``@latest`` see only that workspace's versions; another workspace's is "not
+    found". With auth on and no workspace in scope it raises
+    :class:`~cairn.core.workspace.WorkspaceScopeRequired`."""
     parsed = parse_dataset_ref(ref)
     if parsed is None:
         return None
     name, version = parsed
-    got = await store.get_dataset_version(name, version)
+    ws = (workspace_id or "").strip() or scoped_workspace()
+    got = await store.get_dataset_version(name, version, workspace_id=ws)
     if got is None:
         raise KeyError(f"dataset ref {ref!r} not found in the registry")
     v, rec = got
@@ -1234,7 +1304,8 @@ def config_has_dataset_ref(config: dict) -> bool:
     )
 
 
-async def resolve_dataset_refs_in_config(store: ArtifactStore, config: dict) -> dict:
+async def resolve_dataset_refs_in_config(store: ArtifactStore, config: dict, *,
+                                         workspace_id: Optional[str] = None) -> dict:
     """Rewrite every ``dataset:`` ref in a leg's config to its resolved location
     WITH the expected hash as a URI fragment (``s3://…#sha256=<hash>``) — the
     launch-time half of #1466's retrieval rule. The fragment convention rides
@@ -1251,18 +1322,23 @@ async def resolve_dataset_refs_in_config(store: ArtifactStore, config: dict) -> 
     into stage configs by key, so a ref buried in a nested structure has no
     defined launch-time meaning, and quietly rewriting one would invent a
     contract nobody declared.
+
+    Every ref resolves in one workspace (see :func:`resolve_dataset_ref`).
     """
     out = dict(config)
+    if not config_has_dataset_ref(config):
+        return out
+    ws = (workspace_id or "").strip() or scoped_workspace()
     for key, value in config.items():
         if _is_dataset_ref(value):
-            resolved = await resolve_dataset_ref(store, value)
+            resolved = await resolve_dataset_ref(store, value, workspace_id=ws)
             if resolved is not None:
                 out[key] = f"{resolved['uri']}#sha256={resolved['content_hash']}"
         elif isinstance(value, list) and any(_is_dataset_ref(x) for x in value):
             items = list(value)
             for i, item in enumerate(items):
                 if _is_dataset_ref(item):
-                    r = await resolve_dataset_ref(store, item)
+                    r = await resolve_dataset_ref(store, item, workspace_id=ws)
                     if r is not None:
                         items[i] = f"{r['uri']}#sha256={r['content_hash']}"
             out[key] = items

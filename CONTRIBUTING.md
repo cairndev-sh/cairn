@@ -15,7 +15,7 @@ knowledge required.
 ```bash
 git clone https://github.com/cairndev-sh/cairn && cd cairn
 
-# 1. Python env (uv: https://docs.astral.sh/uv/)
+# 1. Python env (uv: https://docs.astral.sh/uv/; it provisions the Python in .python-version, 3.13, as CI does)
 uv sync --extra dev --extra rag --extra rag-sqlite-vec \
         --extra runtime-sqlite --extra runtime-temporal \
         --extra runtime-dbos --extra telemetry --extra auth \

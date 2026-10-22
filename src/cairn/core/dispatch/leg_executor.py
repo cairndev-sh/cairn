@@ -601,12 +601,18 @@ async def _register_dataset_versions(descriptors: list, artifact_store,
     ``stats.register_as`` on its descriptor) becomes a named dataset VERSION
     here, on the control plane (the box has no DB access, D4). Same strict
     posture as the artifact registration above it: a REQUESTED registration
-    that cannot happen must fail the leg loudly, never silently vanish."""
+    that cannot happen must fail the leg loudly, never silently vanish.
+
+    The version lands in the run's workspace (scoped from its record); with auth
+    on and no workspace in scope the registration is refused."""
+    from cairn.core.workspace import scoped_workspace  # noqa: PLC0415 — off the hot import path
+
     for d in descriptors:
         reg_name = str((getattr(d, "stats", None) or {}).get("register_as") or "")
         if reg_name and hasattr(artifact_store, "register_dataset_version"):
             v = await artifact_store.register_dataset_version(
-                reg_name, str(getattr(d, "content_hash", "") or ""), actor=run_id)
+                reg_name, str(getattr(d, "content_hash", "") or ""), actor=run_id,
+                workspace_id=scoped_workspace())
             out_stats.setdefault("dataset_versions", []).append(f"{reg_name}@{v}")
             await _stamp_intake_verdict(artifact_store, reg_name, v, out_stats)
 
@@ -633,11 +639,13 @@ async def _stamp_intake_verdict(artifact_store, name: str, version: int, flow_st
     if setter is None:
         return
     from cairn.core.intake import verdict_from_flow_stats  # noqa: PLC0415 — off the hot import path
+    from cairn.core.workspace import scoped_workspace  # noqa: PLC0415 — off the hot import path
 
     try:
         verdict = verdict_from_flow_stats(flow_stats)
         await setter(name, int(version), verdict=verdict.verdict,
-                     reasons=verdict.reasons, report=verdict.report)
+                     reasons=verdict.reasons, report=verdict.report,
+                     workspace_id=scoped_workspace())
     except Exception:  # noqa: BLE001 — see the docstring: never fail a landed dataset over this
         logger.warning("could not stamp the intake verdict on %s@%s", name, version, exc_info=True)
     else:
