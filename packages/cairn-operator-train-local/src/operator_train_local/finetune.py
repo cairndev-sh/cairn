@@ -19,6 +19,7 @@ import hashlib
 import json
 import logging
 import math
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -35,6 +36,15 @@ HOLDOUT_EVERY = 8
 
 class TrainStackMissing(RuntimeError):
     """The ``[train]`` extra is not installed; the message names it."""
+
+
+class TrainingCancelled(Exception):
+    """The fine-tune was stopped before it returned a completed adapter."""
+
+
+def _check_cancelled(cancel_event: threading.Event | None) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise TrainingCancelled("fine-tuning cancelled")
 
 
 def require_train_stack() -> None:
@@ -136,7 +146,8 @@ def _batch(tokenizer, texts: list[str], max_seq_len: int) -> dict:
     return {"input_ids": enc["input_ids"], "attention_mask": enc["attention_mask"], "labels": labels}
 
 
-def _mean_loss(model, tokenizer, texts: list[str], max_seq_len: int) -> tuple[float, int]:
+def _mean_loss(model: Any, tokenizer: Any, texts: list[str], max_seq_len: int,
+               cancel_event: threading.Event | None = None) -> tuple[float, int]:
     """Token-weighted mean causal-LM loss over ``texts`` and the non-padding tokens scored."""
     import torch  # noqa: PLC0415 - optional dependency: the [train] extra
 
@@ -144,11 +155,15 @@ def _mean_loss(model, tokenizer, texts: list[str], max_seq_len: int) -> tuple[fl
     total, targets, tokens = 0.0, 0, 0
     with torch.no_grad():
         for i in range(0, len(texts), BATCH_SIZE):
+            _check_cancelled(cancel_event)
             enc = _batch(tokenizer, texts[i:i + BATCH_SIZE], max_seq_len)
+            _check_cancelled(cancel_event)
             n = int((enc["labels"][:, 1:] != -100).sum())  # the shifted positions the loss averages
             if n == 0:
                 continue
-            total += float(model(**enc).loss) * n
+            batch_loss = model(**enc).loss
+            _check_cancelled(cancel_event)
+            total += float(batch_loss) * n
             targets += n
             tokens += int(enc["attention_mask"].sum())
     if targets == 0:
@@ -178,17 +193,21 @@ def _snapshot(directory: Path) -> dict[str, tuple[int, int]]:
 def finetune(*, dataset: str, base_model: str, lora_rank: int, steps: int, max_samples: int,
              learning_rate: float, max_seq_len: int, output_dir: str,
              on_step: Optional[Callable[[int, float], None]] = None,
+             cancel_event: threading.Event | None = None,
              written: Optional[list[str]] = None) -> dict[str, Any]:
     """Run the LoRA fine-tune and save the adapter to ``output_dir``; the contract's output.
     ``written``, when given, receives the paths (relative to ``output_dir``) the save wrote."""
     require_train_stack()
+    _check_cancelled(cancel_event)
     import torch  # noqa: PLC0415 - optional dependency: the [train] extra
     from peft import LoraConfig, get_peft_model  # noqa: PLC0415 - [train] extra
 
     started = time.monotonic()
     torch.manual_seed(0)
     train, held = split_holdout(load_texts(dataset, max_samples))
+    _check_cancelled(cancel_event)
     tokenizer, model = _load(base_model)
+    _check_cancelled(cancel_event)
     model = get_peft_model(model, LoraConfig(r=lora_rank, lora_alpha=2 * lora_rank, lora_dropout=0.0,
                                              task_type="CAUSAL_LM"))
     optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=learning_rate)
@@ -197,23 +216,32 @@ def finetune(*, dataset: str, base_model: str, lora_rank: int, steps: int, max_s
     tokens = 0
     size = min(BATCH_SIZE, len(train))
     for step in range(steps):
+        _check_cancelled(cancel_event)
         enc = _batch(tokenizer, [train[(step * size + i) % len(train)] for i in range(size)], max_seq_len)
+        _check_cancelled(cancel_event)
         loss = model(**enc).loss
+        _check_cancelled(cancel_event)
         value = float(loss.detach())
         if not math.isfinite(value):
             raise RuntimeError(f"train loss is {value} at step {step}; refusing to save the adapter")
         loss.backward()
+        _check_cancelled(cancel_event)
         optimizer.step()
         optimizer.zero_grad()
+        _check_cancelled(cancel_event)
         losses.append(value)
         tokens += int(enc["attention_mask"].sum())
         if on_step is not None:
             on_step(step, value)
-    eval_loss = _mean_loss(model, tokenizer, held, max_seq_len)[0] if held else None
+    _check_cancelled(cancel_event)
+    eval_loss = _mean_loss(model, tokenizer, held, max_seq_len, cancel_event)[0] if held else None
+    _check_cancelled(cancel_event)
     out = Path(output_dir)
+    _check_cancelled(cancel_event)
     out.mkdir(parents=True, exist_ok=True)
     before = _snapshot(out)
     model.save_pretrained(output_dir)
+    _check_cancelled(cancel_event)
     if written is not None:
         written.extend(sorted(rel for rel, stat in _snapshot(out).items() if before.get(rel) != stat))
     _log.info("train-local: %d steps on %s, adapter at %s", steps, base_model, output_dir)
