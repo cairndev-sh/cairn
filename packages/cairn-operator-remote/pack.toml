@@ -6,7 +6,7 @@
 name        = "obs-operator-remote"
 version     = "0.1.0"
 type        = "operator"
-description = "Run a command/job on any SSH box you own (remote.exec)."
+description = "Run a command/job on any SSH box you own (remote.exec), and start and stop the box (compute.acquire, compute.release)."
 kind        = "operator"
 publisher   = "cairn"
 trust_level = "official"
@@ -29,3 +29,56 @@ executors = ["remote_job", "in_process"]
 
 [operator."remote/exec".capabilities]
 provides = ["remote.exec"]
+
+# ── the compute LIFECYCLE pair (#1787, ADR-0097; public here since ADR-0151 D6, #201) ──
+# remote/exec runs work on a `compute.ssh` box; these two turn the box on and off. Same
+# refs, schemas, risk classes and capabilities as the platform's cairn-operator-compute
+# 0.1.0 (which drops its copies in the same release: both installed would raise
+# DuplicateOperatorError). No `implements` URI yet (ADR-0151 D7). Every EC2 call goes
+# through cairn.core.compute_lifecycle — the module `cairn compute sweep` calls too —
+# reached through the operator contract's re-exports (ADR-0120 D7).
+#
+# compute/acquire — starts the instance a `compute.ssh` connection names, after stamping
+# the `cairn:managed` / `cairn:release-after` lease (lease FIRST, ADR-0151 D8, so a crash
+# between the two calls never leaves a billing box the sweep cannot see), then waits
+# (bounded) for its SSH port. THE call that starts billing, hence `risk = paid_compute`:
+# the class default is what the bridge's restart policy reads, so a softer class here
+# would mean a restarted control plane silently re-started a paid box.
+[operator."compute/acquire"]
+version       = "0.1.0"
+input_schema  = "AcquireInput"
+output_schema = "AcquireOutput"
+long_running       = false
+requires_gpu       = false
+supports_cancel    = false
+supports_heartbeat = false
+supports_mock      = true
+risk      = "paid_compute"
+executors = ["in_process"]
+
+[operator."compute/acquire".capabilities]
+provides = ["compute.acquire"]
+
+[operator."compute/acquire".reports]
+stages  = ["start", "wait_ssh"]
+scalars = ["ssh_ready", "already_running"]
+
+# compute/release — stops it. `external_write` and NEVER approval-gated, on purpose:
+# `production_mutation`/`paid_compute` both resolve to `high` in the approval plane,
+# which is where HITL policies bite, and a teardown paused behind an unanswered gate is
+# a box billing while it waits. Idempotent: releasing a stopped instance is a no-op
+# success, which is what lets the bridge re-run a finalizer after a restart.
+[operator."compute/release"]
+version       = "0.1.0"
+input_schema  = "ReleaseInput"
+output_schema = "ReleaseOutput"
+long_running       = false
+requires_gpu       = false
+supports_cancel    = false
+supports_heartbeat = false
+supports_mock      = true
+risk      = "external_write"
+executors = ["in_process"]
+
+[operator."compute/release".capabilities]
+provides = ["compute.release"]

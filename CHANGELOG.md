@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+- `compute/acquire` and `compute/release` ship in the builtin remote pack (`cairn-operator-remote`), so a public pipeline can start the EC2 instance a `compute.ssh` connection names after a person approved the spend, and stop it when the run ends (ADR-0151 D6, #201). They keep the refs, input and output schemas, risk classes (`acquire` `paid_compute`, rated high and passing the approval chokepoint; `release` `external_write`, never approval-gated), capabilities and reports of the platform's `cairn-operator-compute` 0.1.0, with no contract URI yet (D7). `release` is idempotent: an instance already stopped is a success, so a `finalizer: true` release can run again after a restart. `acquire` writes the `cairn:managed` lease tag (and `cairn:release-after` when `max_hours > 0`, and `cairn:acquired-by`) before it starts the instance, the reverse of the platform's order, so a crash between the two calls never leaves a running box that `cairn compute sweep` cannot see (D8). The operator contract `cairn.core.operator` re-exports the `compute_lifecycle` functions they call (`load_box`, `ec2_client`, `describe_state`, `stamp_lease`, `start_instance`, `stop_instance`, `wait_port_open`, `iso`, `BILLING_STATES`, `STOPPED_STATES`). **Upgrade note:** a deployment that also installs the platform's `cairn-operator-compute` needs the version without these two operators; both installed fail at boot with `DuplicateOperatorError`.
+
+### Changed
+- On a pipeline cancel, a running flow leg on a box the pipeline releases (its recorded compute target is the `connection` of a `finalizer:` step providing `compute.release`) has its engine job cancelled before the finalizers run, so stopping the box is never the only kill (ADR-0151 D9). The leg's run still settles through its own path; a job cancel that fails is logged and audited (`pipeline.leg_job_cancel`, `sent: false`) and the release still stops the box. Other running legs are left alone, as before.
+
 ## [0.3.0] - 2026-10-24
 
 A minor release because it contains breaking changes: the artifact registry migrates its storage in place (ADR-0147, ADR-0148), and the Helm chart's pull-worker values change (`docs/compatibility.md`: a break before 1.0 is a MINOR bump with migration notes). See Upgrade notes.

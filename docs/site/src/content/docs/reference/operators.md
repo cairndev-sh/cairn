@@ -6,7 +6,7 @@ description: Every operator that ships with cairn, the capabilities it provides,
 An **operator** is the code that does one kind of work. A step asks for a
 **capability**, and the environment binds that capability to an operator (see
 [Capabilities and environments](/concepts/capabilities/)). This page lists the
-22 operators that ship with the open-source core, grouped by the pack that
+24 operators that ship with the open-source core, grouped by the pack that
 contains them. The builtin packs ship inside the `cairndev` wheel; the Metaflow
 and SkyPilot engines are wheels of their own (the `metaflow` and `skypilot`
 extras), and the training stack `train/lora` needs is the `train` extra.
@@ -145,11 +145,23 @@ Zero-dep regex PII/secret redactor — provides the redact.text capability.
 
 ### `cairn-operator-remote`
 
-Run a command/job on any SSH box you own (remote.exec).
+Run a command/job on any SSH box you own (remote.exec), and start and stop the box (compute.acquire, compute.release).
 
 | Operator | Provides | Risk | Runs as | Notes |
 |---|---|---|---|---|
+| `compute/acquire` | `compute.acquire` | `paid_compute` | in_process | has a mock path |
+| `compute/release` | `compute.release` | `external_write` | in_process | has a mock path |
 | `remote/exec` | `remote.exec` | `external_write` | remote_job, in_process | long-running; has a mock path |
+
+`compute/acquire` starts the EC2 instance a `compute.ssh` connection names
+(`instance_id`, `region`): it writes the `cairn:managed` lease tag first (with
+`cairn:release-after` when `max_hours` is set), then starts the instance and waits
+for its SSH port. Put an approval gate before it; a profile that gates
+`paid_compute` also pauses it for its own approval. `compute/release` stops the
+instance, and an instance already stopped is a success, so declare it
+`finalizer: true` with its `connection` wired from `$input`: it then runs when the
+pipeline ends done, failed or cancelled (in-process and DBOS pipeline owners). `cairn compute sweep --apply` stops a box
+whose lease expired when the control plane that acquired it is gone.
 
 ### `cairn-operator-secrets-env`
 

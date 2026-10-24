@@ -2919,6 +2919,14 @@ class PipelineBridge:
         ``running`` child runs are left to their own paths — a leg executing in
         some process finishes and its completion no-ops once the pipeline is
         terminal; a queued leg settles itself (`_settle_cancelled_while_queued`).
+        One exception (ADR-0151 D9): a ``running`` FLOW leg on a box the
+        pipeline releases — its recorded compute target equals the connection a
+        ``finalizer:`` ``compute.release`` step resolves to — has its recorded
+        engine job cancelled through ``cancel_recorded_job`` BEFORE the
+        finalizers are submitted (:meth:`_cancel_legs_on_released_boxes`), so the
+        box stop is never the only kill. The run itself still settles through
+        its own path; a cancel that fails is logged and audited and never holds
+        the release back. Every other running leg is unchanged (#207).
         Cancel is one-shot, so it never sees an owner DEAD (that takes two probes,
         ADR-0125 D3) and leaves ``queued``/``running`` legs alone. A leg still
         ``running`` when its process dies AFTER this cancel is settled
@@ -2955,6 +2963,10 @@ class PipelineBridge:
                     # pipeline's own can start once it is set — and the record
                     # becomes `cancelled` when the teardown has settled.
                     rec.terminal_intent = "cancelled"
+                    # ADR-0151 D9 — the job on a box this pipeline releases is
+                    # cancelled BEFORE the release stops the box, so a box stop
+                    # is never the only kill. Best-effort: it never blocks it.
+                    await self._cancel_legs_on_released_boxes(rec)
                     await self._settle(rec)
                 else:
                     rec.status = "cancelled"
@@ -2970,6 +2982,88 @@ class PipelineBridge:
         if stranded_owner:
             await self._cancel_stranded_child_runs(rec)
         return rec
+
+    #: The capability a box-stopping finalizer provides (`compute/release`, ADR-0151 D6).
+    _RELEASE_CAPABILITY = "compute.release"
+
+    def _is_release_step(self, s: Any) -> bool:
+        """A task step whose operator provides ``compute.release`` (from its manifest)."""
+        ref = str(getattr(s, "ref", "") or "")
+        if leg_kind_of(ref) != "task":
+            return False
+        try:
+            from cairn.core.operator.registry import default_registry  # noqa: PLC0415 — cycle, as _task_op_risk
+
+            md = default_registry.get_metadata(ref[len("task:"):])
+        except Exception:  # noqa: BLE001 — unknown operator: not a release
+            return False
+        return self._RELEASE_CAPABILITY in (getattr(md, "provides_capabilities", None) or [])
+
+    async def _released_boxes(self, rec: PipelineRecord) -> set[str]:
+        """The connections this pipeline's ``finalizer:`` release steps will stop,
+        resolved the way the finalizer itself will resolve its inputs."""
+        boxes: set[str] = set()
+        steps = [s for s in self._finalizer_steps(rec) if self._is_release_step(s)]
+        if not steps:
+            return boxes
+        raw_outputs = await self._collected_outputs(rec)
+        loops = (rec.plan.loops if rec.plan else None) or {}
+        for s in steps:
+            try:
+                resolved = resolve_step_inputs(s, bundle_input=rec.inputs,
+                                               steps=iteration_view(raw_outputs, s.id, loops))
+            except WireResolutionError:
+                continue  # the finalizer will be skipped too: it stops nothing
+            box = str((resolved or {}).get("connection") or "").strip()
+            if box:
+                boxes.add(box)
+        return boxes
+
+    async def _cancel_legs_on_released_boxes(self, rec: PipelineRecord) -> None:
+        """ADR-0151 D9 — on a pipeline cancel, cancel the engine job of every
+        ``running`` flow leg on a box this pipeline's ``compute.release`` finalizer
+        is about to stop, BEFORE the finalizers are submitted.
+
+        The leg's box is its RECORDED compute target (``Run.compute_target``, set
+        at admission), falling back to :meth:`_leg_target` for a run that carries
+        none. The cancel goes through :func:`cancel_recorded_job` with the handle
+        the leg persisted (``StepState.handle``); it never raises. A cancel that
+        was not sent is logged there and audited here (``leg_job_cancel``,
+        ``sent: false``), and the release still runs: the box must stop either
+        way. The run is not settled here — its poll loop sees the cancelled job
+        and settles it through its own path. Any other running leg is left
+        alone, as before (#207)."""
+        boxes = await self._released_boxes(rec)
+        if not boxes:
+            return
+        for s in rec.plan.steps if rec.plan else []:
+            st = rec.step_state.get(s.id)
+            if (st is None or st.status != "running" or not st.handle
+                    or leg_kind_of(getattr(s, "ref", "")) != "flow"):
+                continue
+            target = ""
+            if st.run_id:
+                try:
+                    run = await self.dispatcher.store.get(st.run_id)
+                    target = str(getattr(run, "compute_target", "") or "")
+                except Exception:  # noqa: BLE001 — fall back to the selection below
+                    logger.debug("leg %s: run %s unreadable", s.id, st.run_id, exc_info=True)
+            target = target or self._leg_target(s)
+            if target not in boxes:
+                continue
+            try:
+                engine = self._leg_engine(s)
+            except Exception:  # noqa: BLE001 — no engine to reach: report it, release anyway
+                logger.exception("leg %s (%s): no engine to cancel the job on before release",
+                                 s.id, st.run_id)
+                engine = None
+            sent = await cancel_recorded_job(engine, st.handle)
+            if not sent:
+                logger.warning("leg %s (%s): job %s on %s was not cancelled before release",
+                               s.id, st.run_id, (st.handle or {}).get("job_id"), target)
+            await self._audit(rec, s.id, "leg_job_cancel",
+                              {"run_id": st.run_id, "job_id": (st.handle or {}).get("job_id"),
+                               "target": target, "sent": sent, "before": "release"})
 
     async def _cancel_stranded_child_runs(self, rec: PipelineRecord) -> None:
         """#2540 — settle the cancelled pipeline's ``awaiting_approval`` child runs.
