@@ -270,7 +270,7 @@ async def _run_flow_leg(
     from cairn.core.dataflow.defs import flow_def_for  # noqa: PLC0415 — cycle: defs → pack registry
     from cairn.core.dispatch.dispatcher import new_run_id  # noqa: PLC0415 — cycle
     from cairn.core.dispatch.leg_executor import execute_leg, parse_flow_ref, recorded_stage_contracts  # noqa: PLC0415 — cycle
-    from cairn.core.dispatch.leg_hooks import FlowLegHooks, flow_leg_record, pipeline_spent_usd  # noqa: PLC0415 — cycle
+    from cairn.core.dispatch.leg_hooks import FlowLegHooks, flow_leg_record, leg_price_kwargs, pipeline_spent_usd  # noqa: PLC0415 — cycle
     from cairn.core.dispatch.pipeline_bridge import (  # noqa: PLC0415 — cycle
         _flow_leg_output,
         _leg_retry_policy,
@@ -407,7 +407,8 @@ async def _run_flow_leg(
             ref, inputs=resolved, engine=engine,
             run_id=run.id,
             series_id=series_id,
-            estimated_usd=float(gov.get("estimated_usd", 0.0) or 0.0),
+            # ADR-0151 D2/D5 — the bridge's call: the recorded estimate and box rate.
+            **leg_price_kwargs(rec, step_id, run),
             spent_usd=spent_usd,
             budget_usd=budget_usd,
             poll_budget_s=float(step.get("timeout_s") or _FLOW_LEG_DEFAULT_BUDGET_S),

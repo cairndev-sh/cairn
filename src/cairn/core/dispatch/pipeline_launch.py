@@ -475,6 +475,58 @@ async def _ask_launch_hooks(
         )) from None
 
 
+async def _price_and_check(plan: PipelinePlan, admission: Any, *, workspace_id: str) -> None:
+    """ADR-0151 D2/D3 at the launch door. Prices every flow leg with a compute
+    target (``leg_hooks.price_plan``), refuses a priced leg with no ``timeout`` and a
+    total that does not fit what the budget has left (``remaining_usd``: the cap less
+    the series' live holds; read-only, no reservation), and records the estimate on
+    the admission decision. A refusal is the admission refusal (403 / exit 3).
+
+    Fail-closed: a price that cannot be READ (the target selection, the connection
+    store, the named connection, a malformed ``hourly_usd``) refuses the launch with
+    the reason, and a retry can pass once it is readable; "not priced" is only for a
+    target that definitely carries no price. A ``governance.budget.usd`` with no
+    ``series`` is still checked here, against the cap alone: legs reserve only under
+    a series, so for such a pipeline this door is the only budget check."""
+    from dataclasses import replace  # noqa: PLC0415
+
+    from cairn.core.admission_door import REFUSED  # noqa: PLC0415
+    from cairn.core.budget_reservations import remaining_usd  # noqa: PLC0415
+    from cairn.core.dispatch.leg_hooks import LegPriceUnreadable, price_plan  # noqa: PLC0415 - cycle: hooks → executor → storage
+    from cairn.core.workspace import workspace_scope  # noqa: PLC0415 — off the hot import path
+
+    try:
+        with workspace_scope(workspace_id):   # the account the legs' connections resolve in
+            estimate = await price_plan(plan)
+    except LegPriceUnreadable as e:
+        raise AdmissionRefusedError(replace(
+            admission, verdict=REFUSED, refusing_reasons=[
+                *admission.refusing_reasons,
+                f"{e} — the leg cannot be priced, so the launch is refused; retry once it can be read"],
+        )) from None
+    if not estimate:
+        return
+    admission.cost_estimate = estimate
+    reasons = [f"leg {e['step']!r} runs on {e['connection']!r} at ${e['hourly_usd']:g}/h: "
+               "declare a timeout to price this leg"
+               for e in estimate["legs"] if e.get("priced") and e.get("estimate_usd") is None]
+    gov = getattr(plan, "governance", None) or {}
+    budget = float((gov.get("budget") or {}).get("usd", 0.0) or 0.0)
+    total = float(estimate.get("estimate_usd") or 0.0)
+    if budget and total > 0:
+        series = str(gov.get("series", "") or "")
+        # no series → no live holds to count: the cap alone (legs reserve only under a series)
+        left = await remaining_usd(series, spent_usd=0.0, budget_usd=budget) if series else budget
+        if left is not None and total > left + 1e-9:
+            basis = "; ".join(f"{e['step']}: {e['basis']}" for e in estimate["legs"] if e.get("priced"))
+            reasons.append(f"the legs on a priced box are estimated at ${total:.2f} ({basis}); "
+                           f"the budget has ${left:.2f} of ${budget:.2f} left"
+                           + (f" in series {series!r}" if series else ""))
+    if reasons:
+        raise AdmissionRefusedError(replace(
+            admission, verdict=REFUSED, refusing_reasons=[*admission.refusing_reasons, *reasons]))
+
+
 async def launch_pipeline_def(
     d: PipelineDef,
     *,
@@ -582,6 +634,10 @@ async def launch_pipeline_def(
                                        expectations=dataset_expectations(d))
     if admission.refused:
         raise AdmissionRefusedError(admission)
+    # ADR-0151 D1–D3 — the legs on a priced box: estimated, checked against the
+    # budget (read-only, nothing reserved) and recorded on the admission, before
+    # any record exists. A pipeline with no compute target records nothing new.
+    await _price_and_check(plan, admission, workspace_id=workspace_id)
     # #1789 criterion 4 — the record answers "launched from what". `trigger` is
     # already the record's provenance dict (what started it), so the preset name
     # and the keys the caller overrode on top of it go there rather than into a

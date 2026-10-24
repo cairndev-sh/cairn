@@ -50,9 +50,26 @@ an `obs.cost_scope` without the session backstop, and a stage that made at least
 `cost_usd` is the kernel's own value when the kernel reported one, else `llm_usd`. They are
 added after the raw output check and ride the descriptor and findings like any stat
 (`<stage>_llm_usd`). The control plane settles the leg's reservation at `cost_usd` and writes
-it on the leg's `Run` (`llm_cost_usd` → `Run.cost`, `leg_hooks.flow_leg_record`, both owners);
-a failed leg, and a succeeded leg whose engine reported no cost (a GPU train stage today), records no
-`Run.cost` — unknown, never $0 (the payload still carries `llm_cost_usd`).
+it on the leg's `Run` (`llm_cost_usd` → `Run.cost.llm_usd`, `leg_hooks.flow_leg_record`, both owners).
+A leg on a priced `compute.ssh` box (ADR-0151 D5, read per attempt by ADR-0152) also records
+its box time under `gpu_usd` → `Run.cost.gpu_usd`, on success AND on failure, timeout or cancel;
+it never folds into `llm_usd` (`src/cairn/core/dispatch/leg_hooks.py:59`). A failed leg reports no
+engine cost (its partial engine spend is unknown), and a leg with neither figure records no
+`Run.cost` — unknown, never $0 (a succeeded leg's payload still carries `llm_cost_usd`). The rate
+is the one recorded on `PipelineRecord.admission.cost_estimate` at launch, never re-read. Each
+fresh attempt measures its own window (attempt start → end) and is accounted once, after its
+outcome is known (`_close_attempt`, `src/cairn/core/dispatch/leg_executor.py:547`): the window
+joins `Run.cost.gpu_usd`, then the attempt's own hold is settled at its cost (released when it cost
+nothing). The backoff between two fresh attempts is not billed (a known under-count). A ledger
+error is logged and appended to the leg's error, and never changes the engine outcome or the box
+time. An adopted attempt holds no reservation of its own; its window runs from the persisted
+`run.started_at` (the start of each attempt is not persisted), so it covers the run's earlier
+attempts and backoff, and `Run.cost.gpu_usd` is then an over-estimate of the box time (accepted).
+In the ledger it closes the hold the dead process left (`held_for_run`): with a window, the first
+held row settles at engine-reported cost + window − what the run's claims already settled
+(`budget_reservations.settled_usd_for_run`), floored at 0, and any further one at 0, so no attempt is
+settled twice; with no window (no readable `run.started_at`) the engine cost settles as is. If the
+ledger cannot be read the rows stay held at their estimate and the leg's error names it (ADR-0152).
 
 **Descriptors and lineage.** `DataflowResult.output_artifacts` holds one descriptor per stage,
 in order (the stage-contract re-check reads it by position). Its parent is the previous stage's

@@ -125,6 +125,12 @@ class _MemoryBackend:
     def __init__(self) -> None:
         # series_id → reservation_id → Reservation. Held ONLY while in flight.
         self._held: dict[str, dict[str, Reservation]] = {}
+        # run_id → the actual_usd its settled claims recorded (ADR-0152), kept ONLY
+        # while the run still holds a claim: the total is read only to close a held
+        # row (an adopted attempt), so it is dropped with the run's last hold and the
+        # dict stays bounded by the runs in flight. After a restart this backend has
+        # neither holds nor totals; the Postgres rows keep both.
+        self._settled: dict[str, float] = {}
         self._lock = asyncio.Lock()
 
     def _total(self, series_id: str) -> float:
@@ -149,7 +155,13 @@ class _MemoryBackend:
         in memory there is no audit trail to write it to, and both terminals
         free the same budget."""
         async with self._lock:
-            self._held.get(reservation.series_id, {}).pop(reservation.id, None)
+            held = self._held.get(reservation.series_id, {}).pop(reservation.id, None)
+            if held is None or not held.run_id:
+                return
+            if not any(r.run_id == held.run_id for holds in self._held.values() for r in holds.values()):
+                self._settled.pop(held.run_id, None)    # the run's last hold: nothing left to read it
+            elif state == "settled":
+                self._settled[held.run_id] = self._settled.get(held.run_id, 0.0) + float(actual_usd or 0.0)
 
     async def reserved_total(self, series_id: str) -> float:
         return self._total(series_id)
@@ -160,8 +172,12 @@ class _MemoryBackend:
         return [r for holds in self._held.values() for r in holds.values()
                 if r.run_id == run_id]
 
+    async def settled_usd_for_run(self, run_id: str) -> float:
+        return float(self._settled.get(run_id, 0.0)) if run_id else 0.0
+
     def reset(self) -> None:
         self._held.clear()
+        self._settled.clear()
 
 
 # ─── Postgres backend (shared across replicas) ───────────────────────────
@@ -228,6 +244,10 @@ _CLOSE_RESERVATION_SQL = """
        SET state = $2, actual_usd = $3::float8::numeric, updated_at = now()
      WHERE reservation_id = $1 AND state = 'held'
 """
+_SUM_SETTLED_FOR_RUN_SQL = (
+    "SELECT COALESCE(SUM(actual_usd), 0)::float8 FROM series_reservations "
+    "WHERE run_id = $1 AND state = 'settled'"
+)
 _SELECT_HELD_FOR_RUN_SQL = (
     "SELECT reservation_id, series_id, run_id, amount_usd::float8 AS amount_usd "
     "FROM series_reservations WHERE run_id = $1 AND state = 'held' "
@@ -329,6 +349,13 @@ class _PostgresBackend(PgSchemaInit):
             for r in rows
         ]
 
+    async def settled_usd_for_run(self, run_id: str) -> float:
+        if not run_id:
+            return 0.0
+        pool = await self._get_pool()
+        async with pool.acquire() as c:
+            return float(await c.fetchval(_SUM_SETTLED_FOR_RUN_SQL, run_id) or 0.0)
+
     def reset(self) -> None:
         """No-op: durable holds are the POINT of this backend. A live-PG test
         scopes itself with a unique series id rather than truncating a table
@@ -416,7 +443,9 @@ async def reserve(series_id: str, *, est_usd: float, spent_usd: float,
 
 
 async def release(reservation: Optional[Reservation]) -> None:
-    """Free a reservation whose run failed or was cancelled — no spend occurred.
+    """Free a reservation whose run failed or was cancelled with nothing billed —
+    no spend occurred. A flow leg on a priced box always billed its wall-clock, so
+    it settles instead, on every outcome (ADR-0151 D5).
 
     Idempotent: terminal handling can fire more than once (the completion path
     and the reconciler both see the same run), and a double release must not
@@ -429,7 +458,8 @@ async def release(reservation: Optional[Reservation]) -> None:
 
 async def settle(reservation: Optional[Reservation],
                  actual_usd: float = 0.0) -> None:
-    """Close a reservation whose run SUCCEEDED.
+    """Close a reservation whose run SUCCEEDED — or, for a flow leg on a priced
+    box, whose attempt ended in any state with box time to record (ADR-0151 D5).
 
     The hold stops counting: the actual cost is now recorded as spend in the
     ledger, so holding the estimate as well would double-count it. Under the
@@ -453,7 +483,17 @@ async def held_for_run(run_id: str) -> list[Reservation]:
     return await _backend().held_for_run(run_id)
 
 
+async def settled_usd_for_run(run_id: str) -> float:
+    """What the claims admitted for ``run_id`` have already SETTLED (the sum of their
+    ``actual_usd``). Read-only. An adopted leg attempt subtracts it when it closes the
+    run's held row, because its window runs from the leg's start, so the run's earlier
+    attempts are not settled twice (ADR-0152). The Postgres backend sums the settled
+    rows; the in-memory backend keeps the total only while the run still holds a claim
+    (the only time a held row can be closed against it)."""
+    return await _backend().settled_usd_for_run(run_id)
+
+
 __all__ = [
     "BudgetExceeded", "Reservation", "held_for_run", "release", "remaining_usd",
-    "reserve", "reserved_total", "reset_reservations", "settle",
+    "reserve", "reserved_total", "reset_reservations", "settle", "settled_usd_for_run",
 ]

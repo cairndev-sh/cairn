@@ -54,7 +54,10 @@ from cairn.core.dispatch.leg_executor import (
     leg_kind_of,
     recorded_stage_contracts,
 )
-from cairn.core.dispatch.leg_hooks import FlowLegHooks, flow_leg_record, pipeline_spent_usd
+from cairn.core.dispatch.leg_hooks import (
+    FlowLegHooks, compute_target_for_kind, estimate_evidence, flow_leg_record, leg_price_kwargs,
+    pipeline_spent_usd,
+)
 from cairn.core.dispatch.pipeline_resume import plan_resume
 from cairn.core.dispatch.target_concurrency import in_flight_on_target, target_cap
 from cairn.core.workspace import WorkspaceScopeRequired, workspace_scope
@@ -1539,8 +1542,11 @@ class PipelineBridge:
                     gate_ctx["admission"] = dict(rec.admission)
                 # #2358 — and what the pipeline has spent against its budget, so
                 # the Approvals panel can show cost vs cap on a pipeline gate.
+                # ADR-0151 D4 — and, before the first priced leg, what the run is
+                # estimated to cost on its box (recorded at launch, never re-derived).
                 gate_ctx["evidence"] = {**(gate_ctx.get("evidence") or {}),
-                                        **await self._spend_evidence(rec)}
+                                        **await self._spend_evidence(rec),
+                                        **estimate_evidence(rec, s.id)}
                 await self._mark_awaiting(rec, s, GATE_STATUS, gate_ctx=gate_ctx)
                 # #1468 — the gate firing IS a decision being asked: open its
                 # review record (advisory — the queue stays the source of truth).
@@ -2336,10 +2342,8 @@ class PipelineBridge:
         local builtin engine): nothing to cap, nothing to look up.
         """
         try:
-            from cairn.core.backend_selection import selected  # noqa: PLC0415 - cycle: selection → profile → pack
-
-            key = "ml_target" if self._leg_flow_kind(s) == "ml" else "dataflow_target"
-            return str(selected(key, default="") or "").strip()
+            # ADR-0151 D1 — the one selection, shared with the launch door's pricing.
+            return compute_target_for_kind(self._leg_flow_kind(s))
         except Exception:  # noqa: BLE001 — an unreadable selection means "no target"
             logger.debug("could not resolve the compute target for leg %s",
                          getattr(s, "ref", ""), exc_info=True)
@@ -2563,7 +2567,9 @@ class PipelineBridge:
             s.ref, inputs=resolved, engine=engine,
             run_id=run.id,
             series_id=series_id,
-            estimated_usd=float(gov.get("estimated_usd", 0.0) or 0.0),
+            # ADR-0151 D2/D5 — a priced leg reserves its RECORDED estimate and settles
+            # its box time; any other leg reserves `governance.estimated_usd` as before.
+            **leg_price_kwargs(rec, s.id, run),
             spent_usd=spent_usd,
             budget_usd=budget_usd,
             # #1288 — the declared leg timeout IS the poll budget; without one,

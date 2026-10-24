@@ -53,6 +53,11 @@ class AdmissionDecision:
     environment: str = ""
     workspace_id: str = ""
     decided_at: str = ""
+    #: ADR-0151 D2 — the launch door's estimate for the legs on a priced box:
+    #: ``{estimate_usd, legs: [{step, priced, connection, hourly_usd, hours,
+    #: estimate_usd, basis}]}``; recorded once, read by the legs, never re-derived.
+    #: Empty (and absent from the record) when no leg has a compute target.
+    cost_estimate: dict[str, Any] = field(default_factory=dict)
 
     @property
     def refused(self) -> bool:
@@ -72,6 +77,7 @@ class AdmissionDecision:
             "environment": self.environment,
             "workspace_id": self.workspace_id,
             "decided_at": self.decided_at,
+            **({"cost_estimate": dict(self.cost_estimate)} if self.cost_estimate else {}),
         }
 
 
