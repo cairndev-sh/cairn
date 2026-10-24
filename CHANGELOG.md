@@ -104,6 +104,9 @@ A minor release: it changes behaviour that operators, operator packs and library
 - The installer (`https://docs.cairndev.sh/install.sh`) installs from PyPI by default; every package is published there from 0.1.3. `CAIRN_RELEASE=<version>` still takes cairn's wheels from that GitHub Release, which is the way to install a version before 0.1.3.
 - The CI gate examples (`examples/ci/`) install `cairndev`; they named the bare `cairn` distribution, which on PyPI is an unrelated project.
 
+### Fixed
+- Failed and retried flow-leg attempts now retain known partial spend in run cost accounting and subsequent budget reservations.
+
 ## [0.1.3]
 
 ### Security

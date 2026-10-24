@@ -99,14 +99,15 @@ def _handle(workdir="/jobs/x") -> EngineJobHandle:
 ])
 def test_poll_maps_remote_states(monkeypatch, remote_state, expect_state, retriable):
     async def fake_poll(jh, inp, ctx):
-        return JobStatus(state=remote_state, metrics={"stage": "pii.redact"},
+        return JobStatus(state=remote_state,
+                         metrics={"stage": "pii.redact", "cost_usd": 0.25},
                          error="boom" if remote_state == "failed" else None,
                          retriable=retriable)
     monkeypatch.setattr(remote_exec, "_poll", fake_poll)
 
     status = asyncio.run(BuiltinSshEngine("fixbox").poll(_handle()))
     assert status.state == expect_state
-    assert status.metrics == {"stage": "pii.redact"}
+    assert status.metrics == {"stage": "pii.redact", "cost_usd": 0.25}
     if expect_state == "failed":
         assert status.error == "boom" and status.retriable is True
 

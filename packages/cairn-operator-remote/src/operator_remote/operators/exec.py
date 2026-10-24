@@ -307,7 +307,10 @@ async def _poll(handle: JobHandle, inp: RemoteExecInput, ctx: OperationContext) 
     code = int(code_out.split()[0])
     if code != 0:
         tail = (await conn.run(f"tail -c 1500 {q}/stdout.log 2>/dev/null", check=False)).stdout
-        return JobStatus(state="failed", error=f"remote command exit {code}: ...{tail[-500:]}")
+        return JobStatus(
+            state="failed", error=f"remote command exit {code}: ...{tail[-500:]}",
+            metrics=await _read_metrics(conn, q),
+        )
     # success → fetch outputs + any metrics.json
     fetch_dir = os.path.join(tempfile.gettempdir(), f"cairn-remote-{workdir.rsplit('/', 1)[-1]}")
     os.makedirs(fetch_dir, exist_ok=True)

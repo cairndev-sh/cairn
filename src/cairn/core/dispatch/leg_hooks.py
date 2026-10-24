@@ -60,20 +60,16 @@ def flow_leg_record(step_output: Any, outcome: Any) -> dict:
     """The terminal ``result_payloads`` + ``cost`` of a flow leg's ``Run`` — ONE
     shape for both owners (#1441).
 
-    A succeeded leg's cost is what its engine REPORTED (``LegOutcome.cost_usd`` ←
-    ``DataflowResult.cost_usd``), carried under the explicit ``llm_cost_usd`` key
-    ``_aggregate_cost`` reads; it is never scanned out of the leg's stats or
-    findings. A failed leg writes no cost: its partial spend is unknown, not $0 —
-    and neither does a leg whose engine reported none (a GPU train stage today):
-    an explicit $0 would read as "free".
+    A leg's cost is what its engine REPORTED (``LegOutcome.cost_usd`` ←
+    ``DataflowResult.cost_usd`` or partial terminal metrics), carried under the
+    explicit ``llm_cost_usd`` key ``_aggregate_cost`` reads; it is never scanned
+    out of the leg's stats or findings. Unknown cost remains absent, not $0.
     """
     payload: dict[str, Any] = {
         "output": step_output,
         "stats": dict(getattr(outcome, "stats", None) or {}),
         "metrics": dict(getattr(outcome, "metrics", None) or {}),
     }
-    if not getattr(outcome, "ok", False):
-        return {"result_payloads": [payload]}
     from cairn.core.dispatch.dispatcher import _aggregate_cost  # noqa: PLC0415 — cycle: dispatcher → bridge → here
 
     payload["llm_cost_usd"] = round(float(getattr(outcome, "cost_usd", 0.0) or 0.0), 6)

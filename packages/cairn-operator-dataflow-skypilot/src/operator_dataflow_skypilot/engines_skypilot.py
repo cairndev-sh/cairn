@@ -930,6 +930,12 @@ class SkyPilotEngine:
         if state in TERMINAL:
             # success, failure and cancellation alike give the machine back
             await self._teardown(handle, reason=state, record=record)
+            workdir = str(handle.meta.get("workdir") or "") or remote_workdir(cluster)
+            fetched_metrics = results.read_metrics(fetch_dir(workdir))
+            partial_cost = fetched_metrics.get("cost_usd") if isinstance(fetched_metrics, dict) else None
+            if (isinstance(partial_cost, (int, float)) and not isinstance(partial_cost, bool)
+                    and 0 < partial_cost < float("inf")):
+                metrics["cost_usd"] = round(float(partial_cost), 6)
         error = ""
         if state == "failed":
             error = (f"skypilot job on {cluster} ended "

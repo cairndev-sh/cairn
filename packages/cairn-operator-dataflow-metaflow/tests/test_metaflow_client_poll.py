@@ -12,6 +12,7 @@ PERSISTED handle's meta (#1239) — the only channel a stranger actually has.
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import os
 import sys
@@ -91,13 +92,15 @@ def test_workdir_files_still_beat_the_client(tmp_path, monkeypatch):
     """On the SUBMITTING box the files carry nuance the client lacks
     (cancelled, stage progress) — presence of progress.json wins."""
     (tmp_path / "progress.json").write_text(
-        json.dumps({"state": "cancelled", "stages_done": 1, "stages_total": 3}),
+        json.dumps({"state": "cancelled", "stages_done": 1,
+                    "stages_total": 3, "cost_usd": 0.18}),
         encoding="utf-8")
     eng = MetaflowEngine(**CROSS_BOX)
     monkeypatch.setattr(eng, "_status_from_client",
                         lambda h: pytest.fail("client consulted despite local files"))
     st = asyncio.run(eng.poll(_handle(tmp_path)))
     assert st.state == "cancelled"
+    assert st.metrics["cost_usd"] == 0.18
 
 
 def test_client_cannot_say_keeps_running(tmp_path, monkeypatch):
@@ -111,12 +114,18 @@ def test_client_cannot_say_keeps_running(tmp_path, monkeypatch):
 
 # ── the client mapping itself ────────────────────────────────────────────────
 
-def _fake_metaflow(monkeypatch, *, finished: bool, successful: bool = False):
+def _fake_metaflow(monkeypatch, *, finished: bool, successful: bool = False,
+                   partial_cost_usd: float | None = None):
     mod = types.ModuleType("metaflow")
 
     class _Run:
         def __init__(self, spec):
             self.finished, self.successful = finished, successful
+            self._data = types.SimpleNamespace(partial_cost_usd=partial_cost_usd)
+
+        def __getitem__(self, step_name):
+            assert step_name == "execute"
+            return types.SimpleNamespace(task=types.SimpleNamespace(data=self._data))
 
     mod.Run = _Run
     mod.namespace = lambda ns: None
@@ -132,6 +141,57 @@ def test_client_status_mapping(tmp_path, monkeypatch, finished, successful, expe
     eng = MetaflowEngine(**CROSS_BOX)
     st = eng._status_from_client(_handle(tmp_path, pathspec="CairnFlow/9"))
     assert st is not None and st.state == expect
+
+
+def test_failed_client_status_reads_persisted_partial_cost(tmp_path, monkeypatch):
+    _fake_metaflow(monkeypatch, finished=True, partial_cost_usd=0.37)
+    eng = MetaflowEngine(**CROSS_BOX)
+    st = eng._status_from_client(_handle(tmp_path, pathspec="CairnFlow/9"))
+    assert st is not None and st.state == "failed"
+    assert st.metrics == {"cost_usd": 0.37}
+
+
+def test_bridge_persists_partial_cost_on_failed_metaflow_task(tmp_path, monkeypatch):
+    mod = types.ModuleType("metaflow")
+
+    class _FlowSpec:
+        def next(self, step):
+            self.next_step = step
+
+    mod.FlowSpec = _FlowSpec
+    mod.Parameter = lambda *args, **kwargs: None
+    mod.step = lambda fn: fn
+    monkeypatch.setitem(sys.modules, "metaflow", mod)
+    module_name = "operator_dataflow_metaflow.metaflow_bridge"
+    monkeypatch.delitem(sys.modules, module_name, raising=False)
+
+    try:
+        bridge = importlib.import_module(module_name)
+
+        def fail_after_paid_call(spec, workdir, *, on_progress):
+            on_progress({"stage": "paid", "cost_usd": 0.37})
+            (workdir / "metrics.json").write_text('{"cost_usd": 0.37}', encoding="utf-8")
+            raise RuntimeError("stage failed after paid call")
+
+        monkeypatch.setattr(bridge, "run_dataflow", fail_after_paid_call)
+        flow = bridge.CairnFlow()
+        flow.spec = {"stages": [{"stage": "paid"}]}
+        flow.workdir = str(tmp_path)
+
+        flow.execute()
+
+        assert flow.partial_cost_usd == 0.37
+        assert json.loads((tmp_path / "progress.json").read_text(encoding="utf-8"))[
+            "cost_usd"] == 0.37
+        assert json.loads((tmp_path / "result.json").read_text(encoding="utf-8")) == {
+            "error": "RuntimeError: stage failed after paid call",
+        }
+        flow.finish()
+        assert flow.next_step == flow.end
+        with pytest.raises(RuntimeError, match="stage failed after paid call"):
+            flow.end()
+    finally:
+        sys.modules.pop(module_name, None)
 
 
 def test_client_status_is_deliberately_coarse(tmp_path, monkeypatch):
