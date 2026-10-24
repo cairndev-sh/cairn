@@ -5,7 +5,13 @@ they must produce identical, size-capped ``node`` payloads regardless of runtime
 """
 from __future__ import annotations
 
-from cairn.core.runtime.node_events import bound_node_output, node_event_data
+from types import SimpleNamespace
+
+from cairn.core.runtime.node_events import (
+    bound_node_output,
+    llm_cost_from_node_events,
+    node_event_data,
+)
 
 
 def test_bound_node_output_drops_empty():
@@ -38,3 +44,27 @@ def test_node_event_data_omits_empty_output():
     d = node_event_data("dispatch", {})
     assert d == {"node": "dispatch", "state": "done"}
     assert "output" not in d
+
+
+def test_node_event_data_includes_llm_cost_when_provided():
+    d = node_event_data("answer", {}, llm_cost_usd=0.123456)
+    assert d == {"node": "answer", "state": "done", "llm_cost_usd": 0.123456}
+
+
+def test_node_events_sum_last_cost_per_node():
+    events = [
+        SimpleNamespace(type="node", data={"node": "answer", "llm_cost_usd": 0.1}),
+        SimpleNamespace(type="node", data={"node": "search", "llm_cost_usd": 0.3}),
+        SimpleNamespace(type="node", data={"node": "answer", "llm_cost_usd": 0.05}),
+        SimpleNamespace(type="running", data={"llm_cost_usd": 10.0}),
+    ]
+    assert llm_cost_from_node_events(events) == 0.35
+
+
+def test_node_event_zero_cost_replaces_prior_attempt():
+    events = [
+        SimpleNamespace(type="node", data={"node": "answer", "llm_cost_usd": 0.1}),
+        SimpleNamespace(type="node", data={"node": "answer", "llm_cost_usd": 0.0}),
+    ]
+    assert node_event_data("answer", {}, llm_cost_usd=0.0)["llm_cost_usd"] == 0.0
+    assert llm_cost_from_node_events(events) == 0.0

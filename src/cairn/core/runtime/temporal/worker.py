@@ -163,9 +163,16 @@ def _wrap_node_for_events(runnable: Any, node_name: str) -> None:
 
     @functools.wraps(orig)
     async def _emitting(*args: Any, **kwargs: Any) -> Any:
-        out = await orig(*args, **kwargs)
+        from cairn.core import obs  # noqa: PLC0415 — worker node-local accounting
+
+        with obs.cost_scope(f"temporal-node-{node_name}") as cost_ctx:
+            out = await orig(*args, **kwargs)
         try:
-            await _record_node_event(node_name, out if isinstance(out, dict) else {})
+            await _record_node_event(
+                node_name,
+                out if isinstance(out, dict) else {},
+                llm_cost_usd=cost_ctx.cost_usd,
+            )
         except Exception:  # noqa: BLE001 — a node's real work already succeeded
             pass
         return out

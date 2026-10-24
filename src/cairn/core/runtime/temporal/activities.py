@@ -43,7 +43,12 @@ from temporalio import activity  # noqa: E402
 _STORE: Any = None
 
 
-async def _record_node_event(node_name: str, delta: dict[str, Any]) -> None:
+async def _record_node_event(
+    node_name: str,
+    delta: dict[str, Any],
+    *,
+    llm_cost_usd: float | None = None,
+) -> None:
     """Append a per-node event to the run/event store from the WORKER (#415).
 
     The in-process node sink (``dispatcher._node_sink``) can't reach this
@@ -74,7 +79,13 @@ async def _record_node_event(node_name: str, delta: dict[str, Any]) -> None:
     except Exception as e:  # noqa: BLE001
         logger.debug("run_node store init failed (node=%s): %s", node_name, e)
         return
-    await record_node_event(run_id, node_name, delta, store=_STORE)
+    await record_node_event(
+        run_id,
+        node_name,
+        delta,
+        store=_STORE,
+        llm_cost_usd=llm_cost_usd,
+    )
 
 
 @activity.defn(name="cairn.surface_approval")

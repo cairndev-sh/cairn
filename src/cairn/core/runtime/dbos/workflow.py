@@ -19,7 +19,9 @@ idempotency instead.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from functools import wraps
 from typing import Any
 
 from cairn.core.runtime.dbos import require
@@ -31,6 +33,33 @@ from dbos import DBOS  # noqa: E402
 
 # Topic the HITL decision is delivered on (DBOSRuntime.resume → DBOS.send).
 APPROVE_TOPIC = "approve"
+
+
+def _wrap_nodes_for_costs(graph: Any) -> None:
+    """Capture async node spend into the stream's per-node cost collector."""
+    from cairn.core import obs
+    from cairn.core.runtime.node_stream import record_node_cost
+
+    def wrap(orig: Any, node_name: str) -> Any:
+        @wraps(orig)
+        async def _costed(*args: Any, **kwargs: Any) -> Any:
+            with obs.cost_scope(f"dbos-node-{node_name}") as cost_ctx:
+                output = await orig(*args, **kwargs)
+            record_node_cost(node_name, cost_ctx.cost_usd)
+            return output
+
+        _costed._cairn_cost_wrapper = True
+        return _costed
+
+    for node_name, node in graph.builder.nodes.items():
+        runnable = getattr(node, "runnable", node)
+        orig = getattr(runnable, "afunc", None)
+        if (
+            orig is not None
+            and asyncio.iscoroutinefunction(orig)
+            and not getattr(orig, "_cairn_cost_wrapper", False)
+        ):
+            runnable.afunc = wrap(orig, node_name)
 
 
 @DBOS.workflow(name="cairn.run_template")
@@ -61,9 +90,15 @@ async def run_template(
     # only for the ainvoke segment, never across a HITL wait.
     from cairn.core.runtime.checkpointer import checkpoint_session  # noqa: PLC0415
     from cairn.core.runtime.node_record import record_node_event  # noqa: PLC0415
-    from cairn.core.runtime.node_stream import adrive, node_sink_scope  # noqa: PLC0415
+    from cairn.core.runtime.node_stream import (  # noqa: PLC0415
+        adrive,
+        node_cost_scope,
+        node_sink_scope,
+        take_node_cost,
+    )
 
     cfg = {"configurable": {"thread_id": run_id}}
+    _wrap_nodes_for_costs(graph)
 
     # #1865 — this body runs on DBOS's background loop, a different thread from
     # the dispatcher, so its contextvar node sink never reaches here: a DBOS run
@@ -73,7 +108,13 @@ async def run_template(
     # light up too) — the same path the in-process runtime takes. On crash
     # recovery the re-run nodes are recorded again, which is the honest trace.
     async def _sink(node_name: str, output: Any = None) -> None:
-        await record_node_event(run_id, node_name, output, store=store)
+        await record_node_event(
+            run_id,
+            node_name,
+            output,
+            store=store,
+            llm_cost_usd=take_node_cost(node_name),
+        )
 
     # Segment 1 — initial run (or resume-from-checkpoint on DBOS crash recovery,
     # which re-runs this body from the top: if a checkpoint already exists for
@@ -82,7 +123,7 @@ async def run_template(
         g = graph.builder.compile(checkpointer=saver)
         snapshot = await g.aget_state(cfg)
         resuming = getattr(snapshot, "created_at", None) is not None
-        with node_sink_scope(_sink):
+        with node_cost_scope(), node_sink_scope(_sink):
             result = await adrive(g, None if resuming else initial_state, cfg)
 
     # HITL (ADR-0034): a paused approval interrupt durably waits for a decision
@@ -107,7 +148,7 @@ async def run_template(
         decision = await DBOS.recv_async(APPROVE_TOPIC, timeout_seconds=86400)
         async with checkpoint_session() as saver:
             g = graph.builder.compile(checkpointer=saver)
-            with node_sink_scope(_sink):
+            with node_cost_scope(), node_sink_scope(_sink):
                 result = await adrive(g, Command(resume=decision), cfg)
     return dict(result)
 

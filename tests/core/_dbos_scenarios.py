@@ -64,6 +64,21 @@ def _nongated():
     return g.compile()
 
 
+def _costed():
+    from cairn.core import obs
+    from langgraph.graph import END, START, StateGraph
+
+    async def n(state: S) -> dict:
+        obs.record_llm("test-model", 10, 5, 0.0, usd=0.125)
+        return {"final_output": f"ran:{state.get('x')}"}
+
+    graph = StateGraph(S)
+    graph.add_node("n", n)
+    graph.add_edge(START, "n")
+    graph.add_edge("n", END)
+    return graph.compile()
+
+
 def _gated_sync(d: Path):
     # Gated graph compiled with a SYNC SqliteSaver — exactly what the compiler
     # produces; run_template recompiles it to async at runtime.
@@ -360,6 +375,30 @@ async def node_events(d: Path) -> bool:
     return r.get("final_output") == "ran:3" and nodes == ["n"] and bool(beat)
 
 
+async def node_events_cost(d: Path) -> bool:
+    from cairn.core.runtime.dbos.registry import set_run_store
+    from cairn.core.runtime.dbos.runtime import DBOSRuntime
+    from cairn.core.storage import default_store
+    from cairn.core.storage.protocols import Run, TriggerEvent
+    store = default_store()
+    set_run_store(store)
+    await store.create(
+        Run(id="nec", trigger=TriggerEvent(source="manual", payload={}), status="running")
+    )
+    result = await DBOSRuntime().invoke(
+        _costed(),
+        {"x": 3},
+        run_id="nec",
+        template_name="cost",
+        template_sha="s",
+    )
+    events = await store.get_events("nec")
+    node_events = [event.data for event in events if event.type == "node"]
+    cost = node_events[0].get("llm_cost_usd") if node_events else None
+    print("result", result.get("final_output"), "node cost", cost)
+    return result.get("final_output") == "ran:3" and cost == 0.125
+
+
 async def graceful_cancel(d: Path) -> bool:
     """#1872 — what a graceful shutdown does: uvicorn's ``asyncio.run()`` cancels
     every task left on the loop. With the sync ``start_workflow`` the workflow
@@ -453,6 +492,7 @@ SCENARIOS = {
     "rebuild": registry_rebuild,
     "composed_ungated": composed_ungated,
     "node_events": node_events,
+    "node_events_cost": node_events_cost,
     "graceful_cancel": graceful_cancel,
 }
 

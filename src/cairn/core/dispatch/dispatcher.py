@@ -58,6 +58,7 @@ from cairn.core.obs.metrics import record_run
 from cairn.core.obs.telemetry import current_trace_id, span
 from cairn.core.runtime.node_events import (
     bound_node_output as _bound_node_output,  # re-exported for tests + back-compat
+    llm_cost_from_node_events,
     node_event_data,
 )
 from cairn.core.workspace import current_workspace, scoped_workspace, workspace_scope
@@ -164,22 +165,8 @@ def _aggregate_cost(payloads: list[dict]) -> dict[str, float]:
 
 
 def _llm_cost_from_node_events(events: list) -> float:
-    """#530 — sum the per-node LLM spend the WORKER recorded on ``node`` events.
-
-    Under Temporal the LLM calls run in worker activities (``run_node``), outside
-    the server's cost scope, so the server-side tally is 0. Each ``run_node``
-    measures its node's spend and rides it out on the node event as
-    ``llm_cost_usd``; this sums it back into the run cost. Takes the LAST value per
-    node so a Temporal RETRY (which re-emits a node event) can't double-count. The
-    in-process path emits no ``llm_cost_usd`` on its events → returns 0 there."""
-    last: dict[str, float] = {}
-    for e in events:
-        if getattr(e, "type", None) != "node":
-            continue
-        data = getattr(e, "data", None)
-        if isinstance(data, dict) and isinstance(data.get("llm_cost_usd"), (int, float)):
-            last[data.get("node") or ""] = float(data["llm_cost_usd"])
-    return round(sum(last.values()), 6)
+    """Sum the latest measured LLM spend for each node."""
+    return llm_cost_from_node_events(events)
 
 
 def _cost_baseline_best_effort(cost: dict[str, float]) -> Optional[float]:
