@@ -66,13 +66,14 @@ def node_event_data(
     output: Any = None,
     *,
     llm_cost_usd: float | None = None,
+    state: str = "done",
 ) -> dict[str, Any]:
     """Build the bounded ``node`` event payload and any measured LLM cost.
 
     ``output`` is the node's state-update delta; it's included (bounded) only when
-    non-empty. A supplied cost is included even when zero so a later retry can
-    replace an earlier attempt's cost."""
-    data: dict[str, Any] = {"node": node_name, "state": "done"}
+    non-empty. A supplied cost is included even when zero so zero-cost attempts
+    remain visible in the cumulative run total."""
+    data: dict[str, Any] = {"node": node_name, "state": state}
     summary = bound_node_output(output)
     if summary is not None:
         data["output"] = summary
@@ -82,15 +83,15 @@ def node_event_data(
 
 
 def llm_cost_from_node_events(events: list[Any]) -> float:
-    """Sum measured LLM spend, retaining only the last event for each node."""
-    last: dict[str, float] = {}
+    """Sum every measured node attempt, including loops and retries."""
+    total = 0.0
     for event in events:
         if getattr(event, "type", None) != "node":
             continue
         data = getattr(event, "data", None)
         if isinstance(data, dict) and isinstance(data.get("llm_cost_usd"), (int, float)):
-            last[data.get("node") or ""] = float(data["llm_cost_usd"])
-    return round(sum(last.values()), 6)
+            total += float(data["llm_cost_usd"])
+    return round(total, 6)
 
 
 __all__ = ["bound_node_output", "llm_cost_from_node_events", "node_event_data"]

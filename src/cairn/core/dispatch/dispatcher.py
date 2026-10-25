@@ -165,7 +165,7 @@ def _aggregate_cost(payloads: list[dict]) -> dict[str, float]:
 
 
 def _llm_cost_from_node_events(events: list) -> float:
-    """Sum the latest measured LLM spend for each node."""
+    """Sum measured LLM spend from every node attempt."""
     return llm_cost_from_node_events(events)
 
 
@@ -1186,7 +1186,14 @@ class RunDispatcher:
                                 co.setdefault(_op, {}).setdefault("model", eval_model)
                         run_inputs = {**inputs, "config_overrides": co}
                     from cairn.core.operator.runtime import launch_scope  # noqa: PLC0415 — ADR-0120 D7 (#2455)
-                    with obs.cost_scope(f"run-{template_ref}") as cost_ctx, sandbox_ctx, \
+                    run_cap = getattr(
+                        getattr(getattr(compiled, "spec", None), "budget", None),
+                        "max_cost_usd",
+                        None,
+                    )
+                    with obs.cost_scope(
+                        f"run-{template_ref}", max_cost_usd=run_cap
+                    ) as cost_ctx, sandbox_ctx, \
                             launch_scope(self.launch_handle()):
                         try:
                             output = await run_within_budget(
@@ -1232,10 +1239,17 @@ class RunDispatcher:
                     # cost.total_usd reflects real spend instead of $0.00.
                     # run_llm_usd = server-side cost scope (works for in_process).
                     # Under Temporal the LLM calls run in the WORKER, so the spend
-                    # rides on the run's `node` events instead — sum that and take
-                    # the larger, so BOTH runtimes report real cost.
+                    # rides on the run's `node` events instead. DBOS folds its
+                    # non-enforcing node meters into this run scope; using those
+                    # events too would double-count the same calls.
                     worker_llm_usd = _llm_cost_from_node_events(await self.store.get_events(inv.id))
-                    llm_usd = max(run_llm_usd, worker_llm_usd)
+                    runtime_name = _settings.runtime()
+                    if runtime_name == "temporal":
+                        llm_usd = worker_llm_usd
+                    elif runtime_name == "dbos":
+                        llm_usd = run_llm_usd or worker_llm_usd
+                    else:
+                        llm_usd = round(run_llm_usd + worker_llm_usd, 6)
                     payloads = [{"template_name": template_ref,
                                  "output": _json_safe(output),
                                  "llm_cost_usd": llm_usd}]

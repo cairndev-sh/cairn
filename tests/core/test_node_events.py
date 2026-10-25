@@ -51,20 +51,28 @@ def test_node_event_data_includes_llm_cost_when_provided():
     assert d == {"node": "answer", "state": "done", "llm_cost_usd": 0.123456}
 
 
-def test_node_events_sum_last_cost_per_node():
+def test_node_events_sum_every_cost_per_node():
     events = [
         SimpleNamespace(type="node", data={"node": "answer", "llm_cost_usd": 0.1}),
         SimpleNamespace(type="node", data={"node": "search", "llm_cost_usd": 0.3}),
         SimpleNamespace(type="node", data={"node": "answer", "llm_cost_usd": 0.05}),
         SimpleNamespace(type="running", data={"llm_cost_usd": 10.0}),
     ]
-    assert llm_cost_from_node_events(events) == 0.35
+    assert llm_cost_from_node_events(events) == 0.45
 
 
-def test_node_event_zero_cost_replaces_prior_attempt():
+def test_node_event_zero_cost_is_an_attempt_cost():
     events = [
         SimpleNamespace(type="node", data={"node": "answer", "llm_cost_usd": 0.1}),
         SimpleNamespace(type="node", data={"node": "answer", "llm_cost_usd": 0.0}),
     ]
     assert node_event_data("answer", {}, llm_cost_usd=0.0)["llm_cost_usd"] == 0.0
-    assert llm_cost_from_node_events(events) == 0.0
+    assert llm_cost_from_node_events(events) == 0.1
+
+
+def test_node_event_can_record_a_failed_attempt():
+    assert node_event_data("answer", {}, llm_cost_usd=0.1, state="failed") == {
+        "node": "answer",
+        "state": "failed",
+        "llm_cost_usd": 0.1,
+    }

@@ -399,6 +399,33 @@ async def node_events_cost(d: Path) -> bool:
     return result.get("final_output") == "ran:3" and cost == 0.125
 
 
+async def run_cap(d: Path) -> bool:
+    """A run cap is enforced after DBOS folds a node meter into its parent."""
+    from cairn.core import obs
+    from cairn.core.runtime.dbos.registry import set_run_store
+    from cairn.core.runtime.dbos.runtime import DBOSRuntime
+    from cairn.core.storage import default_store
+    from cairn.core.storage.protocols import Run, TriggerEvent
+
+    store = default_store()
+    set_run_store(store)
+    await store.create(
+        Run(id="cap", trigger=TriggerEvent(source="manual", payload={}), status="running")
+    )
+    try:
+        with obs.cost_scope("run-cap", max_cost_usd=0.1):
+            await DBOSRuntime().invoke(
+                _costed(),
+                {"x": 3},
+                run_id="cap",
+                template_name="cost-cap",
+                template_sha="s",
+            )
+    except obs.BudgetExceeded:
+        return True
+    return False
+
+
 async def graceful_cancel(d: Path) -> bool:
     """#1872 — what a graceful shutdown does: uvicorn's ``asyncio.run()`` cancels
     every task left on the loop. With the sync ``start_workflow`` the workflow
@@ -493,6 +520,7 @@ SCENARIOS = {
     "composed_ungated": composed_ungated,
     "node_events": node_events,
     "node_events_cost": node_events_cost,
+    "run_cap": run_cap,
     "graceful_cancel": graceful_cancel,
 }
 

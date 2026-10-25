@@ -48,6 +48,7 @@ async def _record_node_event(
     delta: dict[str, Any],
     *,
     llm_cost_usd: float | None = None,
+    state: str = "done",
 ) -> None:
     """Append a per-node event to the run/event store from the WORKER (#415).
 
@@ -85,6 +86,7 @@ async def _record_node_event(
         delta,
         store=_STORE,
         llm_cost_usd=llm_cost_usd,
+        state=state,
     )
 
 

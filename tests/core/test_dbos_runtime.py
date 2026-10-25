@@ -161,6 +161,11 @@ def test_dbos_node_events_capture_llm_cost(tmp_path):
     assert "RESULT: PASS" in r.stdout, r.stdout + r.stderr
 
 
+def test_dbos_run_cap_is_enforced_after_node_metering(tmp_path):
+    r = _run("run_cap", tmp_path / "run-cap")
+    assert "RESULT: PASS" in r.stdout, r.stdout + r.stderr
+
+
 def test_dbos_graceful_shutdown_leaves_the_workflow_pending(tmp_path):
     """#1872 — cancelling every task on the loop (what uvicorn's asyncio.run does
     on SIGTERM) must leave a parked workflow PENDING, not ERROR. The sync

@@ -36,19 +36,73 @@ APPROVE_TOPIC = "approve"
 
 
 def _wrap_nodes_for_costs(graph: Any) -> None:
-    """Capture async node spend into the stream's per-node cost collector."""
+    """Measure each node without turning the run cap into a node cap.
+
+    DBOS copies the dispatcher's observability context into its workflow task.
+    Each node therefore meters in a non-enforcing child scope, folds that scope
+    back into the run context, and queues the same amount for its node event.
+    The wrapper is idempotent because the compiled graph is shared by runs.
+    """
     from cairn.core import obs
     from cairn.core.runtime.node_stream import record_node_cost
+
+    def settle(
+        node_name: str,
+        outer: obs.RequestCtx | None,
+        measured: obs.RequestCtx,
+    ) -> None:
+        record_node_cost(node_name, measured.cost_usd)
+        if outer is not None:
+            obs.merge_cost(outer, measured)
 
     def wrap(orig: Any, node_name: str) -> Any:
         @wraps(orig)
         async def _costed(*args: Any, **kwargs: Any) -> Any:
-            with obs.cost_scope(f"dbos-node-{node_name}") as cost_ctx:
-                output = await orig(*args, **kwargs)
-            record_node_cost(node_name, cost_ctx.cost_usd)
+            outer = obs.get()
+            cost_ctx: obs.RequestCtx | None = None
+            try:
+                with obs.cost_scope(
+                    f"dbos-node-{node_name}", enforce_cap=False
+                ) as cost_ctx:
+                    output = await orig(*args, **kwargs)
+            except BaseException:
+                # Preserve the node's original failure while retaining spend
+                # already incurred by a failed attempt in the run meter.
+                if cost_ctx is not None:
+                    try:
+                        settle(node_name, outer, cost_ctx)
+                    except BaseException:  # noqa: BLE001 — accounting never masks node failure
+                        pass
+                raise
+            assert cost_ctx is not None
+            settle(node_name, outer, cost_ctx)
             return output
 
-        _costed._cairn_cost_wrapper = True
+        setattr(_costed, "_cairn_cost_wrapper", True)
+        return _costed
+
+    def wrap_sync(orig: Any, node_name: str) -> Any:
+        @wraps(orig)
+        def _costed(*args: Any, **kwargs: Any) -> Any:
+            outer = obs.get()
+            cost_ctx: obs.RequestCtx | None = None
+            try:
+                with obs.cost_scope(
+                    f"dbos-node-{node_name}", enforce_cap=False
+                ) as cost_ctx:
+                    output = orig(*args, **kwargs)
+            except BaseException:
+                if cost_ctx is not None:
+                    try:
+                        settle(node_name, outer, cost_ctx)
+                    except BaseException:  # noqa: BLE001 — accounting never masks node failure
+                        pass
+                raise
+            assert cost_ctx is not None
+            settle(node_name, outer, cost_ctx)
+            return output
+
+        setattr(_costed, "_cairn_cost_wrapper", True)
         return _costed
 
     for node_name, node in graph.builder.nodes.items():
@@ -60,6 +114,10 @@ def _wrap_nodes_for_costs(graph: Any) -> None:
             and not getattr(orig, "_cairn_cost_wrapper", False)
         ):
             runnable.afunc = wrap(orig, node_name)
+            continue
+        orig = getattr(runnable, "func", None)
+        if orig is not None and callable(orig) and not getattr(orig, "_cairn_cost_wrapper", False):
+            runnable.func = wrap_sync(orig, node_name)
 
 
 @DBOS.workflow(name="cairn.run_template")
