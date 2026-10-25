@@ -544,3 +544,41 @@ async def test_builtin_paid_stage_failure_reaches_run_cost(monkeypatch, tmp_path
             job = engines_module._PROCS.pop(out.handle.job_id, None)
             if job is not None:
                 shutil.rmtree(job["workdir"], ignore_errors=True)
+
+
+async def test_submit_engine_error_fails_the_leg_releases_and_never_retries(monkeypatch):
+    """A refusal raised by ``engine.submit`` (e.g. the SSH engine's image mode
+    with no image named, ADR-0150 D1) is a failed leg: its reservation is
+    released, nothing is settled, and the default data-leg retry does not
+    submit again — a configuration refusal is not transient."""
+    from cairn.core.dataflow import EngineError
+
+    _stub_resolution(monkeypatch)
+    ledger = {"reserved": 0, "released": 0, "settled": 0}
+
+    async def _reserve(*a, **k):
+        ledger["reserved"] += 1
+        return object()
+
+    async def _release(res):
+        ledger["released"] += 1
+
+    async def _settle(res, **k):
+        ledger["settled"] += 1
+
+    monkeypatch.setattr("cairn.core.dispatch.leg_executor.reserve", _reserve)
+    monkeypatch.setattr("cairn.core.dispatch.leg_executor.release", _release)
+    monkeypatch.setattr("cairn.core.dispatch.leg_executor.settle", _settle)
+
+    class _RefusingEngine(_FlakyEngine):
+        async def submit(self, spec, ctx):
+            self.submits += 1
+            raise EngineError("image mode but no image is named")
+
+    engine = _RefusingEngine()
+    out = await execute_leg(
+        "flow:demo/clean", inputs={}, engine=engine, run_id="r1", series_id="s1",
+    )
+    assert not out.ok and "no image is named" in out.error
+    assert engine.submits == 1
+    assert ledger == {"reserved": 1, "released": 1, "settled": 0}

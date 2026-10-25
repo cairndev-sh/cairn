@@ -47,6 +47,33 @@ async def _off_loop(fn: Callable[..., _T], *args: Any) -> _T:
     return await asyncio.to_thread(locked)
 
 
+#: What a job's env value reads as once it leaves the control plane (ADR-0149).
+HIDDEN = "[hidden]"
+
+
+def public_handle(handle: Optional[dict]) -> Optional[dict]:
+    """A step's engine job handle as the API serves it: every ``env`` mapping in
+    its ``meta`` keeps its NAMES with each value replaced by :data:`HIDDEN`.
+
+    Handles written before ADR-0149 still hold ``meta.exec_input.env`` (the job-channel
+    token, ``MLFLOW_TRACKING_PASSWORD``, forwarded settings); newer ones hold no values,
+    so they read unchanged. Storage is not rewritten: adopt and cancel read the stored
+    handle, which needs no env either. The one place a step handle leaves the control
+    plane is :func:`build_pipelines_router`'s record read."""
+    if not isinstance(handle, dict):
+        return handle
+
+    def mask(v: Any) -> Any:
+        if isinstance(v, dict):
+            return {k: ({n: HIDDEN for n in x} if k == "env" and isinstance(x, dict) else mask(x))
+                    for k, x in v.items()}
+        if isinstance(v, list):
+            return [mask(x) for x in v]
+        return v
+
+    return {**handle, "meta": mask(handle.get("meta") or {})} if "meta" in handle else handle
+
+
 def _valid_preset_name(name: str) -> bool:
     return bool(_PRESET_NAME.match(name or ""))
 
@@ -716,6 +743,11 @@ def build_pipelines_router(dispatcher, pipeline_bridge) -> APIRouter:
     async def get_pipeline(pipeline_id: str) -> dict[str, Any]:
         rec = await _pipeline_in_ws_or_404(pipeline_id)
         out = rec.model_dump(mode="json")
+        # ADR-0149 — a job's env values never leave the control plane, whatever an
+        # older handle recorded.
+        for st in (out.get("step_state") or {}).values():
+            if isinstance(st, dict) and st.get("handle"):
+                st["handle"] = public_handle(st["handle"])
         # #930 — enrich each step with a summary of its governed run (cost, failure
         # reason, final verdict) so the detail view shows real per-step info, not just
         # a status dot. Best-effort: a missing/pruned run just omits the summary; the

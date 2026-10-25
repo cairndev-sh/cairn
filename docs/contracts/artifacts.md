@@ -18,6 +18,18 @@
 Immutability: rows are written once (`ArtifactRecord` docstring). Retention: no registry
 retention policy exists (TARGET, #2196); `retention.py` covers run/event retention only.
 
+### Workspace scope — who sees a record, and whose tag moves (ADR-0147, ADR-0148)
+| Rule | Where |
+|---|---|
+| The artifact and tag methods (`register`, `get`, `find_by_uri`, `list_artifacts`, `lineage`, `resolve`, `promote`) take `workspace_id=` (keyword), else the workspace in scope (`scoped_workspace()`); with auth on and neither they raise `WorkspaceScopeRequired` before anything is read, relayed or written. The by-name dataset methods keep their `current_workspace()` fallback | `_artifact_workspace` in `src/cairn/core/storage/artifacts.py` |
+| `register` writes the registering workspace's own registration to `artifact_owners` (`kind`, `uri`, `stats`, `data_schema`, `size_bytes`, `row_count`, `producer_run_id`, `producer_job`, `account_id`, `created_at`, `durable_uri`), also for bytes already registered; identical bytes stay one `artifacts` row (the identity and the count) with one registration per workspace; a workspace keeps its first registration of the same bytes | `register` (both backends) |
+| Parents are recorded per registering workspace (`artifact_parents` keyed by `(workspace_id, child_id, parent_id)`); a record's `parents` are those the reader's workspace declared, independent of what other workspaces registered | `_parents_sql` |
+| `get`, `find_by_uri`, `list_artifacts`, `resolve`, `lineage` build each record from the reader's own registration; another workspace's artifact reads as not found; `find_by_uri` matches the reader's own URIs; the lineage tree walks only into artifacts the reader owns | `_OWNER_READ`, `_walk_lineage` |
+| `register_dataset_version` refuses an artifact the workspace does not own; version reads resolve their artifact in the version's workspace | dataset registry methods |
+| Tags are keyed by `(workspace_id, name)`; `resolve` reads and `promote` moves that workspace's tag; `promote` refuses (`KeyError`) an artifact the workspace does not own | `artifact_tags`, `resolve`, `promote` |
+| `count` is the deployment's row count | `count` |
+| Migration of an existing database (once): tags → `default`; owners backfilled with `default`, the producing run's workspace (runs in the same database) and every workspace with a dataset version of the artifact, each copying the existing registration; parents → every owner of their child | `_migrate_sqlite_workspace_scope`, `PostgresArtifactStore._ensure_owners` |
+
 ### `ArtifactDescriptor` — what an engine may say
 The only artifact-shaped thing that crosses the engine boundary
 (`src/cairn/core/dataflow/contract.py:226-250`): `uri, kind, content_hash, rows, size_bytes,

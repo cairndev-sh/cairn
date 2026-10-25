@@ -136,14 +136,19 @@ BACKENDS: list[BackendField] = [
     # to move the SSH path onto the CI-built image.
     BackendField(
         key="remote_exec_mode", label="Remote execution mode", group="Data plane", control="select",
-        options=_opts(("auto", "Auto (image when one is named)"), ("image", "Container image"), ("venv", "Legacy box virtualenv")),
+        options=_opts(("auto", "Auto (image when one is named)"), ("image", "Container image"), ("venv", "Box virtualenv")),
         default="auto", env="CAIRN_REMOTE_EXEC_MODE",
-        description="How the builtin SSH engine runs a flow on a compute.ssh box (ADR-0104 D1): 'image' runs the pinned cairn-train-gpu image via docker run --gpus all with the workdir bind-mounted and the live-channel env forwarded; 'venv' is the legacy hand-installed box virtualenv; 'auto' picks image when remote_image or the connection names one, else venv. A compute.ssh connection's own 'mode' key overrides this per box.",
+        description="How the builtin SSH engine runs a flow on a compute.ssh box (ADR-0104 D1): 'image' runs the named image via docker run --gpus all with the workdir bind-mounted and the live-channel env forwarded; 'venv' is the box's virtualenv; 'auto' picks image when remote_image or the connection names one, else venv. A compute.ssh connection's own 'mode' and 'image' override this per box. Image mode with no image named anywhere is refused at submit.",
     ),
     BackendField(
         key="remote_image", label="Remote execution image", group="Data plane", control="text",
         default="", env="CAIRN_TRAIN_IMAGE",
-        description="The container image the SSH engine runs on the box. Empty = the engine's pinned default (operator_dataflow.engines_ssh.DEFAULT_TRAIN_IMAGE). PIN A TAG, never :latest — the run record has to name the exact build that produced the artifacts; prod should pin the immutable ghcr.io/evs-cmd/cairn-train-gpu:<sha> tag the image workflow pushes. A compute.ssh connection's own 'image' key overrides this per box.",
+        description="The container image the SSH engine runs on the box. There is no default: with no image named here or on the connection, 'auto' runs the box's virtualenv and image mode is refused at submit. PIN A TAG, never :latest — the run record has to name the exact build that produced the artifacts; pin an immutable tag such as the image's :<sha>. A compute.ssh connection's own 'image' key overrides this per box.",
+    ),
+    BackendField(
+        key="remote_env", label="Env forwarded to the remote job", group="Data plane", control="text",
+        default="", env="CAIRN_REMOTE_ENV",
+        description="Comma- or space-separated NAMES of control-plane environment variables the builtin SSH engine passes to the job on the compute.ssh box (e.g. CAIRN_CHECKPOINT_BUCKET, CAIRN_CHECKPOINT_PREFIX, AWS_DEFAULT_REGION), in addition to the spec, the live channel and MLFLOW_*. Set ones only; values go in the job's owner-only runner.sh (or docker run -e NAME), never on a command line. A name that looks like a credential (KEY, SECRET, TOKEN, PASSWORD) or that the engine sets itself is refused and the flow does not start: credentials stay on the box (an instance role).",
     ),
     # ── Metaflow substrate (ADR-0089, #1345) — identity/compute split. Before
     # this block, `<kind>_target` was OVERLOADED as the Metaflow metadata root,

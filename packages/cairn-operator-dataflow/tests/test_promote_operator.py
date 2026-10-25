@@ -63,6 +63,34 @@ def test_promote_moves_tag_and_records_what_it_displaced():
         promote_mod._reset_store(None)
 
 
+def test_promote_moves_only_the_runs_workspace_tag():
+    """ADR-0147/0148 — the operator runs in its run's workspace: it moves that
+    workspace's tag and cannot point it at another workspace's artifact."""
+    from cairn.core.workspace import workspace_scope
+
+    store = SqliteArtifactStore()
+    promote_mod._reset_store(store)
+    try:
+        async def go():
+            with workspace_scope("ws-a"):
+                theirs = await _seed(store, "aaaa3333")
+                await ArtifactPromoteOp().run(
+                    ArtifactPromoteInput(tag="dataset@prod", artifact_id=theirs), _ctx())
+            with workspace_scope("ws-b"):
+                with pytest.raises(KeyError):
+                    await ArtifactPromoteOp().run(
+                        ArtifactPromoteInput(tag="dataset@prod", artifact_id=theirs), _ctx())
+                mine = await _seed(store, "bbbb4444")
+                out = await ArtifactPromoteOp().run(
+                    ArtifactPromoteInput(tag="dataset@prod", artifact_id=mine), _ctx())
+                assert out.previous_artifact_id == ""  # ws-a's tag is not this workspace's
+            assert (await store.resolve("dataset@prod", workspace_id="ws-a")).id == theirs
+            assert (await store.resolve("dataset@prod", workspace_id="ws-b")).id == mine
+        asyncio.run(go())
+    finally:
+        promote_mod._reset_store(None)
+
+
 def test_mock_never_promotes():
     """A sandbox/mock run must not move a governed tag."""
     out = ArtifactPromoteOp().mock(

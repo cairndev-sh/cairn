@@ -328,6 +328,10 @@ class DataflowResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     output_artifacts: list[ArtifactDescriptor] = Field(default_factory=list)
+    #: ADR-0141 — the products a stage NAMES (``outputs: [<name>, …]``, e.g. a split's train,
+    #: val and test files), each a sibling of its stage's descriptor in ``output_artifacts``,
+    #: which keeps exactly one descriptor per stage, in order.
+    named_outputs: list[ArtifactDescriptor] = Field(default_factory=list)
     stats: dict[str, Any] = Field(default_factory=dict)
     cost_usd: float = Field(0.0, ge=0)
     warnings: list[str] = Field(default_factory=list)
@@ -337,3 +341,12 @@ class DataflowResult(BaseModel):
     @classmethod
     def _stats_scalar(cls, v: dict) -> dict:
         return _assert_scalar_payload(v, where="DataflowResult.stats")
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_named_outputs(self, handler: Any) -> dict[str, Any]:
+        """Omitted while empty, so a result with no named products stays readable by a control
+        plane that predates the field (ADR-0141 D4)."""
+        data = handler(self)
+        if not self.named_outputs:
+            data.pop("named_outputs", None)
+        return data

@@ -20,9 +20,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Optional
 
-from cairn.core.budget_reservations import BudgetExceeded, release, reserve, settle
+from cairn.core.budget_reservations import (
+    BudgetExceeded, held_for_run, release, reserve, settle, settled_usd_for_run,
+)
 from cairn.core.dataflow import DataflowSpec
 from cairn.core.runtime.retry import RetryPolicy
 from cairn.core.dataflow.engine import is_terminal
@@ -55,6 +58,10 @@ class LegOutcome:
     #: #1441/#131 — known spend the engine reported for this leg, including
     #: partial cost from failed attempts and earlier attempts replaced by retry.
     cost_usd: float = 0.0
+    #: ADR-0151 D5 — the box time of a leg on a priced target: ``hourly_usd`` ×
+    #: each attempt's wall-clock, summed over the attempts, on ANY outcome. Kept
+    #: apart from ``cost_usd`` (engine-reported, LLM) so the two never fold.
+    gpu_usd: float = 0.0
 
     @property
     def ok(self) -> bool:
@@ -188,6 +195,10 @@ async def execute_leg(
     # ADR-0118 D4 — the stage contracts this leg was admitted with, from the record
     # (`recorded_stage_contracts`); None = no record (legacy) and the spec is untouched.
     stage_contracts: Optional[dict] = None,
+    # ADR-0151 D5 — the RECORDED rate of a leg on a priced box (0 = not priced) and,
+    # for an adopted attempt, the persisted start it is priced from (`run.started_at`).
+    hourly_usd: float = 0.0,
+    adopted_started_at: Optional[str] = None,
 ) -> LegOutcome:
     """Run one ``flow:`` leg on the environment's engine.
 
@@ -199,7 +210,9 @@ async def execute_leg(
        exists to close simply reopens one tier up.
     3. **submit → poll → result** — the engine owns the loop; this owns position.
     4. **settle or release** — a failed leg that keeps its reservation leaks
-       budget until the series can run nothing at all.
+       budget until the series can run nothing at all. An attempt that cost
+       something settles it, on any outcome; one that cost nothing releases
+       (ADR-0151 D5: a priced box bills for every attempt's wall-clock).
 
     Never raises for an execution failure: a failed leg is an outcome the
     pipeline decides about, not a crash that takes the control plane with it.
@@ -240,8 +253,15 @@ async def execute_leg(
         resolve_dataset_refs_in_config,
     )
     if config_has_dataset_ref(config):
+        # An engine whose job runs on another machine (the SSH engine) declares
+        # `needs_durable_inputs`: a control-plane path means nothing there, so its
+        # refs resolve to the durable copy whenever one exists (ADR-0149).
+        from cairn.core.dataflow.engine import needs_durable_inputs  # noqa: PLC0415 - cycle: engine → contract ← this module
+
+        durable = needs_durable_inputs(engine)
         try:
-            config = await resolve_dataset_refs_in_config(build_artifact_store(), config)
+            config = await resolve_dataset_refs_in_config(
+                build_artifact_store(), config, prefer_durable=durable)
         except Exception as e:  # noqa: BLE001 — an unresolvable dataset is a leg failure, not a crash
             return LegOutcome(state="failed", error=f"dataset ref resolution failed: {e}")
     # #1467 — judge refs resolve HERE too (same D4 rationale): `judge:<name>[@N]`
@@ -352,6 +372,11 @@ async def execute_leg(
     out = LegOutcome(state="failed", error="leg never attempted")
     known_attempt_cost_usd = 0.0
     adopting = _adopt_handle(adopt)
+    #: ADR-0151 D5 — box time settled by the attempts so far; each attempt settles
+    #: only its own window, and the next one's reservation counts what came before.
+    gpu_total = 0.0
+    #: ledger errors of earlier attempts: kept on whatever outcome the leg ends with
+    ledger_notes: list[str] = []
     for attempt in range(1, attempts + 1):
         # Governance invariant: EVERY attempt is admitted — the reservation is
         # taken per attempt (a retry is new spend, never free) and a budget
@@ -360,21 +385,28 @@ async def execute_leg(
         # admitted when the job was first submitted; re-attaching to it is not
         # new spend (and the reservation lived in the dead process anyway).
         reservation = None
+        # The attempt's window starts here; an adopted attempt's started in the
+        # process that submitted it, so it starts at the persisted run start.
+        adopted_attempt = adopting is not None
+        attempt_started = (_wall_now() if not adopted_attempt
+                           else _parse_started(adopted_started_at, hourly_usd, ref))
         if series_id and adopting is None:
             if spent_usd is None:
                 # #1441 — the caller could not read what earlier legs spent (an
                 # adopted leg proceeds without it); a FRESH attempt is new spend
                 # and unknown spend is never "nothing spent".
-                return LegOutcome(
+                return _with_notes(LegOutcome(
                     state="failed",
                     error=("budget: the spend of earlier legs is unreadable; "
                            "a new attempt is not admitted"),
                     cost_usd=known_attempt_cost_usd,
-                )
+                    gpu_usd=round(gpu_total, 6),
+                ), ledger_notes)
             try:
                 reservation = await reserve(
                     series_id, est_usd=float(estimated_usd or 0.0),
-                    spent_usd=round(float(spent_usd or 0.0) + known_attempt_cost_usd, 6),
+                    spent_usd=round(float(spent_usd or 0.0)
+                                    + known_attempt_cost_usd + gpu_total, 6),
                     budget_usd=float(budget_usd or 0.0),
                     # #1530 — stamp the run so a hold left behind by a dead
                     # process is attributable (and reapable) by run id, not just
@@ -382,8 +414,10 @@ async def execute_leg(
                     run_id=str(run_id or ""),
                 )
             except BudgetExceeded as e:
-                return LegOutcome(
-                    state="failed", error=str(e), cost_usd=known_attempt_cost_usd)
+                # an earlier attempt's engine and box time stay on the leg's record
+                return _with_notes(LegOutcome(
+                    state="failed", error=str(e), cost_usd=known_attempt_cost_usd,
+                    gpu_usd=round(gpu_total, 6)), ledger_notes)
 
         retriable = False
         attempt_cost_usd = 0.0
@@ -485,25 +519,25 @@ async def execute_leg(
                 # Strict like the door: an unrecorded data product is a
                 # governance hole, so a registry failure fails the leg loudly
                 # (the except below turns it into a failed outcome).
-                if descriptors and artifact_store is not None:
+                # ADR-0141 — the products stages named ride beside the per-stage descriptors
+                # (which the check above reads by position) and register through the same path.
+                named = list(getattr(result, "named_outputs", []) or [])
+                if (descriptors or named) and artifact_store is not None:
                     await register_leg_descriptors(
-                        descriptors, artifact_store, run_id=run_id,
+                        descriptors + named, artifact_store, run_id=run_id,
                         producer_job=str(getattr(handle, "job_id", "") or ""),
                         out_stats=out.stats)
-                # #1441 — the hold gives way to what the leg ACTUALLY spent (the
-                # template path's rule, dispatcher.py `_close_reservations`), not the
-                # estimate it was admitted on.
-                await settle(reservation, actual_usd=attempt_cost_usd)
-                return out
-            out = LegOutcome(
-                state=str(getattr(status, "state", "failed")), handle=handle,
-                metrics=dict(getattr(status, "metrics", {}) or {}),
-                error=str(getattr(status, "error", "") or ""),
-                cost_usd=round(known_attempt_cost_usd + attempt_cost_usd, 6),
-            )
-            # Only the ENGINE may call a failure transient (cancellation never
-            # is); an exception below has no flag and is not retried.
-            retriable = (out.state == "failed") and bool(getattr(status, "retriable", False))
+                # settled below, once, with every other outcome of this attempt
+            else:
+                out = LegOutcome(
+                    state=str(getattr(status, "state", "failed")), handle=handle,
+                    metrics=dict(getattr(status, "metrics", {}) or {}),
+                    error=str(getattr(status, "error", "") or ""),
+                    cost_usd=round(known_attempt_cost_usd + attempt_cost_usd, 6),
+                )
+                # Only the ENGINE may call a failure transient (cancellation never
+                # is); an exception below has no flag and is not retried.
+                retriable = (out.state == "failed") and bool(getattr(status, "retriable", False))
         except Exception as e:  # noqa: BLE001 — a leg failure is an outcome, not a crash
             logger.exception("leg %s failed", ref)
             attempt_cost_usd = max(
@@ -520,13 +554,23 @@ async def execute_leg(
                 cost_usd=round(known_attempt_cost_usd + attempt_cost_usd, 6),
             )
 
-        if attempt_cost_usd > 0:
-            await settle(reservation, actual_usd=attempt_cost_usd)
-            known_attempt_cost_usd = round(known_attempt_cost_usd + attempt_cost_usd, 6)
-        else:
-            await release(reservation)
-        if not retriable or attempt >= attempts:
-            return out
+        # ADR-0151 D5 — the attempt is accounted ONCE, here, outside the try: its
+        # window joins the leg's box time, then its hold closes. #1441 — the hold
+        # gives way to what the attempt ACTUALLY spent (the template path's rule,
+        # dispatcher.py `_close_reservations`): engine-reported plus box time, on
+        # any outcome (a failed, timed-out or cancelled attempt on a priced box still
+        # billed its wall-clock). Nothing billed → release.
+        gpu = _box_time_usd(hourly_usd, attempt_started)
+        gpu_total += gpu
+        out.gpu_usd = round(gpu_total, 6)
+        note = await _close_attempt(out, reservation, engine_usd=attempt_cost_usd,
+                                    box_usd=gpu,
+                                    adopted_run_id=str(run_id or "") if adopted_attempt else "")
+        known_attempt_cost_usd = round(known_attempt_cost_usd + attempt_cost_usd, 6)
+        if note:
+            ledger_notes.append(note)
+        if out.ok or not retriable or attempt >= attempts:
+            return _with_notes(out, ledger_notes)
         if on_retry is not None:
             # visibility invariant: every retry is announced (run event) with
             # the attempt number and the cause it is retrying past.
@@ -536,7 +580,86 @@ async def execute_leg(
                 logger.debug("leg %s: on_retry emit failed", ref, exc_info=True)
         await asyncio.sleep(min(delay, float(policy.maximum_interval_seconds or delay)))
         delay = delay * float(policy.backoff_coefficient or 1.0)
+    return _with_notes(out, ledger_notes)
+
+
+def _with_notes(out: LegOutcome, notes: list[str]) -> LegOutcome:
+    """Append every ledger note to the outcome the leg ends with (never replace)."""
+    for note in notes:
+        if note not in (out.error or ""):
+            out.error = f"{out.error}; {note}" if out.error else note
     return out
+
+
+async def _close_attempt(out: LegOutcome, reservation: Any, *, engine_usd: float,
+                         box_usd: float, adopted_run_id: str = "") -> str:
+    """Close one attempt's hold: ``settle`` at ``engine_usd + box_usd`` when it
+    succeeded or cost something, else ``release`` (nothing billed).
+
+    An ADOPTED attempt holds no reservation of its own: the hold is the one the
+    process that submitted it took (stamped with the run id) and left ``held`` when
+    it died. It is closed the way ``_close_reservations`` closes a template's,
+    through ``held_for_run``. Its box window runs from the leg's start, so it already
+    covers the run's earlier attempts: when it has a window (``box_usd > 0``), what
+    the run's claims already settled (``settled_usd_for_run``) is subtracted from
+    ``engine_usd + box_usd``, floored at 0, so nothing is settled twice (ADR-0152).
+    With no window (no readable start, or an unpriced leg) nothing overlaps and the
+    engine cost settles as is. The first held row settles at that figure, any further
+    one at 0. If a read fails the rows stay held at their estimate.
+
+    Returns a note when the ledger fails — logged, never a change to the engine
+    outcome or the box time already accounted; ``""`` otherwise."""
+    actual_usd = float(engine_usd or 0.0) + float(box_usd or 0.0)
+    billed = out.ok or actual_usd > 0
+    try:
+        if adopted_run_id:
+            held_rows = await held_for_run(adopted_run_id)
+            if held_rows and billed and box_usd > 0:
+                already = await settled_usd_for_run(adopted_run_id)
+                actual_usd = max(0.0, round(actual_usd - already, 6))
+            for i, held in enumerate(held_rows):
+                if billed:
+                    await settle(held, actual_usd=actual_usd if i == 0 else 0.0)
+                else:
+                    await release(held)
+        elif billed:
+            await settle(reservation, actual_usd=actual_usd)
+        else:
+            await release(reservation)
+    except Exception as e:  # noqa: BLE001 — a ledger error is not an engine outcome
+        logger.exception("budget ledger: could not close the reservation for run %s", adopted_run_id
+                         or getattr(reservation, "run_id", ""))
+        return f"budget ledger: the reservation could not be closed ({type(e).__name__}: {e})"
+    return ""
+
+
+def _wall_now() -> datetime:
+    """The wall clock an attempt's box time is measured on (a seam for tests)."""
+    return datetime.now(timezone.utc)
+
+
+def _parse_started(started_at: Optional[str], hourly_usd: float, ref: str) -> Optional[datetime]:
+    """The persisted start of an ADOPTED attempt; ``None`` (its box time unknown,
+    never guessed from this process's clock) when it is missing or unreadable."""
+    if not started_at:
+        if hourly_usd > 0:
+            logger.warning("leg %s: adopted on a priced box with no persisted start; "
+                           "its box time is not recorded", ref)
+        return None
+    try:
+        dt = datetime.fromisoformat(str(started_at))
+    except ValueError:
+        logger.warning("leg %s: unreadable started_at %r; box time not recorded", ref, started_at)
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _box_time_usd(hourly_usd: float, started: Optional[datetime]) -> float:
+    """ADR-0151 D5 — ``hourly_usd`` × the attempt's wall-clock (0 when not priced)."""
+    if not hourly_usd or hourly_usd <= 0 or started is None:
+        return 0.0
+    seconds = max(0.0, (_wall_now() - started).total_seconds())
+    return round(float(hourly_usd) * seconds / 3600.0, 6)
 
 
 def _reported_cost(result: Any) -> float:
@@ -601,6 +724,22 @@ def _adopt_handle(persisted: Optional[dict]) -> Any:
     )
 
 
+async def cancel_recorded_job(engine: Any, persisted: Optional[dict]) -> bool:
+    """Best-effort cancel of the engine job a previous owner recorded
+    (``StepState.handle``), for a re-adopted leg that is refused before it is
+    watched: nothing would watch the job any more, and it would keep running
+    and billing. ``True`` when a cancel was sent; never raises."""
+    handle = _adopt_handle(persisted)
+    if handle is None or engine is None:
+        return False
+    try:
+        await engine.cancel(handle)
+    except Exception:  # noqa: BLE001 — best-effort: the refusal itself must still land
+        logger.exception("could not cancel recorded engine job %s", handle.job_id)
+        return False
+    return True
+
+
 #: Minimum seconds between heartbeat stamps — the poll loop can tick
 #: sub-second on quick legs, and a store write per tick is churn for a
 #: liveness signal whose reconciler TTL is minutes.
@@ -616,13 +755,26 @@ async def register_leg_descriptors(descriptors: list, artifact_store, *, run_id:
     a descriptor is a model (`candidate_artifact_id`, C6/I14) so evaluation,
     registration and serving key on an id, never on a URI. Flow legs call it
     from :func:`execute_leg`; a task leg whose operator returns descriptors
-    registers through the same function (#1488, wiring per producer)."""
-    await _resolve_uri_parents(descriptors, artifact_store)
-    ids = [await artifact_store.register(d, producer_run_id=run_id, producer_job=producer_job)
+    registers through the same function (#1488, wiring per producer).
+
+    Everything lands in the run's workspace, scoped from its record (ADR-0148):
+    URI parents resolve among that workspace's artifacts and the workspace owns
+    what is registered. With auth on and no workspace in scope it is refused
+    before anything registers."""
+    from cairn.core.workspace import scoped_workspace  # noqa: PLC0415 — off the hot import path
+
+    _check_stage_roles(descriptors)
+    ws = scoped_workspace()
+    await _resolve_uri_parents(descriptors, artifact_store, workspace_id=ws)
+    ids = [await artifact_store.register(d, producer_run_id=run_id, producer_job=producer_job,
+                                         workspace_id=ws)
            for d in descriptors]
     out_stats["artifact_ids"] = ids
     out_stats["artifact_uris"] = [str(getattr(d, "uri", "")) for d in descriptors]
-    models = [(i, d) for i, d in zip(ids, descriptors) if str(getattr(d, "kind", "")) == "model"]
+    # ADR-0141 — the candidate is a STAGE's model; a stage's named product (`output_name` in its
+    # stats, set by the runner) never displaces it.
+    models = [(i, d) for i, d in zip(ids, descriptors) if str(getattr(d, "kind", "")) == "model"
+              and "output_name" not in (getattr(d, "stats", None) or {})]
     if models:
         cid, cdesc = models[-1]
         out_stats["candidate_artifact_id"] = cid
@@ -644,6 +796,22 @@ def _annotate_check_evidence(stats: dict, flow_def: Any) -> None:
     stats.update(flatten_check_map(check_map_from_flow_stats(stats)))
 
 
+#: ADR-0141 D3 — the roles a stage may give the version it asks for. ``golden`` is human-rated
+#: only (ADR-0102 D3) and is never declared by a kernel's stats.
+STAGE_REGISTER_ROLES = ("training", "validation", "test")
+
+
+def _check_stage_roles(descriptors: list) -> None:
+    """Refuse a stage-given role outside :data:`STAGE_REGISTER_ROLES` BEFORE anything registers,
+    so a refusal leaves no artifact or version of the leg half-written."""
+    bad = sorted({str(r) for d in descriptors
+                  if (r := str((getattr(d, "stats", None) or {}).get("register_role") or "").strip())
+                  and r not in STAGE_REGISTER_ROLES})
+    if bad:
+        raise ValueError(f"a stage asked to register a dataset version with role(s) {bad}; a stage "
+                         f"may give only {list(STAGE_REGISTER_ROLES)} (ADR-0141 D3)")
+
+
 async def _register_dataset_versions(descriptors: list, artifact_store,
                                      run_id: str, out_stats: dict) -> None:
     """#1466 — an export that asked for registration (`register:` config →
@@ -657,11 +825,16 @@ async def _register_dataset_versions(descriptors: list, artifact_store,
     from cairn.core.workspace import scoped_workspace  # noqa: PLC0415 — off the hot import path
 
     for d in descriptors:
-        reg_name = str((getattr(d, "stats", None) or {}).get("register_as") or "")
+        d_stats = getattr(d, "stats", None) or {}
+        reg_name = str(d_stats.get("register_as") or "")
         if reg_name and hasattr(artifact_store, "register_dataset_version"):
+            # ADR-0141 D3 — a split's products say what they are FOR (`register_role`:
+            # training / validation / test, checked in `_check_stage_roles`), so the holdout
+            # door sees a test version as one. Unset keeps the dataset's default role.
+            role = str(d_stats.get("register_role") or "").strip()
             v = await artifact_store.register_dataset_version(
                 reg_name, str(getattr(d, "content_hash", "") or ""), actor=run_id,
-                workspace_id=scoped_workspace())
+                workspace_id=scoped_workspace(), **({"role": role} if role else {}))
             out_stats.setdefault("dataset_versions", []).append(f"{reg_name}@{v}")
             await _stamp_intake_verdict(artifact_store, reg_name, v, out_stats)
 
@@ -701,12 +874,14 @@ async def _stamp_intake_verdict(artifact_store, name: str, version: int, flow_st
         flow_stats.setdefault("intake_verdicts", []).append(f"{name}@{version}={verdict.verdict}")
 
 
-async def _resolve_uri_parents(descriptors: list, artifact_store) -> None:
+async def _resolve_uri_parents(descriptors: list, artifact_store, *,
+                               workspace_id: Optional[str] = None) -> None:
     """#1432 — a descriptor's parent given as a URI (an upstream leg's export,
     e.g. ``s3://…/train-ready.jsonl``) becomes that artifact's REGISTRY ID when
-    the registry knows the URI, so the lineage DAG walks across legs. Unknown
-    URIs (external inputs) stay as recorded. Best effort: a lookup failure
-    never fails the leg."""
+    the registry knows the URI among ``workspace_id``'s artifacts (else the one
+    in scope), so the lineage DAG walks across legs. Unknown URIs (external
+    inputs, or another workspace's) stay as recorded. Best effort: a lookup
+    failure never fails the leg."""
     find = getattr(artifact_store, "find_by_uri", None)
     if find is None:
         return
@@ -718,7 +893,7 @@ async def _resolve_uri_parents(descriptors: list, artifact_store) -> None:
         for p in parents:
             if "://" in p:
                 try:
-                    hit = await find(p)
+                    hit = await find(p, workspace_id=workspace_id)
                 except Exception:  # noqa: BLE001 — lineage is best effort
                     hit = None
                 resolved.append(hit or p)
@@ -774,5 +949,5 @@ async def _poll_until_terminal(
         interval = min(interval * 1.5, _POLL_MAX_S)
 
 
-__all__ = ["FLOW_PREFIX", "TASK_PREFIX", "LegKindError", "LegOutcome", "execute_leg",
+__all__ = ["FLOW_PREFIX", "TASK_PREFIX", "LegKindError", "LegOutcome", "cancel_recorded_job", "execute_leg",
            "leg_kind_of", "parse_flow_ref", "recorded_stage_contracts"]

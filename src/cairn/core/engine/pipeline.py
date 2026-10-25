@@ -261,6 +261,36 @@ class PipelineDef(BaseModel):
         return out
 
 
+#: ADR-0146 — what an input spec may require of the dataset version it is given.
+DATASET_VERDICT_REQUIRED = "required"
+
+
+def dataset_expectations(d: "PipelineDef") -> dict[str, dict[str, str]]:
+    """ADR-0146 D1 — ``{input name: {"role": …, "verdict": "required"}}`` for every input spec
+    that declares ``role:`` or ``verdict:``; the launch door checks the version each one is given
+    (``admission_door.decide_admission``). Raises ``ValueError`` on an unknown role or a
+    ``verdict`` other than ``required``, so a typo fails when the pipeline loads, never by
+    silently checking nothing."""
+    from cairn.core.dataset_roles import normalize_role  # noqa: PLC0415 — keeps the roles module off this model's import path
+
+    out: dict[str, dict[str, str]] = {}
+    for name, spec in (d.inputs or {}).items():
+        if not isinstance(spec, dict) or not ({"role", "verdict"} & set(spec)):
+            continue
+        want: dict[str, str] = {}
+        if spec.get("role") is not None:
+            want["role"] = str(normalize_role(spec["role"], default=None) or "")
+            if not want["role"]:
+                raise ValueError(f"input {name!r}: `role:` is empty")
+        if spec.get("verdict") is not None:
+            if str(spec["verdict"]).strip().lower() != DATASET_VERDICT_REQUIRED:
+                raise ValueError(f"input {name!r}: `verdict:` may only be {DATASET_VERDICT_REQUIRED!r}, "
+                                 f"got {spec['verdict']!r}")
+            want["verdict"] = DATASET_VERDICT_REQUIRED
+        out[name] = want
+    return out
+
+
 def parse_pipeline_def(text: str, *, pack: str, source: str = "<string>") -> PipelineDef:
     """Parse + validate a pipeline definition. Raises :class:`PipelineDefError`."""
     try:
@@ -298,6 +328,10 @@ def parse_pipeline_def(text: str, *, pack: str, source: str = "<string>") -> Pip
     _validate_on(d, source=source)
     _validate_triggers(d, source=source)
     _validate_compare(d, source=source)
+    try:
+        dataset_expectations(d)
+    except ValueError as e:
+        raise PipelineDefError(f"{source}: {e}") from None
 
     for step in d.steps:
         _validate_step(step, pack=pack, source=source, in_loop=False)
@@ -1238,7 +1272,7 @@ def load_pipeline_def(path: Path | str) -> PipelineDef:
 PipelineStep.model_rebuild()
 
 __all__ = [
-    "LEG_KINDS", "PipelineDef", "PipelineDefError", "PipelineStep",
-    "load_pipeline_def", "lower_step", "parse_pipeline_def", "pipeline_pack_name",
+    "DATASET_VERDICT_REQUIRED", "LEG_KINDS", "PipelineDef", "PipelineDefError", "PipelineStep",
+    "dataset_expectations", "load_pipeline_def", "lower_step", "parse_pipeline_def", "pipeline_pack_name",
     "plan_pipeline",
 ]

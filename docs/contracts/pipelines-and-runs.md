@@ -20,7 +20,21 @@ Four things, four responsibilities. None of them is a new execution abstraction:
    (`dispatch/pipeline_launch.py:162`, `:211`): resolve → drift check → `assert_runnable`
    → presets → coerce inputs → `plan_pipeline` → `inject_policy_gates` (`:278`) →
    `PipelineBridge.start_pipeline` (`dispatch/pipeline_bridge.py:561`). The record is
-   stamped `bundle_ref = pipeline:<pack>/<name>`.
+   stamped `bundle_ref = pipeline:<pack>/<name>`. Before the bridge, the admission door
+   (`admission_door.decide_admission`, #2190) decides once over the inputs: the holdout,
+   intake and licence doors and the policies' required checks. **Input expectations
+   (ADR-0146):** an input spec may declare `role:` (`training` · `validation` · `test` ·
+   `golden`) and `verdict: required`; the door then refuses a value that is not a `dataset:`
+   ref, a ref the registry does not hold, a version with another role, or one with no intake
+   verdict when it is required, and records every check under `admission.expectations`. An
+   unknown role or another `verdict:` value fails `parse_pipeline_def`
+   (`engine.pipeline.dataset_expectations`). **Priced legs (ADR-0151 D1–D3):** each flow
+   leg whose compute target is a `compute.ssh` connection with `hourly_usd` is estimated at
+   `hourly_usd × timeout`, times its loop's `max_iterations` and its attempts (the bounded
+   worst case); a priced leg with no `timeout`, a price that cannot be read, or a total that
+   does not fit the budget's `remaining_usd` (the cap alone when no `series` is set) is refused
+   (403 / exit 3) before the record, and the per-leg estimate is recorded under
+   `admission.cost_estimate`; each attempt reserves one attempt's recorded figure.
 2. **Advance** — `_advance` (`:783`) submits every ready step by kind (`_submit_step`,
    `:862`): a `flow:` leg becomes its own `Run` (`_submit_flow_leg`, `:957`) and runs
    `execute_leg` (`dispatch/leg_executor.py:114`); a `task:` leg invokes an operator;
@@ -73,8 +87,10 @@ step with a key takes the run the fire created (`_claim_unrecorded_leg_runs`) or
   (`_fail_pipeline`, `pipeline_bridge.py:2309`); `Run.error` and `failure_type` carry the cause.
 - Cancellation: `cancel` kills engine compute (`DataflowEngine.cancel`) and settles budget;
   a queued leg cancelled while waiting for a slot is skipped cleanly (`:1573-1600`).
-- Budget: reserved per leg before submit and settled after (`leg_executor.py:303`;
-  `budget_reservations.py`); a series cap refuses admission.
+- Budget: reserved per leg before submit and settled after (`leg_executor.py:401`;
+  `budget_reservations.py`); a series cap refuses admission. A leg on a priced box settles
+  `hourly_usd × wall-clock` per attempt on every outcome and records it as `Run.cost.gpu_usd`
+  (ADR-0151 D5).
 
 ## Persistence
 `PipelineRecord` in the pipeline store (sqlite/postgres twins; the process-wide default is

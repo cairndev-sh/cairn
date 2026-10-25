@@ -1,14 +1,59 @@
 {{- if .Values.pullWorker.enabled }}
 {{/*
-D2 (#565) — a machine that dials OUT: it claims work from the control plane,
-runs the image, and reports over the job channel. No inbound access.
+`cairn worker --pull` (#565): a machine that dials OUT. It claims work from the
+control plane, runs the image, and reports over the job channel. No inbound
+access.
 
-This chart ships the DEPLOYMENT SHAPE ONLY. `cairn worker --pull` is being
-built in the D2 slice in parallel with this one, so hard-coding its flags here
-would bake in a guess; `pullWorker.command` is required and unvalidated
-(_helpers.tpl refuses an empty one). When D2 lands, the command becomes a
-default here and this comment goes away.
+`pullWorker.command` is required and has no default (_helpers.tpl refuses an
+empty one), e.g. ["cairn", "worker", "--pull", "--engine-url", "https://<host>"].
+With auth on, claiming needs a worker-pool token (`cairn remote worker-token
+--name <pool>`) in CAIRN_ENGINE_TOKEN. The worker reads it from a Secret of its
+OWN (pullWorker.token, rendered below, or pullWorker.existingSecret). Its other
+settings come from a ConfigMap of its own (an allowlist, plus pullWorker.extraEnv),
+and it runs under a ServiceAccount of its own with no API token mounted. It reads
+neither the shared ConfigMap (no database settings, OTEL headers or env.extra,
+apart from the CAIRN_ENGINE_URL fallback) nor the control plane's Secret, and never
+runs under the control plane's ServiceAccount.
 */}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cairn.pullWorkerName" . }}
+  labels:
+    {{- include "cairn.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pull-worker
+data:
+  {{- include "cairn.pullWorkerConfig" . | nindent 2 }}
+---
+{{- if .Values.pullWorker.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "cairn.pullWorkerServiceAccountName" . }}
+  labels:
+    {{- include "cairn.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pull-worker
+  {{- with .Values.pullWorker.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+automountServiceAccountToken: false
+---
+{{- end }}
+{{- if not (trim (toString (default "" .Values.pullWorker.existingSecret))) }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "cairn.pullWorkerSecretName" . }}
+  labels:
+    {{- include "cairn.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pull-worker
+type: Opaque
+stringData:
+  # A worker-pool token: it may claim and report pull-lane jobs, nothing else.
+  CAIRN_ENGINE_TOKEN: {{ include "cairn.pullWorkerToken" . | quote }}
+---
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -28,9 +73,15 @@ spec:
         {{- include "cairn.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: pull-worker
       annotations:
-        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/config: {{ include "cairn.pullWorkerConfig" . | sha256sum }}
+        {{- if not (trim (toString (default "" .Values.pullWorker.existingSecret))) }}
+        # a rotated pullWorker.token restarts the worker (an existingSecret's does not)
+        checksum/token: {{ include "cairn.pullWorkerToken" . | sha256sum }}
+        {{- end }}
     spec:
-      serviceAccountName: {{ include "cairn.serviceAccountName" . }}
+      serviceAccountName: {{ include "cairn.pullWorkerServiceAccountName" . }}
+      # in every case, also for a pre-provisioned ServiceAccount
+      automountServiceAccountToken: false
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -42,7 +93,7 @@ spec:
           command:
             {{- toYaml .Values.pullWorker.command | nindent 12 }}
           envFrom:
-            {{- include "cairn.envFrom" . | nindent 12 }}
+            {{- include "cairn.pullWorkerEnvFrom" . | nindent 12 }}
           resources:
             {{- toYaml .Values.pullWorker.resources | nindent 12 }}
       {{- with .Values.pullWorker.nodeSelector }}

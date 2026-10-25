@@ -47,10 +47,17 @@ class AdmissionDecision:
     #: whether the intake door could check anything, and what it warned about —
     #: "admitted, not checked" must be readable on the record, not silent
     intake: dict[str, Any] = field(default_factory=dict)
+    #: ADR-0146 — what each input's declaration required of its version, and what it found
+    expectations: list[dict[str, Any]] = field(default_factory=list)
     policy: dict[str, Any] = field(default_factory=dict)
     environment: str = ""
     workspace_id: str = ""
     decided_at: str = ""
+    #: ADR-0151 D2 — the launch door's estimate for the legs on a priced box:
+    #: ``{estimate_usd, legs: [{step, priced, connection, hourly_usd, hours,
+    #: estimate_usd, basis}]}``; recorded once, read by the legs, never re-derived.
+    #: Empty (and absent from the record) when no leg has a compute target.
+    cost_estimate: dict[str, Any] = field(default_factory=dict)
 
     @property
     def refused(self) -> bool:
@@ -65,10 +72,12 @@ class AdmissionDecision:
             "holdout": dict(self.holdout),
             "licence": dict(self.licence),
             "intake": dict(self.intake),
+            "expectations": [dict(e) for e in self.expectations],
             "policy": dict(self.policy),
             "environment": self.environment,
             "workspace_id": self.workspace_id,
             "decided_at": self.decided_at,
+            **({"cost_estimate": dict(self.cost_estimate)} if self.cost_estimate else {}),
         }
 
 
@@ -111,11 +120,68 @@ def _runtime_policies() -> list[Any]:
     return [p for p in (getattr(engine, "policies", []) or []) if active is None or active(p)]
 
 
+async def _check_expectations(inputs: dict[str, Any], expectations: dict[str, dict[str, str]],
+                              store: Any, decision: AdmissionDecision, *, workspace_id: str) -> None:
+    """ADR-0146 D2 — each input that declares ``role:`` / ``verdict: required`` is checked against
+    the version it was given: a value that is not a ``dataset:`` ref, a ref the registry does not
+    hold, a different role, or no verdict when one is required refuses the launch. Every check
+    is recorded, passed or not.
+
+    Workspace-scoped like the intake and holdout doors: another workspace's version is "not
+    registered" here — the same answer as a name nobody holds, so a refusal never tells one
+    tenant what another has (ADR-0051 §4) — and its role and verdict are never read."""
+    from cairn.core.dataset_roles import DEFAULT_ROLE  # noqa: PLC0415 — off the hot import path
+    from cairn.core.intake import normalize_verdict  # noqa: PLC0415
+    from cairn.core.storage.artifacts import parse_dataset_ref  # noqa: PLC0415
+
+    for name, want in sorted(expectations.items()):
+        value = inputs.get(name)
+        if value in (None, ""):
+            continue  # a missing input is the input layer's refusal, not this door's
+        entry: dict[str, Any] = {"input": name, "ref": str(value), **{f"expected_{k}": v for k, v in want.items()}}
+        problem = ""
+        try:
+            parsed = parse_dataset_ref(str(value))
+        except ValueError as exc:
+            parsed, problem = None, f"{exc}"
+        if parsed is None and not problem:
+            problem = "is not a dataset: ref, so its role and verdict cannot be checked"
+        meta = None
+        if parsed is not None:
+            try:
+                meta = await store.get_dataset_version_meta(parsed[0], parsed[1], workspace_id=workspace_id)
+            except Exception as exc:  # noqa: BLE001 — a registry that cannot answer refuses, never admits unchecked
+                problem = f"the registry could not be read ({type(exc).__name__})"
+            else:
+                if meta is not None and (meta.get("workspace_id") or "") not in ("", workspace_id):
+                    meta = None  # another tenant's version: never read, reported as absent
+                if meta is None:
+                    problem = "is not registered"
+        if meta is not None:
+            entry["role"] = str(meta.get("role") or DEFAULT_ROLE)
+            try:
+                # an unreadable verdict is no verdict, as the intake door treats it
+                entry["verdict"] = normalize_verdict(meta.get("verdict")) if meta.get("verdict") else None
+            except ValueError:
+                entry["verdict"] = None
+            if "role" in want and entry["role"] != want["role"]:
+                problem = f"is a {entry['role']} version; this input takes a {want['role']} one"
+            elif want.get("verdict") and not entry["verdict"]:
+                problem = "has no intake verdict; this input requires one"
+        entry["ok"] = not problem
+        decision.expectations.append(entry)
+        if problem:
+            decision.refusing_reasons.append(f"input {name!r} ({value}) {problem}")
+
+
 async def decide_admission(
     inputs: dict[str, Any], *, workspace_id: str, environment: str = "",
     store: Any = None, policies: Optional[list[Any]] = None,
+    expectations: Optional[dict[str, dict[str, str]]] = None,
 ) -> AdmissionDecision:
-    """Decide once, for this launch, from facts + required checks + policy + context."""
+    """Decide once, for this launch, from facts + required checks + policy + context.
+    ``expectations`` (ADR-0146) are the pipeline's declared per-input role and verdict
+    requirements (``engine.pipeline.dataset_expectations``)."""
     from cairn.core.holdout import check_holdout_for_inputs  # noqa: PLC0415 — off the hot import path
     from cairn.core.intake import check_intake_for_inputs  # noqa: PLC0415
     from cairn.core.model_license_gate import check_license_for_inputs  # noqa: PLC0415
@@ -165,6 +231,9 @@ async def decide_admission(
     decision.refusing_reasons.extend(intake.reasons())
     decision.degrading_reasons.extend(intake.degraded_reasons())
     decision.intake = {"checked": bool(intake.checked), "warnings": list(intake.warnings)}
+
+    if expectations:
+        await _check_expectations(inputs, expectations, store, decision, workspace_id=workspace_id)
 
     licence = await check_license_for_inputs(inputs)
     decision.licence = licence.as_record() if hasattr(licence, "as_record") else {"ok": bool(getattr(licence, "ok", True))}

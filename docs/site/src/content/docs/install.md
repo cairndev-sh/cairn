@@ -16,7 +16,7 @@ sudo. Choose extras or pin a version with environment variables:
 
 ```bash
 curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_EXTRAS=hello,rag sh
-curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_VERSION=0.1.4 sh
+curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_VERSION=0.3.0 sh
 ```
 
 | Variable | Default | |
@@ -46,15 +46,76 @@ cairn doctor        # packs load, profile bindings resolve, settings, service re
 cairn ls            # the installed packs and what they contribute
 ```
 
+### Upgrade from 0.1.x
+
+Re-run the installer, or `uv tool upgrade cairndev`. For a server:
+`git pull && docker compose up -d --build` in `deploy/light`, or
+`helm upgrade … --version 0.3.0` for the chart.
+
+Single-node and sign-in-off deployments, where everything belongs to the
+`default` workspace and account, are unaffected by 0.2.0's workspace, tenant
+and dataset changes. Some steps apply to every deployment; the others only with
+sign-in on, or with more than one account or workspace.
+
+**Every deployment:**
+
+1. **Run-hook providers.** Return early on events you don't handle, and raise
+   only `AdmissionRefused` on `pipeline.launching`: any other exception there
+   refuses every launch.
+2. **Knowledge.** Re-index pgvector collections whose name exceeds 63 bytes.
+3. **Library callers** of `mcp_server_spec`, `resolve_corpus_source` and
+   `index_workspace_corpus`: pass `allow_stdio=True`,
+   `allow_private_network=True` or `allow_local=True` for specs and sources the
+   deployment itself owns.
+4. **Corpus clones behind a proxy or a private CA:** set `HTTPS_PROXY`,
+   `SSL_CERT_FILE` or `GIT_SSL_CAINFO` in the environment instead of
+   `http.proxy` / `http.sslCAInfo` in the gitconfig.
+5. **Behind a TLS-terminating proxy**, set `CAIRN_PUBLIC_URL` (see
+   [Sign-in and sign-up](#sign-in-and-sign-up)).
+
+**With sign-in on, or more than one account or workspace:**
+
+6. **Pull workers.** Mint a token per pool with
+   `cairn remote worker-token --name <pool>` (where `CAIRN_JWT_SECRET` is set)
+   and restart each worker with `cairn worker --pull --token <that token>`. A
+   signed-in user's token now gets `403` on `/jobs/claim`.
+7. **Team accounts' connections.** Each team account creates, under its own
+   names, the connections its runs used from the deployment, and its pipelines
+   and flows reference those names. Enter again the credentials of connections
+   created before account namespacing. A connection bound in the deployment's
+   profile (`ml_target`, `dataflow_target`) belongs to the deployment; a team
+   account's flow legs need a target connection of their own, named in the
+   pipeline or flow. See [Connect a provider](/guides/connect-a-provider/).
+8. **Operators** that need credentials read them from `ctx.secrets`: a team
+   account's run does not receive its account's credentials in the process
+   environment.
+9. **Scripts** that resolve connections, secrets or datasets outside a request
+   or a run must enter a workspace first:
+   `with workspace_scope("<id>"):` from `cairn.core.workspace`.
+10. **Datasets** shared between workspaces: register them in each workspace;
+    `dataset:<name>@latest` is per workspace.
+11. **Knowledge.** Re-index the corpora of a workspace whose id is not a
+    lowercase slug, or is longer than 40 characters.
+12. **Saga approvals.** Deciding a paused saga through
+    `POST /triggers/approve/{workflow_id}` needs the saga's workspace: its
+    action handler implements `workspace_of`. Without it, only the deployment
+    admin can decide it.
+
+The 0.2.0 Migration section of
+[CHANGELOG.md](https://github.com/cairndev-sh/cairn/blob/main/CHANGELOG.md)
+has the details, including the exact re-index steps.
+
 ### Extras
 
 | Extra | Adds |
 |---|---|
 | `hello` | the example pack (`cairn-pack-hello`) with the sqlite-vec store, asyncssh and DBOS |
 | `rag` | the retrieval ingest stack (parse, embed, index) |
-| `rag-sqlite-vec` · `rag-pgvector` · `rag-qdrant` | a vector store |
+| `rag-sqlite-vec` · `rag-pgvector` · `rag-qdrant` · `rag-pinecone` | a vector store |
 | `ssh` | `remote/exec` over SSH |
 | `train` | the CPU training stack for `train/lora` (torch, transformers, peft, datasets) |
+| `optuna` | Optuna, to create hyperparameter studies |
+| `kernel` | only what a box or container that runs a flow needs (no control plane) |
 | `infisical` | the Infisical SDK for `secrets/infisical` |
 | `dataflow-engine` | the builtin dataflow engine's job-machine libraries (polars, duckdb, pyarrow) |
 | `rerank-cross-encoder` · `rerank-cohere` | a scorer for `rag/rerank`: a local cross-encoder, or Cohere |
@@ -95,8 +156,11 @@ engine. Pipelines don't change.
 Always set `CAIRN_STORAGE` for a server you want to keep. SQLite is for one
 host; use Postgres (the `storage-postgres` extra) when more than one process
 touches the data. `dbos` (the `runtime-dbos` extra) recovers a run at the next
-boot without an extra server. Under `temporal` a `task:` leg fails today, so
-use `inprocess` or `dbos` for pipelines with task legs.
+boot without an extra server. Under `temporal` the launch is refused, before
+anything is recorded, for a pipeline with a `task:` leg or a `finalizer:` step:
+the Temporal pipeline owner does not run either yet. The refusal names the step
+(HTTP 403, `cairn pipeline run` exits 3); use `inprocess` or `dbos` for such
+pipelines.
 
 The deployment **profile** decides which operator serves each capability. Set
 it with `CAIRN_PROFILE`; see
@@ -173,7 +237,7 @@ secret and an admin password:
 docker run -d -p 9090:9090 \
   -e CAIRN_JWT_SECRET="$(openssl rand -hex 32)" -e CAIRN_API_PASSWORD=<choose one> \
   -e CAIRN_STORAGE=sqlite:////data/cairn.db -v cairn-data:/data \
-  ghcr.io/cairndev-sh/cairn-engine:0.1.4
+  ghcr.io/cairndev-sh/cairn-engine:0.3.0
 curl -s http://localhost:9090/healthz
 cairn remote login --endpoint http://localhost:9090 -u admin
 ```
@@ -183,7 +247,7 @@ port answers nothing. For a keyless try-out on your own machine, bind it explici
 and publish on the host's loopback only:
 
 ```bash
-docker run --rm -p 127.0.0.1:9090:9090 -e CAIRN_TRIGGER_HOST=0.0.0.0 ghcr.io/cairndev-sh/cairn-engine:0.1.4
+docker run --rm -p 127.0.0.1:9090:9090 -e CAIRN_TRIGGER_HOST=0.0.0.0 ghcr.io/cairndev-sh/cairn-engine:0.3.0
 ```
 
 Without `CAIRN_STORAGE` runs are kept in memory and lost when the container stops.
@@ -213,11 +277,19 @@ The same chart is published as an OCI artifact, so you can install a released
 version without cloning the repository:
 
 ```bash
-helm upgrade --install cairn oci://ghcr.io/cairndev-sh/charts/cairn --version 0.1.4 -n cairn -f my-values.yaml
+helm upgrade --install cairn oci://ghcr.io/cairndev-sh/charts/cairn --version 0.3.0 -n cairn -f my-values.yaml
 ```
 
 Then `kubectl -n cairn rollout status deploy/cairn-server` and
 `curl -fsS https://<your host>/healthz`.
+
+The chart can also run a pull worker (`cairn worker --pull`), off by default.
+With `pullWorker.enabled: true`, set `pullWorker.command`, and set either
+`pullWorker.token` (a worker-pool token from
+`cairn remote worker-token --name <pool>`) or `pullWorker.existingSecret` (a
+Secret holding `CAIRN_ENGINE_TOKEN`); otherwise rendering refuses. See the
+[chart README](https://github.com/cairndev-sh/cairn/blob/main/deploy/helm/cairn/README.md#the-pull-worker)
+for the values and the upgrade notes.
 
 ## Sign-in and sign-up
 
@@ -236,12 +308,23 @@ The token goes in the `Authorization: Bearer` header. The one exception is the r
 event stream, `GET /runs/{id}/stream`, which also accepts it as `?access_token=`
 because a browser's `EventSource` cannot set headers; every other route refuses a
 token in the query string with `401`.
+
 Only `/healthz`, `/token`, the sign-up, invite and provider sign-in routes
 under `/auth/`, `/oauth/callback` (the redirect `cairn connect --via oauth`
 completes on; it checks its own single-use `state`), and webhook receivers that require a
 signature (`signature.required: true`) answer without one. A receiver is open only for
 its own method and only while its signing secret is set to a non-empty value. Its runs
 land in the workspace that declared it, and these open routes ignore `X-Cairn-Workspace`.
+
+A console sign-in is a short access token (`CAIRN_ACCESS_TOKEN_EXPIRE_MINUTES`,
+default 30) plus an httpOnly `cairn_refresh` cookie that `POST /auth/refresh`
+trades for a new token. A remembered sign-in lasts `CAIRN_REFRESH_TOKEN_DAYS`
+(default 30), and `POST /auth/logout` ends it on the server. **Behind a
+TLS-terminating proxy (Caddy with a domain, a Kubernetes ingress, a load
+balancer), or one that rewrites `Host`, set `CAIRN_PUBLIC_URL` to the
+browser-facing `https://` origin.** Without it the cookie is not marked
+`Secure`, and refresh and sign-out can fail the same-origin check. See
+[Set up your team](/guides/team/).
 
 **Who can sign up: `CAIRN_SIGNUP`.**
 

@@ -32,8 +32,9 @@ class _SFTP:
     async def __aenter__(self): return self
     async def __aexit__(self, *a): return False
     async def put(self, local, remote): pass
+    async def chmod(self, path, mode): pass
     async def get(self, remote, local, recurse=False): pass
-    def open(self, path, mode):
+    async def open(self, path, mode, attrs=None):
         class _F:
             async def __aenter__(s): return s
             async def __aexit__(s, *a): return False
@@ -219,7 +220,7 @@ async def test_submit_clears_stale_state_files(monkeypatch):
     assert "exit_code" in cleanup_cmds[0] and "pid" in cleanup_cmds[0]
     assert "stdout.log" in cleanup_cmds[0] and "metrics.json" in cleanup_cmds[0]
     # cleanup must run BEFORE the detached launch line, not after.
-    launch_idx = next(i for i, c in enumerate(seen) if "runner.sh" in c)
+    launch_idx = next(i for i, c in enumerate(seen) if "exec sh runner.sh" in c)
     cleanup_idx = seen.index(cleanup_cmds[0])
     assert cleanup_idx < launch_idx
     remote_exec._reset_conn_cache()
@@ -248,7 +249,7 @@ async def test_submit_launch_backgrounds_inside_group(monkeypatch):
     monkeypatch.setattr(remote_exec, "_connect", fake_connect)
     remote_exec._reset_conn_cache()
     await RemoteExecOp().submit(_inp(), _ctx())
-    launch = next(c for c in seen if "runner.sh" in c)
+    launch = next(c for c in seen if "exec sh runner.sh" in c)
     assert "&& {" in launch and launch.rstrip().endswith("}")  # #601 THE FIX — backgrounded inside a group, not the whole and-list
     # the `&` backgrounds the trainer INSIDE the group — in both launch branches (#2606)
     assert "& else" in launch and "& fi" in launch
@@ -430,7 +431,7 @@ async def test_submit_launches_when_no_live_job(monkeypatch):
 
     class _C(_Conn):
         async def run(self, cmd, check=False):
-            if "runner.sh" in cmd:          # the detached launch line (#601: setsid, was nohup)
+            if "exec sh runner.sh" in cmd:  # the detached launch line (#601: setsid, was nohup)
                 launched.append(cmd)
             return await super().run(cmd, check=check)
 

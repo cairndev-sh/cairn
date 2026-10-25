@@ -56,10 +56,31 @@ people, set in `.env`:
 CAIRN_JWT_SECRET=<openssl rand -hex 32>
 CAIRN_API_USER=admin
 CAIRN_API_PASSWORD=<choose one>
+# invite (default) | domain | open
+CAIRN_SIGNUP=invite
+# How long a remembered console sign-in lasts, in days (default 30)
+# CAIRN_REFRESH_TOKEN_DAYS=30
 ```
 
 and `docker compose up -d`; every API call then needs a token
-(`cairn remote login --endpoint http://localhost:8080`). For a cluster
+(`cairn remote login --endpoint http://localhost:8080`).
+
+To serve it on a domain, set `CADDY_DOMAIN=cairn.example.com` (Caddy then
+provisions TLS; publish port 443 as well) and set `CAIRN_PUBLIC_URL` to the
+same browser-facing origin:
+
+```
+CADDY_DOMAIN=cairn.example.com
+CAIRN_PUBLIC_URL=https://cairn.example.com
+```
+
+`CAIRN_PUBLIC_URL` is required once Caddy serves https: the console's
+`cairn_refresh` sign-in cookie is marked `Secure` only when it is an `https://`
+origin, and refresh and sign-out check the request against it.
+
+A `cairn worker --pull` against this stack needs a worker-pool token
+(`cairn remote worker-token --name <pool>`, run where `CAIRN_JWT_SECRET` is
+set) passed as `--token`; a signed-in user's token gets `403` on `/jobs/claim`. For a cluster
 with TLS, backups and the durable runtimes, use the Helm chart in
 [`../helm/cairn`](../helm/cairn/README.md).
 

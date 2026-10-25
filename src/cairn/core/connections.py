@@ -459,6 +459,10 @@ class ResolvedConnection(BaseModel):
     kind: str
     config: dict[str, Any] = Field(default_factory=dict)
     secrets: dict[str, str] = Field(default_factory=dict)
+    #: The account the row belongs to. A job that reconnects later, outside any
+    #: workspace scope (a remote job's cancel), resolves the same row with it
+    #: (``resolve_connection(name, account_id=...)``, ADR-0149 D4).
+    account_id: str = ""
 
     def __repr__(self) -> str:  # never echo resolved secret values
         masked = {k: "••••••" for k in self.secrets}
@@ -903,6 +907,7 @@ async def resolve_connection_obj(conn: Connection) -> Optional[ResolvedConnectio
             kind=conn.kind,
             config=dict(conn.config),
             secrets={"ACCESS_TOKEN": token},
+            account_id=conn.account_id,
         )
 
     # Lazy: avoid import-time coupling to the operator/secret stack.
@@ -913,7 +918,8 @@ async def resolve_connection_obj(conn: Connection) -> Optional[ResolvedConnectio
         resolved = {
             key: resolve_secret(ref, account_id=conn.account_id) or "" for key, ref in conn.secrets.items()
         }
-        return ResolvedConnection(name=conn.name, kind=conn.kind, config=dict(conn.config), secrets=resolved)
+        return ResolvedConnection(name=conn.name, kind=conn.kind, config=dict(conn.config), secrets=resolved,
+                                  account_id=conn.account_id)
 
     provider = get_secret_provider()
     resolved: dict[str, str] = {}
@@ -930,7 +936,8 @@ async def resolve_connection_obj(conn: Connection) -> Optional[ResolvedConnectio
             val = resolve_secret(ref) or os.environ.get(ref, "")
         resolved[key] = val
     return ResolvedConnection(
-        name=conn.name, kind=conn.kind, config=dict(conn.config), secrets=resolved
+        name=conn.name, kind=conn.kind, config=dict(conn.config), secrets=resolved,
+        account_id=conn.account_id,
     )
 
 

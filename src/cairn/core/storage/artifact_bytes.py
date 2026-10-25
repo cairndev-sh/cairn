@@ -54,6 +54,7 @@ from cairn.core.settings import getenv
 import asyncio
 import logging
 import os
+from typing import Optional
 from urllib.parse import unquote, urlparse
 
 logger = logging.getLogger("cairn.storage.artifact_bytes")
@@ -208,8 +209,12 @@ SCAN_LIMIT = 2000
 _PAGE = 200
 
 
-async def registry_health(store, *, scan: int = SCAN_LIMIT, sample: int = 5) -> dict:
+async def registry_health(store, *, scan: int = SCAN_LIMIT, sample: int = 5,
+                          workspace_id: Optional[str] = None) -> dict:
     """Count the registry by :func:`resolution_state`, newest first.
+
+    Counts the artifacts ``workspace_id`` owns (else the workspace in scope;
+    ADR-0148), the same answer the registry gives that workspace's reads.
 
     The ONE query behind both readers — ``cairn doctor`` and the console's
     lineage/data-products surface — so the CLI and the UI can never disagree
@@ -224,7 +229,8 @@ async def registry_health(store, *, scan: int = SCAN_LIMIT, sample: int = 5) -> 
     seen = 0
     offset = 0
     while seen < scan:
-        page = await store.list_artifacts(limit=min(_PAGE, scan - seen), offset=offset)
+        page = await store.list_artifacts(limit=min(_PAGE, scan - seen), offset=offset,
+                                          workspace_id=workspace_id)
         if not page:
             break
         for rec in page:

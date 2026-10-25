@@ -21,10 +21,13 @@ from cairn.core.operator import getenv
 
 import dataclasses
 import json
+import logging
 import os
+import re
 import shlex
 import shutil
 from collections.abc import Iterable, Mapping
+from urllib.parse import urlparse
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional
@@ -36,6 +39,7 @@ from cairn.core.dataflow import (
     EngineJobHandle,
     EngineJobStatus,
 )
+from cairn.core.dataflow.resources import ESSENTIAL_ENV_NAMES
 from cairn.core.operator.jobs import live_channel_env_for
 # The fetch contract (which files come back, where they land, the on-box →
 # local path rewrite) is core's since #2583 (ADR-0129 D1); the names stay
@@ -50,22 +54,89 @@ from cairn.core.dataflow.fetch import (  # noqa: F401 — re-exports
 
 from operator_dataflow.engines import BuiltinLocalEngine, _selected
 
-#: The image the engine runs when nothing more specific names one (ADR-0104 D1,
-#: #2071). PINNED on purpose — ``:latest`` means the run record cannot say which
-#: build produced the artifacts, and two dispatches a week apart silently run
-#: different code. The pin's ONE home is ``operator_training.images.GPU_IMAGE``
-#: (#2074): the workflow publishes that tag, and
-#: ``tests/core/test_gpu_image_pin.py`` fails if this copy drifts from it. This
-#: pack must not import the training pack, hence the literal. Prod should pin
-#: the immutable ``:<sha>`` tag via the ``remote_image`` backend /
-#: ``CAIRN_TRAIN_IMAGE``.
-DEFAULT_TRAIN_IMAGE = "ghcr.io/evs-cmd/cairn-train-gpu:v0.1.0"
+#: What image mode with no image named is told (#202). There is no built-in
+#: image: the deployment names the build it runs, so the run record names it
+#: too. PIN A TAG, never ``:latest`` — otherwise the record cannot say which
+#: build produced the artifacts. Two triggers, two remedies: the environment's
+#: ``remote_exec_mode`` does not override a connection's own ``mode``.
+IMAGE_REQUIRED = (
+    "remote_exec_mode is 'image' but no image is named: set the remote_image "
+    "backend (CAIRN_TRAIN_IMAGE) or the compute.ssh connection's 'image' to a "
+    "pinned tag, or set remote_exec_mode to 'auto' or 'venv' to run the box's "
+    "virtualenv"
+)
+CONNECTION_IMAGE_REQUIRED = (
+    "the compute.ssh connection sets mode = 'image' but no image is named: set "
+    "the connection's 'image' (or the remote_image backend, CAIRN_TRAIN_IMAGE) "
+    "to a pinned tag, or change the connection's 'mode' to 'auto' or 'venv' — "
+    "remote_exec_mode does not override a connection's own mode"
+)
 
 #: Env names the CONTAINER needs that the engine does not put in ``inp.env``
 #: itself: ``_submit`` adds CAIRN_RUN_ID after the command is built (#552), so
 #: forwarding only the names we know here would drop it and the box's per-run
 #: checkpoint keys would collide across runs.
 _EXTRA_FORWARDED = ("CAIRN_RUN_ID",)
+
+_log = logging.getLogger("operator_dataflow.engines_ssh")
+
+#: ``remote_env`` — the deployment's list of EXTRA env names the job on the box
+#: receives from the control plane's environment (e.g. ``CAIRN_CHECKPOINT_BUCKET``,
+#: ``AWS_DEFAULT_REGION``). Declared in the profile (``[profile.backends]``) or
+#: ``CAIRN_REMOTE_ENV``, never by a flow or a tenant. Names only: a value rides
+#: the job's owner-only ``runner.sh`` (venv) or ``docker run -e NAME`` (image),
+#: never a command line. Fails closed on any name below.
+_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+#: Credentials stay on the box (an instance role, the box's own env): a name that
+#: looks like one is refused, whatever its value.
+_CREDENTIAL_MARKERS = ("KEY", "SECRET", "TOKEN", "PASSWORD")
+#: The engine's own per-submission contract (spec, lineage, live channel): a
+#: control-plane value must never replace it.
+_ENGINE_OWNED = frozenset(n for n in ESSENTIAL_ENV_NAMES if n.startswith(("CAIRN_", "OBS_")))
+
+
+def remote_env_names() -> tuple[list[str], list[str]]:
+    """``(names to forward, problems)`` for the deployment's ``remote_env``.
+
+    A problem names the variable and the rule, never a value."""
+    names: list[str] = []
+    problems: list[str] = []
+    entries = [e for e in re.split(r"[\s,]+", _selected("remote_env", "").strip()) if e]
+    for pos, name in enumerate(entries, start=1):
+        if name in names:
+            continue
+        if not _ENV_NAME.match(name):
+            # The entry's position only: any part of a malformed entry may be a
+            # pasted secret (an upper-case base32 seed with `=` padding reads exactly
+            # like `NAME=`), so none of it is echoed.
+            problems.append(f"entry {pos} is not an environment variable name")
+        elif any(m in name.upper() for m in _CREDENTIAL_MARKERS):
+            problems.append(f"{name} looks like a credential; credentials stay on the box "
+                            "(an instance role or the box's own environment), never in the job")
+        elif name in _ENGINE_OWNED:
+            problems.append(f"{name} is set by the engine for each submission")
+        else:
+            names.append(name)
+    return names, problems
+
+
+def _control_plane_only(value: Any, where: str = "") -> list[tuple[str, str]]:
+    """``(where, location)`` for every launch-resolved dataset version
+    (``<uri>#sha256=<hash>``, see ``resolve_dataset_refs_in_config``) in ``value``,
+    searched through nested dicts and lists, whose location is a control-plane
+    path: absolute, or any ``file:`` URI (``file:///x`` and ``file:/x`` alike, the
+    registry's ``local_path`` semantics). A plain path with no pin is an upstream
+    leg's hand-off, which :meth:`BuiltinSshEngine._localize_inputs` ships."""
+    if isinstance(value, dict):
+        return [hit for k, v in value.items()
+                for hit in _control_plane_only(v, f"{where}.{k}" if where else str(k))]
+    if isinstance(value, list):
+        return [hit for i, v in enumerate(value) for hit in _control_plane_only(v, f"{where}[{i}]")]
+    if not isinstance(value, str) or "#sha256=" not in value:
+        return []
+    loc = value.partition("#")[0]
+    return [(where, loc)] if loc.startswith("/") or urlparse(loc).scheme == "file" else []
+
 
 def _remote_command() -> str:
     """The on-box entrypoint. Defaults to the console script on PATH (the
@@ -93,18 +164,23 @@ def resolve_exec_mode(config: Mapping[str, Any]) -> tuple[str, str, str]:
     * ``mode`` — the connection's ``mode``, else the environment's
       ``remote_exec_mode`` backend (profile record → ``CAIRN_REMOTE_EXEC_MODE``
       → default), else ``auto``. ``auto`` means "image if anything names an
-      image, otherwise the legacy venv" — so a deployment that names no image
-      is NOT flipped to containers behind its operator's back.
+      image, otherwise the box virtualenv" — so a deployment that names no
+      image is NOT flipped to containers behind its operator's back.
     * ``image`` — the connection's ``image`` (it names THIS box's build) beats
       the environment's ``remote_image`` backend / ``CAIRN_TRAIN_IMAGE`` (the
-      fleet default), which beats :data:`DEFAULT_TRAIN_IMAGE`.
+      fleet default). There is no built-in default (#202): ``image`` mode with
+      neither raises :class:`EngineError` — :data:`CONNECTION_IMAGE_REQUIRED`
+      when the connection's own ``mode`` chose image, else
+      :data:`IMAGE_REQUIRED`. This runs at submit, where the connection and
+      the environment are both known, before anything reaches the box.
     * ``gpus`` — the ``--gpus`` value; empty string disables the flag (a CPU
       box, or a runtime without the NVIDIA container toolkit).
 
-    ``mode == "venv"`` always returns an empty image: the legacy path must be
+    ``mode == "venv"`` always returns an empty image: the venv path must be
     byte-for-byte what it was, including its handle meta.
     """
     mode = str(config.get("mode") or "").strip().lower()
+    from_connection = bool(mode)
     if not mode:
         mode = _selected("remote_exec_mode", "auto").strip().lower() or "auto"
     named = (
@@ -120,7 +196,9 @@ def resolve_exec_mode(config: Mapping[str, Any]) -> tuple[str, str, str]:
         if config.get("gpus") is not None
         else getenv("CAIRN_DATAFLOW_IMAGE_GPUS", "all")
     ).strip()
-    return "image", named or DEFAULT_TRAIN_IMAGE, gpus
+    if not named:
+        raise EngineError(CONNECTION_IMAGE_REQUIRED if from_connection else IMAGE_REQUIRED)
+    return "image", named, gpus
 
 
 def _docker_command(image: str, inner: str, env_names: Iterable[str], gpus: str) -> str:
@@ -141,10 +219,10 @@ def _docker_command(image: str, inner: str, env_names: Iterable[str], gpus: str)
       surrounding shell, which ``runner.sh`` has already exported. The per-run
       job-channel token therefore never appears in the container's argv, where
       every ``ps`` on the box could read it.
-    * **``--entrypoint sh``** — the image's own ENTRYPOINT is the train_entry
-      runner (``deploy/images/train-gpu/Dockerfile``), so the flow kernel needs
-      an explicit override; going through ``sh -c`` keeps
-      ``CAIRN_DATAFLOW_IMAGE_CMD`` free to be any command, not just a bare binary.
+    * **``--entrypoint sh``** — a training image's own ENTRYPOINT is its
+      training runner, so the flow kernel needs an explicit override; going
+      through ``sh -c`` keeps ``CAIRN_DATAFLOW_IMAGE_CMD`` free to be any
+      command, not just a bare binary.
     """
     img = shlex.quote(image)
     gpu_flag = f" --gpus {shlex.quote(gpus)}" if gpus else ""
@@ -200,6 +278,9 @@ class BuiltinSshEngine:
     """Run ``cairn-dataflow-run`` on a ``compute.ssh``-connected box."""
 
     name = "builtin-ssh"
+    #: ADR-0149 — the job runs on the box, which cannot read a control-plane path:
+    #: the leg executor resolves `dataset:` refs to their durable copy for it.
+    needs_durable_inputs = True
     #: ADR-0118 D7 — kernels run through `run_dataflow`, which checks stage contracts.
     carries_stage_contracts = True
 
@@ -210,8 +291,25 @@ class BuiltinSshEngine:
 
     # local capability discovery — the box installs the same wheels (the
     # fix-remote deployment contract), so the local registry is authoritative.
+    # Plus what the box could never run with: a refused `remote_env`, and a
+    # dataset version that exists only on the control plane.
     def validate(self, spec: DataflowSpec) -> list[str]:
-        return BuiltinLocalEngine().validate(spec)
+        problems = BuiltinLocalEngine().validate(spec)
+        _, env_problems = remote_env_names()
+        if env_problems:
+            problems.append("remote_env: " + "; ".join(env_problems))
+        found = _control_plane_only(spec.config, "spec config")
+        for ref in spec.stages:
+            found += _control_plane_only(ref.config, f"stage {ref.stage!r} config")
+        for where, loc in found:
+            problems.append(
+                f"{where}: dataset version {loc} has no durable copy and exists only on "
+                f"the control plane, which the box behind {self._target!r} cannot read. "
+                "Configure the object store on the control plane (CAIRN_ARTIFACT_STORE=s3 "
+                "and CAIRN_ARTIFACT_S3_BUCKET) and register the version again while its "
+                "file is still there, or re-run the step that produced it; the ref then "
+                "resolves to the durable copy")
+        return problems
 
     async def _exec_ctx(self, ctx: Any) -> SimpleNamespace:
         from cairn.core.operator import resolve_connection  # noqa: PLC0415 - lazy: keeps engine importable off the engine path
@@ -297,7 +395,10 @@ class BuiltinSshEngine:
         spec, uploads = self._localize_inputs(spec)
         spec, resume_uploads = self._localize_resume(spec)
         uploads = uploads + [u for u in resume_uploads if u not in uploads]
-        env: dict[str, Any] = {"CAIRN_DATAFLOW_SPEC": spec.model_dump_json()}
+        # the deployment's declared names first: the engine's own values below win
+        forwarded, _ = remote_env_names()
+        env: dict[str, Any] = {n: os.environ[n] for n in forwarded if os.environ.get(n)}
+        env["CAIRN_DATAFLOW_SPEC"] = spec.model_dump_json()
         if spec.parent_run:
             env["CAIRN_PARENT_RUN"] = spec.parent_run
             env.update(live_channel_env_for(spec.parent_run, "flow"))  # #2025 — the live channel
@@ -312,9 +413,10 @@ class BuiltinSshEngine:
             if _val:
                 env[_var] = _val
         # ADR-0104 D1 (#2071): the IMAGE is the unit of remote work. In image
-        # mode the box runs the CI-built cairn-train-gpu image and carries
-        # nothing of cairn's that can drift (#2069); venv mode is the legacy
-        # box install, unchanged.
+        # mode the box runs the image the deployment names and carries nothing
+        # of cairn's that can drift (#2069); venv mode is the box install,
+        # unchanged. Image mode with no image named raises here, before the
+        # exec layer is asked to run anything (#202).
         cfg = dict(getattr(exec_ctx.compute, "config", None) or {})
         mode, image, gpus = resolve_exec_mode(cfg)
         if mode == "image":
@@ -335,8 +437,13 @@ class BuiltinSshEngine:
             # reconstructable after a control-plane restart. `mode`/`image` ride
             # along as the run's PROVENANCE: "which build produced this adapter?"
             # is otherwise unanswerable after the fact (#1776).
-            meta={"job_handle": dataclasses.asdict(jh), "exec_input": inp.model_dump(),
-                  "mode": mode, "image": image},
+            # ADR-0149 D2: the meta is persisted on the pipeline step and served by
+            # the API, so the exec input goes WITHOUT its env (the job-channel
+            # token, MLFLOW_TRACKING_PASSWORD, forwarded values); only the NAMES
+            # are kept. Nothing after submit needs the values: poll reads `fetch`.
+            meta={"job_handle": dataclasses.asdict(jh),
+                  "exec_input": inp.model_dump(exclude={"env"}),
+                  "env_names": sorted(env), "mode": mode, "image": image},
         )
 
     def _rebuild(self, handle: EngineJobHandle):
@@ -363,7 +470,12 @@ class BuiltinSshEngine:
 
     async def cancel(self, handle: EngineJobHandle) -> None:
         remote_exec, jh, _ = self._rebuild(handle)
-        await remote_exec._cancel(jh)
+        # the key of the connection the job was submitted with (the target only
+        # for a handle saved before that was recorded). A cancel that did not
+        # reach the box is an error to the caller, never "sent" (ADR-0149 D4).
+        if not await remote_exec._cancel(jh, connection=self._target):
+            raise EngineError(f"could not cancel {handle.job_id}: the box was not reached "
+                              "and the job may still be running")
 
     # ── H6b/d (#1248, ADR-0088 D4): pull declared checkpoints off the box ──
     async def fetch_checkpoints(self, handle: EngineJobHandle, dest_dir: Path) -> bool:
@@ -372,8 +484,8 @@ class BuiltinSshEngine:
         The bridge's relay tick calls this for workdirs that don't exist on
         the control plane; the pulled tree then relays through the SAME
         ``relay_local_checkpoints`` path a local workdir uses. Reconnects
-        from the handle meta + the ambient key (the ``_cancel`` pattern —
-        a relay tick has no OperationContext), rides the cached connection
+        from the handle meta + the target connection's key (the ``_cancel``
+        pattern — a relay tick has no OperationContext), rides the cached connection
         (#337), and pulls each ``stage-NN`` dir at most once: get into a
         ``.partial`` staging dir, rename when complete, skip dirs already
         present. Best-effort by contract — any failure returns False and
@@ -384,15 +496,10 @@ class BuiltinSshEngine:
         workdir = str(jh.meta.get("workdir", "") or "")
         if not workdir:
             return False
-        params = {
-            "host": jh.meta.get("host"), "user": jh.meta.get("user"),
-            "port": int(jh.meta.get("port") or 22),
-            "known_hosts": jh.meta.get("known_hosts"),
-            "private_key": os.environ.get("SSH_PRIVATE_KEY"),
-        }
         ckroot = dest_dir / "checkpoints"
         try:
-            conn = await remote_exec._get_conn(params)
+            conn = await remote_exec._get_conn(
+                await remote_exec._job_ssh_params(jh, self._target))
             async with conn.start_sftp_client() as sftp:
                 try:
                     names = await sftp.listdir(f"{workdir}/checkpoints")
@@ -423,7 +530,13 @@ class BuiltinSshEngine:
                         got = True
                     shutil.rmtree(tmp, ignore_errors=True)
                 return got
-        except Exception:  # noqa: BLE001 — best-effort; the next beat retries
+        except Exception as e:  # noqa: BLE001 — best-effort; the next beat retries
+            # loud, not silent: an unreachable box means no checkpoints come back.
+            # The error's TYPE only — SSH and key errors may quote their input.
+            # the connection actually used: the handle's, else the target (ADR-0149 D4)
+            used = str(jh.meta.get("connection") or "") or self._target
+            _log.warning("checkpoint pull-back from %s:%s via %r failed (%s)",
+                         jh.meta.get("host"), workdir, used, type(e).__name__)
             return False
 
     # ── result: read the FETCHED result.json; point stats at local copies ──

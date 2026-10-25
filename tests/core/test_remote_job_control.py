@@ -222,6 +222,84 @@ async def test_durable_path_idempotent_submit_then_returns_on_resume(monkeypatch
     assert submits == [1] and isinstance(out, dict)  # idempotent — not re-dispatched
 
 
+# ── the job's workspace is the one in scope ───────────────────────────────
+
+
+def _durable_world(monkeypatch):
+    from cairn.core.operator import job_store as JS
+
+    shared = InMemoryRemoteJobStore()
+    monkeypatch.setattr(JS, "get_remote_job_store", lambda: shared)
+    submits: list = []
+    pins: list = []
+
+    class StubOp:
+        name = "stub/gpu"
+        input_schema = _Inp
+        output_schema = _Out
+
+        async def submit(self, inp, ctx):
+            submits.append(1)
+            return JobHandle(job_id="j1", backend="remote_job")
+
+    async def _pins(*a, **kw):
+        pins.append(1)
+
+    import langgraph.types as LT
+
+    class _Pause(Exception):
+        pass
+
+    def _interrupt(payload):
+        raise _Pause()
+
+    monkeypatch.setattr(LT, "interrupt", _interrupt)
+    monkeypatch.setattr("cairn.core.operator.pins.record_train_pins", _pins)
+    return shared, StubOp(), submits, pins, _Pause
+
+
+@pytest.mark.parametrize("target", ["worker:gpu", "rp"])
+async def test_durable_job_with_auth_on_and_no_workspace_in_scope_is_refused(monkeypatch, target):
+    """A pull-lane (``worker:<pool>``) or pushed job registered from an operation
+    node outside any workspace scope, with auth on, is refused before anything is
+    registered or dispatched, instead of being stamped with the process default."""
+    from cairn.core.operator import runtime as RT
+    from cairn.core.operator.binding import ExecutionField, OperationBinding
+    from cairn.core.operator.protocol import OperationContext
+    from cairn.core.workspace import WorkspaceScopeRequired
+
+    monkeypatch.setenv("CAIRN_JWT_SECRET", "test-secret")
+    monkeypatch.setenv("CAIRN_WORKSPACE", "default")
+    shared, op, submits, pins, _ = _durable_world(monkeypatch)
+    binding = OperationBinding(operator="stub/gpu", input={}, output={},
+                               execution=ExecutionField(compute_target=target))
+    with pytest.raises(WorkspaceScopeRequired):
+        await RT._invoke_remote_job_durable(op, _Inp(), OperationContext(pipeline_id="r1", node_name="train"),
+                                            binding, "stub/gpu", run_id="r1", node_name="train",
+                                            resolved_input={"x": 1})
+    assert await shared.get("r1:train") is None
+    assert submits == [] and pins == []
+
+
+@pytest.mark.parametrize("target", ["worker:gpu", "rp"])
+async def test_durable_job_is_stamped_with_the_workspace_in_scope(monkeypatch, target):
+    from cairn.core.operator import runtime as RT
+    from cairn.core.operator.binding import ExecutionField, OperationBinding
+    from cairn.core.operator.protocol import OperationContext
+    from cairn.core.workspace import workspace_scope
+
+    monkeypatch.setenv("CAIRN_JWT_SECRET", "test-secret")
+    shared, op, submits, pins, _Pause = _durable_world(monkeypatch)
+    binding = OperationBinding(operator="stub/gpu", input={}, output={},
+                               execution=ExecutionField(compute_target=target))
+    with workspace_scope("ws-a"), pytest.raises(_Pause):
+        await RT._invoke_remote_job_durable(op, _Inp(), OperationContext(pipeline_id="r1", node_name="train"),
+                                            binding, "stub/gpu", run_id="r1", node_name="train",
+                                            resolved_input={"x": 1})
+    rec = await shared.get("r1:train")
+    assert rec is not None and rec.workspace_id == "ws-a"
+
+
 # ── #552 — relaunch-from-checkpoint on a resumable death ──────────────────
 
 

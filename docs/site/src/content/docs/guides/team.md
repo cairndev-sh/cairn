@@ -38,8 +38,15 @@ A sign-in's lifetime is fixed when it starts; refreshing does not extend it.
 `POST /auth/logout` ends the sign-in on the server (like a refresh, it needs the
 `X-Cairn-Refresh: 1` header and must come from the console's own origin). Changing a user's password or
 disabling them ends all their sign-ins. Set `CAIRN_PUBLIC_URL` to the address
-people use: the cookie is `Secure` when it is https, and a refresh is accepted
-only from that origin or the host the request was sent to.
+people use; behind a TLS-terminating proxy (Caddy with a domain, an ingress, a
+load balancer) this is required. The cookie is `Secure` when that address is
+https, and a refresh is accepted only from that origin or the host the request
+was sent to.
+
+A refresh token sent again within 10 seconds of its rotation renews (two tabs
+refreshing at once, or a refresh whose response was lost, keep the sign-in). The token it displaced, presented 10
+seconds or more later, ends the sign-in for both holders, and the server logs
+"superseded refresh token presented" (ADR-0144, ADR-0145).
 
 ## 2. Create the first account
 
@@ -122,6 +129,22 @@ your account's oldest active workspace, the one sign-in opens; a
 account with no active workspace gets `404` on every workspace-scoped route,
 but can still sign in, list, create and restore its workspaces. The engine installs every
 pipeline it finds into the `default` workspace when it starts.
+
+New workspace ids are at most 40 characters.
+
+What belongs to an account or a workspace:
+
+- **Connections and secrets** belong to the account. Each account's
+  connections and stored secrets are its own, and its runs resolve only those
+  (see [Connect a provider](/guides/connect-a-provider/)).
+- **Datasets** belong to a workspace. `dataset:` refs and `@latest` see only
+  the workspace's versions, and the `default` workspace does not see other
+  workspaces' datasets.
+- **Knowledge corpora**: retrieval reads the installed packs' corpora plus the
+  workspace's own.
+- **Packs** are deployment-wide. Installing or removing one over the API
+  (`POST /registry/install`, `POST /registry/uninstall`) needs the deployment
+  admin (`CAIRN_API_USER`).
 
 ## 6. Roles, and who decides a gate
 

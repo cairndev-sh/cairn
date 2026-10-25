@@ -1001,6 +1001,11 @@ INVENTORY: list[SettingSpec] = [
         "How the SSH engine runs a flow on a box: auto | image | venv (ADR-0104 D1).",
     ),
     SettingSpec(
+        "remote_env", "CAIRN_REMOTE_ENV", None, "dataflow",
+        "Names of control-plane env variables the SSH engine forwards to the job on the box; "
+        "credential-looking names are refused (profile key remote_env).",
+    ),
+    SettingSpec(
         "dataflow_remote_cmd", "CAIRN_DATAFLOW_REMOTE_CMD", "cairn-dataflow-run", "dataflow",
         "Command the SSH engine runs on a venv box (#1075).",
     ),

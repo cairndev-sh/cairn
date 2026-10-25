@@ -34,6 +34,7 @@ from cairn.core.engine.pipeline_resolve import (
     resolve_pipeline_ref,
 )
 from cairn.core.dispatch.pipeline_doors import ServiceDoorError  # re-export: the routers' one import site
+from cairn.core.policy.pipeline_gates import PolicyDeniedError
 from cairn.core.admission_door import AdmissionRefusedError  # noqa: F401 — re-export (#2190), same reason
 from cairn.core.dispatch.pipeline_preview import (
     GovernanceInputError,
@@ -60,6 +61,12 @@ class MissingInputsError(ValueError):
 
 class InputCoercionError(ValueError):
     """#1802 — a supplied input cannot be parsed into its declared type."""
+
+
+class RuntimeOwnerRefusedError(PolicyDeniedError):
+    """#199 (ADR-0151 D10) — the runtime that would own this pipeline cannot run one of
+    its steps. A :class:`PolicyDeniedError`, so every surface already answers it as a
+    refused launch (HTTP 403, CLI exit 3), before any record exists."""
 
 
 class PipelineDriftError(ValueError):
@@ -94,6 +101,20 @@ _BOOL_WORDS = {"true": True, "1": True, "yes": True, "on": True,
                "false": False, "0": False, "no": False, "off": False}
 
 
+def _comma_list(val: str) -> Optional[list[str]]:
+    """#197 — ``"a, b,,c"`` → ``["a", "b", "c"]``; ``None`` when the string is JSON
+    (or is meant to be: it opens with ``[``), so the JSON rule decides it. A string
+    with no items (``""``, ``" , "``) is also ``None``: it stays refused as before, so
+    ``-i k=`` cannot satisfy a required list input; an empty list is ``[]``."""
+    if val.strip().startswith("["):
+        return None
+    try:
+        json.loads(val)
+    except ValueError:
+        return [item.strip() for item in val.split(",") if item.strip()] or None
+    return None
+
+
 def coerce_declared_inputs(d: PipelineDef, inputs: dict) -> dict:
     """#1802 — parse string values into their DECLARED input types, at the door.
 
@@ -110,6 +131,14 @@ def coerce_declared_inputs(d: PipelineDef, inputs: dict) -> dict:
     non-string; well-typed values (console JSON bodies, YAML preset files,
     declared defaults) pass through identically. An unparseable value raises
     :class:`InputCoercionError` naming the key and the declared type.
+
+    #197 — a ``list`` input also takes a comma-separated string
+    (``-i report_to=mlflow,wandb`` → ``["mlflow", "wandb"]``; items trimmed,
+    empty items dropped), because shell-quoting JSON is the first thing a new
+    user gets wrong. A value that parses as JSON keeps the JSON rule, one that
+    opens with ``[`` but does not parse is refused as broken JSON rather than
+    split, and one with no items at all (``""``) is refused as before; a list of
+    non-string items, or an empty list, still needs JSON.
     """
     out = dict(inputs)
     for key, spec in (d.inputs or {}).items():
@@ -118,7 +147,9 @@ def coerce_declared_inputs(d: PipelineDef, inputs: dict) -> dict:
         if not isinstance(val, str) or declared in (None, "str", "string"):
             continue
         try:
-            if declared in ("dict", "list"):
+            if declared == "list" and (split := _comma_list(val)) is not None:
+                out[key] = split
+            elif declared in ("dict", "list"):
                 parsed = json.loads(val)
                 expect = dict if declared == "dict" else list
                 if not isinstance(parsed, expect):
@@ -336,6 +367,44 @@ def _refuse_task_legs_off_their_executors(plan: PipelinePlan) -> None:
             raise PipelinePlanError(f"leg {step.id!r}: {problem}")
 
 
+def runtime_owner_problems(plan: PipelinePlan) -> list[str]:
+    """#199, ADR-0151 D10 — the steps of ``plan`` the runtime's pipeline owner cannot run.
+
+    Under ``CAIRN_RUNTIME=temporal`` the durable ``PipelineWorkflow`` owns the pipeline
+    (``PipelineBridge.start_pipeline`` hands it over), and that owner declares what it
+    runs (:data:`cairn.core.runtime.temporal.PIPELINE_OWNER_LEG_KINDS`,
+    :data:`~cairn.core.runtime.temporal.PIPELINE_OWNER_RUNS_FINALIZERS`). Read from
+    there, not listed here, so the refusal lifts when the owner learns a step (#59).
+    The in-process bridge (``inprocess``, ``dbos``) runs every step: no problems."""
+    from cairn.core import settings  # noqa: PLC0415 — cycle: settings → storage → dispatch
+
+    if settings.runtime() != "temporal":
+        return []
+    from cairn.core.dispatch.leg_executor import leg_kind_of  # noqa: PLC0415 — the kind the owner's SUBMIT routes on
+    from cairn.core.refs import bare_ref  # noqa: PLC0415
+    from cairn.core.runtime import temporal as owner  # noqa: PLC0415 — the owner's declaration; imports no SDK
+
+    problems = []
+    for step in plan.steps:
+        kind = leg_kind_of(step.ref)
+        if kind not in owner.PIPELINE_OWNER_LEG_KINDS:
+            problems.append(f"leg {step.id!r} is a {kind}: leg ({bare_ref(step.ref)}), and the Temporal "
+                            f"pipeline owner does not run {kind}: legs (#59)")
+        if step.finalizer and not owner.PIPELINE_OWNER_RUNS_FINALIZERS:
+            problems.append(f"step {step.id!r} is a finalizer:, and the Temporal pipeline owner does not "
+                            "run finalizers (ADR-0151 D10)")
+    return problems
+
+
+def _refuse_steps_the_runtime_owner_cannot_run(plan: PipelinePlan, *, pipeline_ref: str) -> None:
+    """The launch door's refusal for :func:`runtime_owner_problems`, naming every step."""
+    if (problems := runtime_owner_problems(plan)):
+        raise RuntimeOwnerRefusedError(
+            f"pipeline {pipeline_ref} cannot run under CAIRN_RUNTIME=temporal: "
+            + "; ".join(problems)
+            + ". Run it under CAIRN_RUNTIME=inprocess or CAIRN_RUNTIME=dbos.")
+
+
 def _with_invocations(plan: PipelinePlan, resolution: ContractResolution) -> ContractResolution:
     """#2241 B (D4) — one ``InvocationEntry`` per opted-in task-leg operator, recorded
     here before gates, admission and any record; the leg reads it from the record and
@@ -406,6 +475,58 @@ async def _ask_launch_hooks(
         )) from None
 
 
+async def _price_and_check(plan: PipelinePlan, admission: Any, *, workspace_id: str) -> None:
+    """ADR-0151 D2/D3 at the launch door. Prices every flow leg with a compute
+    target (``leg_hooks.price_plan``), refuses a priced leg with no ``timeout`` and a
+    total that does not fit what the budget has left (``remaining_usd``: the cap less
+    the series' live holds; read-only, no reservation), and records the estimate on
+    the admission decision. A refusal is the admission refusal (403 / exit 3).
+
+    Fail-closed: a price that cannot be READ (the target selection, the connection
+    store, the named connection, a malformed ``hourly_usd``) refuses the launch with
+    the reason, and a retry can pass once it is readable; "not priced" is only for a
+    target that definitely carries no price. A ``governance.budget.usd`` with no
+    ``series`` is still checked here, against the cap alone: legs reserve only under
+    a series, so for such a pipeline this door is the only budget check."""
+    from dataclasses import replace  # noqa: PLC0415
+
+    from cairn.core.admission_door import REFUSED  # noqa: PLC0415
+    from cairn.core.budget_reservations import remaining_usd  # noqa: PLC0415
+    from cairn.core.dispatch.leg_hooks import LegPriceUnreadable, price_plan  # noqa: PLC0415 - cycle: hooks → executor → storage
+    from cairn.core.workspace import workspace_scope  # noqa: PLC0415 — off the hot import path
+
+    try:
+        with workspace_scope(workspace_id):   # the account the legs' connections resolve in
+            estimate = await price_plan(plan)
+    except LegPriceUnreadable as e:
+        raise AdmissionRefusedError(replace(
+            admission, verdict=REFUSED, refusing_reasons=[
+                *admission.refusing_reasons,
+                f"{e} — the leg cannot be priced, so the launch is refused; retry once it can be read"],
+        )) from None
+    if not estimate:
+        return
+    admission.cost_estimate = estimate
+    reasons = [f"leg {e['step']!r} runs on {e['connection']!r} at ${e['hourly_usd']:g}/h: "
+               "declare a timeout to price this leg"
+               for e in estimate["legs"] if e.get("priced") and e.get("estimate_usd") is None]
+    gov = getattr(plan, "governance", None) or {}
+    budget = float((gov.get("budget") or {}).get("usd", 0.0) or 0.0)
+    total = float(estimate.get("estimate_usd") or 0.0)
+    if budget and total > 0:
+        series = str(gov.get("series", "") or "")
+        # no series → no live holds to count: the cap alone (legs reserve only under a series)
+        left = await remaining_usd(series, spent_usd=0.0, budget_usd=budget) if series else budget
+        if left is not None and total > left + 1e-9:
+            basis = "; ".join(f"{e['step']}: {e['basis']}" for e in estimate["legs"] if e.get("priced"))
+            reasons.append(f"the legs on a priced box are estimated at ${total:.2f} ({basis}); "
+                           f"the budget has ${left:.2f} of ${budget:.2f} left"
+                           + (f" in series {series!r}" if series else ""))
+    if reasons:
+        raise AdmissionRefusedError(replace(
+            admission, verdict=REFUSED, refusing_reasons=[*admission.refusing_reasons, *reasons]))
+
+
 async def launch_pipeline_def(
     d: PipelineDef,
     *,
@@ -466,6 +587,9 @@ async def launch_pipeline_def(
     merged = apply_input_defaults(d, supplied)
 
     plan = plan_pipeline(d)
+    # #199 — a step the runtime's pipeline owner cannot run is refused before any
+    # record, instead of failing mid-run after the earlier legs have spent.
+    _refuse_steps_the_runtime_owner_cannot_run(plan, pipeline_ref=f"{d.pack}/{d.name}")
     _refuse_task_legs_off_their_executors(plan)
 
     # #2240 (slice C, ADR-0111 acceptance §4) — the static contract closure is
@@ -503,10 +627,17 @@ async def launch_pipeline_def(
     # #2190). Reuses the intake/holdout/licence doors the agentic path runs
     # per leg; adds the policy's required-check rule; refuses with every reason.
     from cairn.core.admission_door import decide_admission  # noqa: PLC0415 — off the hot import path
+    from cairn.core.engine.pipeline import dataset_expectations  # noqa: PLC0415
 
-    admission = await decide_admission(merged, workspace_id=workspace_id, environment=environment or "")
+    # ADR-0146 — and each input's declared role / verdict requirement, checked on its version.
+    admission = await decide_admission(merged, workspace_id=workspace_id, environment=environment or "",
+                                       expectations=dataset_expectations(d))
     if admission.refused:
         raise AdmissionRefusedError(admission)
+    # ADR-0151 D1–D3 — the legs on a priced box: estimated, checked against the
+    # budget (read-only, nothing reserved) and recorded on the admission, before
+    # any record exists. A pipeline with no compute target records nothing new.
+    await _price_and_check(plan, admission, workspace_id=workspace_id)
     # #1789 criterion 4 — the record answers "launched from what". `trigger` is
     # already the record's provenance dict (what started it), so the preset name
     # and the keys the caller overrode on top of it go there rather than into a
@@ -550,7 +681,7 @@ async def launch_pipeline_def(
 
 __all__ = [
     "GovernanceInputError", "InputCoercionError", "MissingInputsError",
-    "PipelineDriftError", "PipelineNotFoundError", "ServiceDoorError",
+    "PipelineDriftError", "PipelineNotFoundError", "RuntimeOwnerRefusedError", "ServiceDoorError",
     "coerce_declared_inputs", "launch_pipeline", "launch_pipeline_def",
-    "missing_inputs", "resolve_or_raise",
+    "missing_inputs", "resolve_or_raise", "runtime_owner_problems",
 ]

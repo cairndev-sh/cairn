@@ -482,6 +482,50 @@ def _check_frozen(spec: DataflowSpec, ref, frozen: dict) -> None:
     _conform(spec, ref, ref.contract.output, frozen, "output")
 
 
+def _descriptor_uri(out: str) -> str:
+    return out if out.startswith(("s3://", "file://", "gs://", "https://", "hf://", "stub://")) else f"file://{out}"
+
+
+#: The fields a named output may carry (``outputs.<name>.<field>``).
+_OUTPUT_FIELDS = ("output", "content_hash", "kind", "rows", "bytes", "register_as", "register_role")
+
+
+def _named_outputs(stage: str, st: dict, workdir: Path, parents: list[str]) -> list[ArtifactDescriptor]:
+    """ADR-0141 D1 — a stage that makes several products names them (a split's train, val and
+    test files): ``outputs: [<name>, …]`` and, per name, flat ``outputs.<name>.<field>`` stats
+    (stats cross the boundary as scalars, ADR-0081 D3). Each becomes a descriptor in the result's
+    ``named_outputs`` with the stage's parents — the products are siblings of the stage's own
+    descriptor, so none descends from another and the next stage still descends from the stage —
+    and its own stats, which is where the control plane reads ``register_as`` / ``register_role``.
+    A named output without ``output`` and ``content_hash`` is a kernel bug and fails the flow.
+    An ``outputs`` stat with no ``outputs.<name>.*`` key is some kernel's own stat, left alone."""
+    names = st.get("outputs")
+    if not names or not any(str(k).startswith("outputs.") for k in st):
+        return []
+    if (not isinstance(names, list) or not all(isinstance(n, str) and n for n in names)
+            or len(set(names)) != len(names)):
+        raise ValueError(f"stage {stage!r}: `outputs` must be a list of distinct names, got {names!r}")
+    found: list[ArtifactDescriptor] = []
+    for name in names:
+        fields = {f: st[f"outputs.{name}.{f}"] for f in _OUTPUT_FIELDS if f"outputs.{name}.{f}" in st}
+        out, digest = str(fields.get("output") or ""), str(fields.get("content_hash") or "")
+        if not out or not digest:
+            raise ValueError(f"stage {stage!r}: output {name!r} needs outputs.{name}.output "
+                             f"and outputs.{name}.content_hash")
+        kind = fields.get("kind") if fields.get("kind") in ("dataset", "model", "report", "index") else "dataset"
+        rows, size = fields.get("rows"), fields.get("bytes")
+        found.append(ArtifactDescriptor(
+            uri=_descriptor_uri(out if ("://" in out or out.startswith("/")) else str(workdir / out)),
+            kind=kind,
+            content_hash=digest,
+            rows=int(rows) if isinstance(rows, int) and rows >= 0 else None,
+            size_bytes=int(size) if isinstance(size, int) else None,
+            parents=list(parents),
+            stats={"output_name": name, "stage": stage, **fields},
+        ))
+    return found
+
+
 def run_dataflow(
     spec: DataflowSpec,
     workdir: Path,
@@ -515,6 +559,8 @@ def run_dataflow(
     started = time.monotonic()
     stats: dict = {"stages_total": len(spec.stages), "stages_done": 0}
     descriptors: list[ArtifactDescriptor] = []
+    #: ADR-0141 — the products stages name (:func:`_named_outputs`); never a stage's parent.
+    named: list[ArtifactDescriptor] = []
     # Checkpoint identity: the CARRIED control-plane key when present (#1314 —
     # engines may rewrite the spec at submit, e.g. SSH input localization, so
     # hashing what we received can diverge from the control plane's lookup
@@ -654,8 +700,7 @@ def run_dataflow(
         # packaged candidate); anything else stays the dataset default.
         kind = st.get("kind") if st.get("kind") in ("dataset", "model", "report", "index") else "dataset"
         descriptors.append(ArtifactDescriptor(
-            uri=(out if out.startswith(("s3://", "file://", "gs://", "https://", "hf://", "stub://")) else f"file://{out}")
-                if is_uri else f"file://{workdir}/stage-{i:02d}",
+            uri=_descriptor_uri(out) if is_uri else f"file://{workdir}/stage-{i:02d}",
             kind=kind,
             content_hash=str(st.get("content_hash") or f"{spec_key}-{i:02d}"),
             rows=int(rows) if isinstance(rows, int) and rows >= 0 else None,
@@ -663,6 +708,7 @@ def run_dataflow(
             parents=parents,
             stats={k: v for k, v in st.items()},
         ))
+        named.extend(_named_outputs(ref.stage, st, workdir, parents))
 
     # The per-stage check runs BEFORE each stage, so it can stop the next one
     # from starting but never sees the last one's spend. Without this final
@@ -682,6 +728,7 @@ def run_dataflow(
 
     return DataflowResult(
         output_artifacts=descriptors,
+        named_outputs=named,
         stats=stats,
         # #1441 Z3 — the field ADR-0081 D2 always had; the same sum the ceiling binds on.
         cost_usd=max(0.0, round(_sum_stat(stats, _COST_STAT), 6)),

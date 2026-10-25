@@ -23,7 +23,7 @@ set them first when you run outside `cairn dev`:
 | `cairn dev --engine-only` | Starts the engine on SQLite with the in-process runtime and sign-in as `dev`/`dev`. `--port` sets the port (default 8000), `--db` the SQLite file (default `~/.cairn/dev.db`), `--seed` loads demo records first. Without `--engine-only` it also starts the console's dev server, which is part of cairn-platform. |
 | `cairn demo` | Seeds a demo workspace (default `demo`; `-w` to choose). `--archive` removes the demo workspace again, keeping its runs and audit entries. |
 | `cairn doctor` | Checks the environment configuration and whether configured services are reachable. `--strict` fails on warnings. |
-| `cairn ls` | Lists the installed packs and what each contributes; `cairn ls operators` prints the operator map. |
+| `cairn ls` | Lists the installed packs and what each contributes; `cairn ls <pack>` for one pack, `--json` for the raw shape. A pack's deployment profiles (`profiles/*.toml`) are listed with their `visibility` and absolute installed path, the value to give `CAIRN_PROFILE`. `cairn ls operators` prints the operator map. |
 
 ## Pipelines
 
@@ -31,13 +31,13 @@ set them first when you run outside `cairn dev`:
 |---|---|
 | `cairn pipeline ls` | Lists every installed pipeline with its legs and content hash, internal ones included. |
 | `cairn pipeline show <ref>` | A pipeline's inputs, legs, gates and wiring. `--plan` shows the execution plan instead. |
-| `cairn pipeline explain <ref>` | What will happen before anything spends: each input and where its value comes from, each leg and what triggers it, the gates and the budget. `-i key=value` shows the effect of a launch input, `-e` resolves for an environment, `--json` prints the raw result. |
-| `cairn pipeline run <ref>` | Launches a pipeline and follows it to the end. `-i key=value` (repeatable; values are parsed as JSON when possible), `-e` the environment, `--detach` returns at once. |
+| `cairn pipeline explain <ref>` | What will happen before anything spends: each input and where its value comes from, each leg and what triggers it, the gates and the budget. `-i key=value` shows the effect of a launch input, typed as the launch types it (a `list` input takes JSON or a comma-separated string, `-i report_to=mlflow,wandb`), `-e` resolves for an environment, `--json` prints the raw result. |
+| `cairn pipeline run <ref>` | Launches a pipeline and follows it to the end. `-i key=value` (repeatable; values are parsed as JSON when possible, and a `list` input also takes a comma-separated string), `-e` the environment, `--detach` returns at once. |
 
 A **ref** is `<pack>/<name>`, for example `hello-cairn/profile-and-publish`.
-When a flow has the same name as a pipeline, `show` and `explain` refuse the
-bare name: write `pipeline:<pack>/<name>`. `run` accepts the bare name and
-runs the pipeline.
+When a flow has the same name as a pipeline, `show`, `explain` and `run` all
+resolve the bare name to the declared pipeline (ADR-0106 D1).
+The explicit spelling `pipeline:<pack>/<name>` works too.
 
 Only declared pipelines run. A ref that names a flow, not a pipeline, is
 refused: a flow runs as a leg of a pipeline.
@@ -49,7 +49,7 @@ refused: a flow runs as a leg of a pipeline.
 | `0` | the pipeline completed |
 | `1` | it failed or was cancelled, or the ref is unknown, ambiguous or missing required inputs |
 | `2` | the ref names a flow, not a pipeline; or `--detach` under the in-process runtime, which would leave nothing driving the pipeline |
-| `3` | refused before it started: a policy denied the launch, or admission refused it |
+| `3` | refused before it started: a policy denied the launch, admission refused it, or the runtime cannot run one of its steps (under `CAIRN_RUNTIME=temporal`, a `task:` leg or a `finalizer:` step) |
 | `130` | interrupted with Ctrl-C |
 
 ## Flows

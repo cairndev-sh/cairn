@@ -40,9 +40,12 @@ async def store(monkeypatch):
     monkeypatch.delenv("CAIRN_JWT_SECRET", raising=False)
     monkeypatch.delenv("CAIRN_WORKSPACE", raising=False)
     s = SqliteArtifactStore(":memory:")
+    # Both workspaces registered every artifact (identical bytes: one row, an owner
+    # row each, ADR-0148), so these tests see only the by-name dataset scoping.
     for h, uri in (("hash-a1", "s3://a/facts/one.jsonl"), ("hash-a2", "s3://a/facts/two.jsonl"),
                    ("hash-b1", "s3://b/mine/one.jsonl"), ("hash-x", "s3://x/x.jsonl")):
-        await s.register(_desc(h, uri), producer_run_id="run-0")
+        for ws in ("default", "ws-b"):
+            await s.register(_desc(h, uri), producer_run_id="run-0", workspace_id=ws)
     # the deployment's (default) dataset, registered with nothing in scope: as today
     assert await s.register_dataset_version("facts", "hash-a1") == 1
     assert await s.register_dataset_version("facts", "hash-a2") == 2

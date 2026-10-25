@@ -350,6 +350,11 @@ The nine stages `dataset-readiness/readiness` runs implement `contract://dataset
 - **Engines.** Every flow that runs one of these kernels (readiness's `intake` and `check`, and
   training, serving and compress flows that reuse them) now needs an engine that declares
   `carries_stage_contracts`; the in-tree builtin, ssh and metaflow engines do.
+- **Engines whose job runs elsewhere** (ADR-0149 D3) also declare `needs_durable_inputs = True`
+  (the builtin SSH engine does). Like `carries_stage_contracts`, it is optional, not a protocol
+  member, and read through a helper that defaults to `False`
+  (`cairn.core.dataflow.engine.needs_durable_inputs`); the leg executor then resolves the leg's
+  `dataset:` refs to their durable copies.
 
 `tests/core/test_readiness_stage_contracts.py` runs each kernel on real data against its
 schemas. Through the builtin engine subprocess, it also proves that each stage refuses a

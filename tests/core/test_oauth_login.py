@@ -168,6 +168,16 @@ def test_domain_mode_refuses_a_public_mail_domain_oauth_sign_up(env, monkeypatch
     assert asyncio.run(A.get_account_store().get_user_by_username("stranger@gmail.com")) is None
 
 
+def test_an_oauth_landing_never_creates_a_user_under_the_env_admin_name(env, monkeypatch):
+    """A verified provider email equal to the env admin's name is refused like
+    a taken address, on an empty deployment too, and creates nothing."""
+    c, provider = env
+    monkeypatch.setenv("CAIRN_API_USER", "Founder@Acme.com ")
+    _refused(c, "already_registered")
+    assert asyncio.run(A.get_account_store().list_users()) == []
+    assert c.get("/auth/signup").json()["first_run"] is True
+
+
 def test_an_unverified_email_is_refused_and_creates_nothing(env):
     c, provider = env
     provider.google = {**provider.google, "email_verified": False}

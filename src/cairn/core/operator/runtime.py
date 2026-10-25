@@ -46,7 +46,7 @@ from cairn.core.engine.expr import (  # the ONE expression language (#1118)
 from cairn.core.obs.telemetry import span  # per-operator trace span (#242)
 from cairn.core.operator.binding import OperationBinding
 from cairn.core.operator.protocol import Operation, OperationContext
-from cairn.core.workspace import current_workspace  # tenancy scope for remote jobs (#239)
+from cairn.core.workspace import scoped_workspace  # tenancy scope for remote jobs (#239)
 
 if TYPE_CHECKING:
     from cairn.core.operator.effective import ContractEnvelope
@@ -980,6 +980,11 @@ async def _invoke_remote_job_durable(
         # provider AND leave a job on the queue. The run then pauses on the same
         # interrupt as a pushed job, and the worker's heartbeat drives the resume
         # through the very same control loop (`build_default_poll`).
+        # The job is the paused run's (#239): its workspace is the one in scope (the
+        # run's, scoped from its record). With auth on and nothing in scope this
+        # refuses before anything is registered or dispatched, rather than
+        # stamping the process default.
+        workspace_id = scoped_workspace()
         pool = _worker_pool(target)
         pinned_image = ""
         if pool is not None:
@@ -987,7 +992,7 @@ async def _invoke_remote_job_durable(
             await store.register(
                 RemoteJobRecord(
                     run_id=run_id, node_name=node_name,
-                    workspace_id=current_workspace(),
+                    workspace_id=workspace_id,
                     provider=getattr(op, "name", op_name),
                     backend=PULL_BACKEND, compute_target=target,
                     input=dict(resolved_input),
@@ -1006,7 +1011,7 @@ async def _invoke_remote_job_durable(
             await store.register(
                 RemoteJobRecord(
                     run_id=run_id, node_name=node_name,
-                    workspace_id=current_workspace(),  # inherit the paused run's workspace (#239)
+                    workspace_id=workspace_id,  # inherit the paused run's workspace (#239)
                     provider=getattr(op, "name", op_name),
                     job_id=handle.job_id, backend=handle.backend, job_meta=dict(handle.meta),
                     compute_target=target,

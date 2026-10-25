@@ -25,7 +25,7 @@ import typer
 from rich.console import Console
 
 from cairn.core.engine.pipeline import PipelineDef, plan_pipeline
-from cairn.core.engine.pipeline_resolve import all_pipeline_defs, resolve_pipeline_ref
+from cairn.core.engine.pipeline_resolve import PIPELINE_PREFIX, all_pipeline_defs, resolve_pipeline_ref
 
 app = typer.Typer(
     help="Inspect pack pipelines — the composed, runnable surface (ADR-0084 D4).",
@@ -96,13 +96,20 @@ def render_pipeline(d: PipelineDef) -> str:
     return "\n".join(lines)
 
 
+def _inspection_pipeline(ref: str) -> PipelineDef | None:
+    """Inspect only declared pipelines, as the run door does (ADR-0106 D1)."""
+    raw = ref.strip()
+    explicit = raw if raw.startswith(PIPELINE_PREFIX) else f"{PIPELINE_PREFIX}{raw}"
+    return resolve_pipeline_ref(explicit)
+
+
 @app.command("show")
 def show_cmd(
     ref: str = typer.Argument(..., help="<pack>/<name> or pipeline:<pack>/<name>"),
     plan: bool = typer.Option(False, "--plan", help="Show the execution plan instead."),
 ) -> None:
     """Show a pipeline's legs, gates, wires — and which runtime runs each leg."""
-    d = resolve_pipeline_ref(ref)
+    d = _inspection_pipeline(ref)
     if d is None:
         known = [f"{p.pack}/{p.name}" for p in all_pipeline_defs()]
         console.print(f"[red]unknown pipeline {ref!r}[/] — installed: {known or '(none)'}")
@@ -157,7 +164,7 @@ def explain_cmd(
     from cairn.core.engine.pipeline_resolve import AmbiguousRefError
 
     try:
-        d = resolve_pipeline_ref(ref)
+        d = _inspection_pipeline(ref)
     except AmbiguousRefError as e:
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(2) from e
@@ -226,8 +233,8 @@ async def _drive_until_terminal(bridge, pipeline_id: str, *, poll_s: float = 2.0
 @app.command("run")
 def run_pipeline(
     ref: str = typer.Argument(
-        ..., help="`<pack>/<name>` or `pipeline:<pack>/<name>` — a pipeline, or a "
-                  "FLOW, which runs as its one-leg pipeline (ADR-0105 D1)"),
+        ..., help="`<pack>/<name>` or `pipeline:<pack>/<name>` — a declared pipeline; "
+                  "bare flow refs are refused. A pipeline wins at a shared ref (ADR-0106 D1)"),
     input_: list[str] = typer.Option(
         None, "--input", "-i", help="`key=value` (JSON parsed when possible); repeatable"),
     environment: str = typer.Option("", "--environment", "-e", help="environment to run in"),

@@ -8,6 +8,7 @@ in-memory connection and workspace stores, a temp SQLite vault, no network.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 
 os.environ.setdefault("OPENAI_API_KEY", "sk-test-dummy")
@@ -1015,3 +1016,141 @@ async def test_auth_on_held_back_steps_on_a_record_with_no_workspace_end_failed(
     stored = await bridge.store.get(rec.pipeline_id)
     assert stored.status == "failed"
     assert len(rec_.notified) == 1 and calls == []
+
+
+# ── auth on: a refused re-adopted leg cancels its recorded engine job ─────
+
+
+class _StubEngine:
+    name = "stub"
+
+    def __init__(self):
+        self.cancelled: list[str] = []
+        self.polled: list[str] = []
+
+    async def cancel(self, handle):
+        self.cancelled.append(handle.job_id)
+
+    async def poll(self, handle):
+        self.polled.append(handle.job_id)
+        raise AssertionError("a refused leg is never watched")
+
+
+async def test_auth_on_a_readopted_flow_leg_refused_for_its_workspace_cancels_its_job(world, monkeypatch):
+    """Re-adoption at boot (`_readopt_flow_leg`) of a leg whose record names no
+    workspace: the run fails, and the engine job the previous owner recorded is
+    cancelled instead of running on unwatched."""
+    from cairn.core.dispatch.pipeline_bridge import PipelineBridge
+    from cairn.core.storage.pipeline_store import StepState
+
+    monkeypatch.setenv("CAIRN_JWT_SECRET", "test-secret")
+    engine = _StubEngine()
+    monkeypatch.setattr(PipelineBridge, "_leg_engine", lambda self, s: engine)
+    runs = _RunStore(SimpleNamespace(id="r1", status="running", inputs={}))
+    bridge = _bridge(runs)
+    rec = SimpleNamespace(workspace_id="", pipeline_id="p1")
+    s = SimpleNamespace(ref="flow:demo", id="s1", timeout_s=None)
+    await bridge._readopt_flow_leg(rec, s, StepState(status="running", run_id="r1",
+                                                     handle={"job_id": "job-7", "engine": "stub"}))
+    await asyncio.gather(*list(bridge._leg_tasks.values()))
+    assert engine.cancelled == ["job-7"] and engine.polled == []
+    assert [(r, u["status"]) for r, u in runs.updates if "status" in u] == [("r1", "failed")]
+
+
+async def test_auth_on_a_fresh_flow_leg_refusal_cancels_nothing(world, monkeypatch):
+    """No recorded handle (the leg never reached the engine): nothing to cancel."""
+    from cairn.core.dispatch.pipeline_bridge import PipelineBridge
+
+    monkeypatch.setenv("CAIRN_JWT_SECRET", "test-secret")
+    engine = _StubEngine()
+    monkeypatch.setattr(PipelineBridge, "_leg_engine", lambda self, s: engine)
+    runs = _RunStore()
+    await _bridge(runs)._run_flow_leg(SimpleNamespace(workspace_id="", pipeline_id="p1"),
+                                      SimpleNamespace(ref="flow:demo", id="s1"),
+                                      SimpleNamespace(id="r2", status="running"), {})
+    assert engine.cancelled == []
+    assert [(r, u["status"]) for r, u in runs.updates] == [("r2", "failed")]
+
+
+async def test_auth_on_a_readopted_flow_leg_in_its_workspace_is_not_cancelled(world, monkeypatch):
+    """The control: a record that names its workspace is adopted and watched."""
+    from cairn.core.dispatch.pipeline_bridge import PipelineBridge
+
+    monkeypatch.setenv("CAIRN_JWT_SECRET", "test-secret")
+    engine = _StubEngine()
+    monkeypatch.setattr(PipelineBridge, "_leg_engine", lambda self, s: engine)
+    seen: dict = {}
+
+    async def _settle(self, rec, s, run, resolved, *, adopt=None):
+        seen["adopt"] = adopt
+
+    monkeypatch.setattr(PipelineBridge, "_execute_and_settle_flow_leg", _settle)
+    await _bridge(_RunStore())._run_flow_leg(SimpleNamespace(workspace_id="ws-a", pipeline_id="p1"),
+                                             SimpleNamespace(ref="flow:demo", id="s1"),
+                                             SimpleNamespace(id="r3", status="running"), {},
+                                             adopt={"job_id": "job-8"})
+    assert engine.cancelled == [] and seen["adopt"] == {"job_id": "job-8"}
+
+
+async def test_auth_on_temporal_flow_leg_refused_for_its_workspace_cancels_its_job(world, monkeypatch):
+    pytest.importorskip("temporalio")
+    from temporalio.exceptions import ApplicationError
+    from temporalio.testing import ActivityEnvironment
+
+    import cairn.core.runtime.temporal.pipeline_activities as PA
+    from cairn.core.storage.pipeline_store import InMemoryPipelineStore, PipelineRecord, StepState
+
+    monkeypatch.setenv("CAIRN_JWT_SECRET", "test-secret")
+    pstore = InMemoryPipelineStore()
+    await pstore.put(PipelineRecord(pipeline_id="p1", workspace_id="", step_state={
+        "s1": StepState(status="running", run_id="r1", handle={"job_id": "job-9", "engine": "stub"})}))
+    monkeypatch.setattr("cairn.core.storage.pipeline_store.default_pipeline_store", lambda: pstore)
+    engine = _StubEngine()
+    kinds: list = []
+
+    def _resolve(name, *, kind="data"):
+        kinds.append(kind)
+        return engine
+
+    monkeypatch.setattr("cairn.core.dataflow.engine_registry.resolve_engine", _resolve)
+    monkeypatch.setattr(PA, "_dispatcher", lambda: SimpleNamespace(store=_RunStore(), _emit=None))
+    with pytest.raises(ApplicationError) as e:
+        await ActivityEnvironment().run(PA.pipeline_submit_step, "flow:demo", {}, "p1", "s1", None, {})
+    assert e.value.non_retryable and "names no workspace" in str(e.value)
+    assert engine.cancelled == ["job-9"] and engine.polled == []
+
+
+async def test_auth_on_job_control_cancels_a_refused_job(world, monkeypatch):
+    """The remote-job control worker: a job whose record names no workspace is
+    refused on poll and on relaunch, and the job is cancelled each time."""
+    from cairn.core.operator.job_control import build_default_poll, build_default_relaunch
+    from cairn.core.operator.job_store import RemoteJobRecord
+
+    monkeypatch.setenv("CAIRN_JWT_SECRET", "test-secret")
+    seen: dict = {"cancelled": [], "polled": [], "submitted": []}
+
+    class StubOp:
+        name = "stub/gpu"
+        input_schema = _Inp
+        output_schema = _Out
+
+        async def poll(self, handle, inp, ctx):
+            seen["polled"].append(handle.job_id)
+
+        async def submit(self, inp, ctx):
+            seen["submitted"].append(inp)
+
+        async def cancel(self, handle):
+            seen["cancelled"].append(handle.job_id)
+
+    reg = SimpleNamespace(get=lambda name: StubOp)
+    job = RemoteJobRecord(run_id="r", workspace_id="", node_name="n", provider="stub/gpu",
+                          job_id="j-1", compute_target="gpu")
+    for fn in (build_default_poll(reg), build_default_relaunch(reg)):
+        with pytest.raises(workspace.WorkspaceScopeRequired):
+            await fn(job)
+    assert seen == {"cancelled": ["j-1", "j-1"], "polled": [], "submitted": []}
+    # the control: a job in its workspace is polled, never cancelled
+    seen["cancelled"].clear()
+    await build_default_poll(reg)(job.model_copy(update={"workspace_id": "ws-a"}))
+    assert seen["polled"] == ["j-1"] and seen["cancelled"] == []

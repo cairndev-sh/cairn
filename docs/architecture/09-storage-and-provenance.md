@@ -17,7 +17,7 @@ carries only `runs`, `memory`, `rag` (+ lazily-built trigger stores).
 |---|---|---|---|
 | Runs + events | `storage/protocols.py` (`Run`, `RunEvent`, `RunStore` ABC), `storage/{memory,sqlite,postgres}/runs.py`; factory `storage/__init__.py:74 default_store` | memory / sqlite / postgres | `Run` (JSON blob + indexed columns), `run_events` (monotonic `seq`, SSE backlog via `_EventHub`) |
 | Pipeline records | `storage/pipeline_store.py` | triad | `PipelineRecord` (plan snapshot, `step_state`, cursor, governance) |
-| Artifacts / datasets | `storage/artifacts.py` (1286) | sqlite / postgres / Null | `ArtifactRecord` versions, `artifact_parents` lineage, `artifact_tags`, roles, intake verdicts; `dataset:<name>[@N]` refs |
+| Artifacts / datasets | `storage/artifacts.py` (1286) | sqlite / postgres / Null | `ArtifactRecord` versions, `artifact_parents` lineage, `artifact_tags` keyed by `(workspace_id, name)` (ADR-0147), `artifact_owners` (ADR-0148: reads see only the workspace's own artifacts), roles, intake verdicts; `dataset:<name>[@N]` refs |
 | Artifact bytes | `storage/artifact_bytes.py`, operator `artifact_local`, `s3` | fs / S3 | blobs |
 | Training runs | `storage/training_runs.py` | triad | one row per training run (ADR-0102 D2); `optuna_storage_url` |
 | Judges, judge labels, reviews, eval ledger | `storage/judges.py`, `judge_labels.py`, `reviews.py`, `eval_ledger.py` | triad (+Null) | versioned judges; HITL reviews; scores |

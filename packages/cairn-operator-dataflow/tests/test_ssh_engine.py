@@ -115,12 +115,13 @@ def test_poll_maps_remote_states(monkeypatch, remote_state, expect_state, retria
 def test_cancel_delegates_to_exec(monkeypatch):
     seen = {}
 
-    async def fake_cancel(jh):
-        seen["workdir"] = jh.meta["workdir"]
+    async def fake_cancel(jh, *, connection=""):
+        seen["workdir"], seen["connection"] = jh.meta["workdir"], connection
+        return True
     monkeypatch.setattr(remote_exec, "_cancel", fake_cancel)
 
     asyncio.run(BuiltinSshEngine("fixbox").cancel(_handle("/jobs/y")))
-    assert seen["workdir"] == "/jobs/y"
+    assert seen == {"workdir": "/jobs/y", "connection": "fixbox"}  # the submitting connection
 
 
 def test_result_reads_fetched_copy_and_rewrites_stats(tmp_path, monkeypatch):

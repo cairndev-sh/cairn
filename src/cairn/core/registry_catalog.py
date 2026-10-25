@@ -73,8 +73,29 @@ def _installed_index() -> tuple[set[str], set[str]]:
     return ops, tpls
 
 
-def _annotate(entries: list[dict[str, Any]], ops: set[str], tpls: set[str]) -> None:
-    """Mark each entry `installed` against live discovery (in place)."""
+def _installed_pipelines() -> set[str]:
+    """``<pack>/<pipeline>`` refs of every installed pipeline FILE (best-effort, like
+    :func:`_installed_index`).
+
+    It lists files and reads each pack's manifest name; it parses no pipeline. The ref is the
+    one a launch uses: the pack is the ``[pack] name`` (``pipeline_pack_name``) and the pipeline
+    name is the file's stem, which the loader requires to equal its ``name:``."""
+    try:
+        # lazy: the engine's pipeline discovery helpers
+        from cairn.core.engine.pipeline import pipeline_pack_name  # noqa: PLC0415
+        from cairn.core.engine.pipeline_resolve import all_pipeline_yaml_paths  # noqa: PLC0415
+
+        return {f"{pipeline_pack_name(p)}/{p.stem}" for p in all_pipeline_yaml_paths()}
+    except Exception:  # noqa: BLE001 — discovery is best-effort
+        return set()
+
+
+def _annotate(entries: list[dict[str, Any]], ops: set[str], tpls: set[str],
+              pipelines: set[str] | None = None) -> None:
+    """Mark each entry `installed` against live discovery (in place).
+
+    A ``domain_pack`` (a pack that ships pipelines and no agentic flows) is installed when one of
+    its ``pipelines`` is discovered as ``<ref>/<name>``; ``pipelines`` is that discovered set."""
     for e in entries:
         kind = e.get("kind")
         if kind == "operator_pack":
@@ -84,6 +105,9 @@ def _annotate(entries: list[dict[str, Any]], ops: set[str], tpls: set[str]) -> N
             e["installed"] = any(
                 w in tpls or f"{ref}/{w}" in tpls for w in e.get("workflows", [])
             )
+        elif kind == "domain_pack":
+            ref = e.get("ref", "")
+            e["installed"] = any(f"{ref}/{p}" in (pipelines or set()) for p in e.get("pipelines", []))
         else:
             e.setdefault("installed", False)
 
@@ -117,13 +141,24 @@ def _pack_composes(flow_dirs: Iterable[str | Path]) -> list[str]:
     return sorted(refs)
 
 
+def _pipelines_by_pack() -> dict[str, list[str]]:
+    """``{pack name: [pipeline names]}`` from discovery (best-effort)."""
+    out: dict[str, list[str]] = {}
+    for ref in sorted(_installed_pipelines()):
+        pack, _, name = ref.partition("/")
+        out.setdefault(pack, []).append(name)
+    return out
+
+
 def _live_entries() -> list[dict[str, Any]]:
     """Catalog entries derived from the ENGINE's own installed packs (#933).
 
     The official/installed tier can never go stale in the console because it's
     read from live discovery, not the mirrored snapshot. Operator packs come from
     the official operator-pack manifests; template packs from the discovered domain
-    packs. Best-effort: any failure yields fewer live entries, never an exception
+    packs that ship agentic ``flows/*.md``; domain packs from those that ship only
+    pipelines (listed by file, not parsed). A live domain_pack carries no ``install``:
+    the pack's distribution name is not known here, so an external entry's is kept. Best-effort: any failure yields fewer live entries, never an exception
     (the endpoint must not 500). Each entry carries a private ``_live`` marker so
     the caller can keep ``installed=True`` past annotation."""
     entries: list[dict[str, Any]] = []
@@ -167,18 +202,30 @@ def _live_entries() -> list[dict[str, Any]]:
         # lazy: load_all_packs pulls the pack/engine surface
         from cairn.core.pack.loader import load_all_packs
 
+        by_pack: dict[str, list[str]] | None = None
         for p in load_all_packs():
             m = p.manifest
             # #1163 — read `flows/` AND the `templates/` alias; a migrated pack
             # was invisible in the catalog.
             from cairn.core.pack.registry import flow_dirs_of  # noqa: PLC0415 - cycle
 
-            dirs = [d for d in flow_dirs_of(p) if Path(d).is_dir()]
-            if m is None or not dirs:
+            if m is None:
                 continue
+            dirs = [d for d in flow_dirs_of(p) if Path(d).is_dir()]
             workflows = sorted({f.stem for d in dirs for f in Path(d).glob("*.md")})
             if not workflows:
-                continue  # only surface packs that actually ship runnable workflows
+                # a pack that ships pipelines and no agentic flows is a domain_pack
+                if by_pack is None:
+                    by_pack = _pipelines_by_pack()   # once, and only if a pack needs it
+                pipelines = sorted(by_pack.get(m.name, []))
+                if pipelines:
+                    entries.append({
+                        "ref": m.name, "kind": "domain_pack", "version": m.version,
+                        "trust": (m.trust_level or "official"), "description": m.description,
+                        "pipelines": pipelines,
+                        "installed": True, "_live": True,
+                    })
+                continue  # only surface packs that actually ship something runnable
             entries.append({
                 "ref": m.name, "kind": "template_pack", "version": m.version,
                 "trust": (m.trust_level or "official"), "description": m.description,
@@ -235,7 +282,9 @@ def load_registry_catalog(annotate: bool = True) -> dict[str, Any]:
 
     if annotate:
         ops, tpls = _installed_index()
-        _annotate(catalog["entries"], ops, tpls)
+        pipelines = (_installed_pipelines()
+                     if any(e.get("kind") == "domain_pack" for e in catalog["entries"]) else set())
+        _annotate(catalog["entries"], ops, tpls, pipelines)
     # live entries are installed by definition — never let annotation (which can't
     # match hyphen/underscore-normalised template refs) flip them back to available.
     for e in catalog["entries"]:
