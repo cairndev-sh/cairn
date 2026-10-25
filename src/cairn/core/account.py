@@ -639,6 +639,19 @@ def get_account_store() -> Any:
     return _store
 
 
+def is_env_admin_username(name: str) -> bool:
+    """Whether ``name`` is the deployment's env admin username (``CAIRN_API_USER``,
+    ``admin`` when unset), compared trimmed and case-insensitively.
+
+    A self-serve door (sign-up, an OAuth landing, an invite redemption) never
+    creates a store user under that name: login tries the store first, so such
+    a user would sit in front of the deployment admin's own sign-in, and a
+    second principal answering to the admin's name confuses every record that
+    names an actor."""
+    admin = (getenv("CAIRN_API_USER") or "").strip() or "admin"
+    return bool((name or "").strip()) and name.strip().casefold() == admin.casefold()
+
+
 # ── module-level CRUD (backend-agnostic; the public API) ────────────────
 
 
@@ -678,7 +691,12 @@ async def set_password(user_id: str, password: str, *, store: Any = None) -> Use
     if user is None:
         raise KeyError(f"user {user_id!r} not found")
     user.password_hash = hash_password(password)
-    return await store.put_user(user)
+    saved = await store.put_user(user)
+    # ADR-0142 — a new password ends every console sign-in the old one started.
+    from cairn.core.refresh_tokens import revoke_user  # noqa: PLC0415 — lazy, like hash_password
+
+    await revoke_user(user_id)
+    return saved
 
 
 async def set_disabled(user_id: str, disabled: bool, *, store: Any = None) -> User:
@@ -691,7 +709,14 @@ async def set_disabled(user_id: str, disabled: bool, *, store: Any = None) -> Us
     if user is None:
         raise KeyError(f"user {user_id!r} not found")
     user.disabled = disabled
-    return await store.put_user(user)
+    saved = await store.put_user(user)
+    if disabled:
+        # ADR-0142 — a disabled user's console sign-ins end now, not when they
+        # next try to renew one.
+        from cairn.core.refresh_tokens import revoke_user  # noqa: PLC0415 — lazy, like hash_password
+
+        await revoke_user(user_id)
+    return saved
 
 
 async def add_member(account_id: str, user_id: str, role: str = "member", *, store: Any = None) -> Membership:
@@ -825,7 +850,7 @@ async def accept_invite(
     name = (username or "").strip().lower()
     if not name:
         raise InviteError("username_required")
-    if await store.get_user_by_username(name) is not None:
+    if is_env_admin_username(name) or await store.get_user_by_username(name) is not None:
         raise InviteError("username_taken")
 
     user = await store.put_user(User(username=name, password_hash=password_hash))

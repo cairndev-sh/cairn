@@ -66,14 +66,15 @@ The parts where a defect matters most:
 
 ## Supported versions
 
-cairn is pre-1.0 and moves fast. Only the current `main` is supported; fixes
-land there and are not backported. Tagged releases are convenience snapshots,
-not maintained branches.
+cairn is pre-1.0 and moves fast. Fixes land on `main` and ship in the next
+patch release of the current minor line on PyPI. They are not backported to
+older lines; upgrade to the latest release.
 
 | Version | Supported |
 | ------- | --------- |
 | `main`  | yes       |
-| tagged releases | no |
+| latest release (0.2.x) | yes: fixes ship in the next 0.2.x patch release |
+| older releases | no: upgrade |
 
 ## Disclosure
 

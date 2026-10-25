@@ -49,7 +49,6 @@ from cairn.core.dispatch.start import LIVE, PIPELINE, RUN, SANDBOX, START_KINDS,
 from cairn.core.triggers import console_support as support
 from cairn.core.triggers.auth import _oauth2_scheme, require_auth
 from cairn.core.triggers.feature_gate import require_feature
-from cairn.core.workspace import current_workspace
 
 #: Fields only a workflow run understands. Passing one with a pipeline ref is a
 #: 400 rather than a silent drop — a knob that is accepted and ignored is the
@@ -114,6 +113,7 @@ def build_start_router(dispatcher, pipeline_bridge) -> APIRouter:
     @r.post("/start", dependencies=[Depends(require_auth)])
     async def start_anything(
         body: StartRequest,
+        workspace_id: Annotated[str, Depends(support.writable_workspace)],
         token: Annotated[Optional[str], Depends(_oauth2_scheme)] = None,
     ) -> dict[str, Any]:
         """Start a pipeline, live or sandboxed — one call (ADR-0101 D3).
@@ -152,13 +152,9 @@ def build_start_router(dispatcher, pipeline_bridge) -> APIRouter:
         from cairn.core.policy.pipeline_gates import PolicyDeniedError  # noqa: PLC0415 - cycle
         from cairn.core.admission_door import AdmissionRefusedError  # noqa: PLC0415 — cycle
 
-        # The tenant this start lands in, then the authorisation to act in it.
-        # A start is the sharpest write cairn has — it spends money in the named
-        # workspace — and the middleware only authorises the PATH form, so the
-        # `X-Cairn-Workspace` header fallback gets the same check the workspace
-        # variable writes get (#1610/#1974).
-        workspace_id = current_workspace()
-        await support.assert_can_write_workspace(token)
+        # `workspace_id` is the tenant this start lands in, authorised by the
+        # `writable_workspace` dependency (#1610/#1974, #221): a start is the
+        # sharpest write cairn has — it spends money in the named workspace.
 
         mode = (body.mode or LIVE).strip().lower()
         if mode not in START_MODES:

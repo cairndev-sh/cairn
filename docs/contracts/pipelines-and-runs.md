@@ -8,7 +8,7 @@ Four things, four responsibilities. None of them is a new execution abstraction:
 |---|---|---|---|
 | `PipelineDef` | pack data (`pipelines/*.yaml`): inputs, steps, outputs, governance | Engine | `src/cairn/core/engine/pipeline.py:152` |
 | `PipelineStep` (a leg) | one of `flow:` · `template:` · `task:` · `gate:` · `loop:` with `with:`, `consumes/produces`, `when`, `depends_on`, `environment`; a flow/template/task leg (not in a loop body, not a finalizer) may also declare `trigger:` (`auto` · `manual` · `schedule:<cron>` · `on:<event>`) and `emits:` (a domain topic published on completion) — additive, #2605; at their defaults they are outside the content hash | Engine | `src/cairn/core/engine/pipeline.py:62` |
-| `PipelinePlan` | the lowered, validated def (`plan_pipeline`) + the `contract_resolution` snapshot (§Contract resolution); a step's `with:` values keep their YAML type — only strings (also inside maps and lists) are wire-lowered, and a `$…` string nested in a map or list resolves at submit — it is not plan-validated, and an unresolved one becomes null (#1675; records planned before it carry strings, and a binary from before #1675 cannot load a record planned after it) | Engine | `src/cairn/core/engine/pipeline.py:906`, `bundle_pipeline.py:138` |
+| `PipelinePlan` | the lowered, validated def (`plan_pipeline`) + the `contract_resolution` snapshot (§Contract resolution); `with:` values retain their YAML type. Nested `$steps` references are checked against known producer steps and the effective dependency ancestry; nested `$input` references must name a declared pipeline input. Nested bare `<step>.<field>` strings are ambiguous and refused with the explicit `$steps.<step>.<field>` spelling; top-level bare wires remain supported. Values are still resolved at submit (#1675; records planned before it carry strings, and a binary from before #1675 cannot load a record planned after it) | Engine | `src/cairn/core/engine/pipeline.py:970 `_lower_wire`, :765 `_check_wires``, `bundle_pipeline.py:138` |
 | `PipelineRecord` | the durable execution record: plan snapshot, `step_state`, `cursor`, inputs, governance, status | Storage (written by Dispatch) | `src/cairn/core/storage/pipeline_store.py:80` |
 | `StepState` | one leg's live state: `run_id`, engine `handle`, status, verdict, approver, timestamps | Storage | `pipeline_store.py:50` |
 | `Run` | one governed execution (a leg, or an agentic run) | Storage (written by Dispatch) | `src/cairn/core/storage/protocols.py:136` |
@@ -20,7 +20,21 @@ Four things, four responsibilities. None of them is a new execution abstraction:
    (`dispatch/pipeline_launch.py:162`, `:211`): resolve → drift check → `assert_runnable`
    → presets → coerce inputs → `plan_pipeline` → `inject_policy_gates` (`:278`) →
    `PipelineBridge.start_pipeline` (`dispatch/pipeline_bridge.py:561`). The record is
-   stamped `bundle_ref = pipeline:<pack>/<name>`.
+   stamped `bundle_ref = pipeline:<pack>/<name>`. Before the bridge, the admission door
+   (`admission_door.decide_admission`, #2190) decides once over the inputs: the holdout,
+   intake and licence doors and the policies' required checks. **Input expectations
+   (ADR-0146):** an input spec may declare `role:` (`training` · `validation` · `test` ·
+   `golden`) and `verdict: required`; the door then refuses a value that is not a `dataset:`
+   ref, a ref the registry does not hold, a version with another role, or one with no intake
+   verdict when it is required, and records every check under `admission.expectations`. An
+   unknown role or another `verdict:` value fails `parse_pipeline_def`
+   (`engine.pipeline.dataset_expectations`). **Priced legs (ADR-0151 D1–D3):** each flow
+   leg whose compute target is a `compute.ssh` connection with `hourly_usd` is estimated at
+   `hourly_usd × timeout`, times its loop's `max_iterations` and its attempts (the bounded
+   worst case); a priced leg with no `timeout`, a price that cannot be read, or a total that
+   does not fit the budget's `remaining_usd` (the cap alone when no `series` is set) is refused
+   (403 / exit 3) before the record, and the per-leg estimate is recorded under
+   `admission.cost_estimate`; each attempt reserves one attempt's recorded figure.
 2. **Advance** — `_advance` (`:783`) submits every ready step by kind (`_submit_step`,
    `:862`): a `flow:` leg becomes its own `Run` (`_submit_flow_leg`, `:957`) and runs
    `execute_leg` (`dispatch/leg_executor.py:114`); a `task:` leg invokes an operator;
@@ -73,8 +87,10 @@ step with a key takes the run the fire created (`_claim_unrecorded_leg_runs`) or
   (`_fail_pipeline`, `pipeline_bridge.py:2309`); `Run.error` and `failure_type` carry the cause.
 - Cancellation: `cancel` kills engine compute (`DataflowEngine.cancel`) and settles budget;
   a queued leg cancelled while waiting for a slot is skipped cleanly (`:1573-1600`).
-- Budget: reserved per leg before submit and settled after (`leg_executor.py:303`;
-  `budget_reservations.py`); a series cap refuses admission.
+- Budget: reserved per leg before submit and settled after (`leg_executor.py:401`;
+  `budget_reservations.py`); a series cap refuses admission. A leg on a priced box settles
+  `hourly_usd × wall-clock` per attempt on every outcome and records it as `Run.cost.gpu_usd`
+  (ADR-0151 D5).
 
 ## Persistence
 `PipelineRecord` in the pipeline store (sqlite/postgres twins; the process-wide default is

@@ -27,8 +27,19 @@ import logging
 from functools import lru_cache
 
 from cairn.services.rag.stores.base import VectorStore
+from cairn.services.rag.stores.locking import LOCK_WAIT_S, StoreLock, VectorStoreBusy, on_collection
 
 logger = logging.getLogger(__name__)
+
+#: Guards the process-wide store of :func:`get_vector_store`, which every
+#: workspace's collections share: callers select their collection and run the
+#: store call under it (:func:`on_collection`).
+SHARED_STORE_LOCK = StoreLock()
+
+__all__ = [
+    "LOCK_WAIT_S", "SHARED_STORE_LOCK", "StoreLock", "VectorStoreBusy",
+    "build_vector_store", "get_vector_store", "on_collection", "reset_vector_store",
+]
 
 
 @lru_cache(maxsize=1)

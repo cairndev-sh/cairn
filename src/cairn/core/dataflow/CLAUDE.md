@@ -14,11 +14,14 @@ conformance stages), the workdir file contract (`results.py`: `validate`, `read_
 `read_result`, `read_error`) the remote fetch contract (`fetch.py`: `fetch_list`,
 `fetch_dir`, `rewrite_fetched`), and — since #2678 (ADR-0134 D3b) — the helpers remote engines
 share (`resources.py`: `gang_workers`, `aggregate_resources`, `essential_env`, the engine-neutral
-environment allowlist an engine extends with its own prefixes; it names no engine).
+environment allowlist an engine extends with its own prefixes; it names no engine), and the
+deterministic, recorded subsample a pack's stage takes (`fidelity.py`: `Fidelity`, `SamplePlan`,
+`plan`, `keeps`, `row_hash`, `digest_rows`, `STAT_KEYS`, #2029): pure, stdlib only, shared by stages of packs that may not
+import each other.
 
 **Owns.** The contract types; which engine NAME an environment selects; what an engine must
 pass; how a stage list is interpreted (one runner, ADR-0118 D7); which files a job leaves and
-hands back. **Does not own.** Engine *construction* and the engines themselves
+hands back; which rows a fidelity keeps and how that choice is recorded (`fidelity.py`). **Does not own.** Engine *construction* and the engines themselves
 (`cairn-operator-dataflow`: `BuiltinLocalEngine`, `BuiltinSshEngine`, the metaflow /
 skypilot adapters, their bridges, the `cairn-dataflow-run` entrypoint, the
 `cairn.dataflow_engines` factories — #1512 keeps construction where the configuration is);

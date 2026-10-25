@@ -261,6 +261,36 @@ class PipelineDef(BaseModel):
         return out
 
 
+#: ADR-0146 — what an input spec may require of the dataset version it is given.
+DATASET_VERDICT_REQUIRED = "required"
+
+
+def dataset_expectations(d: "PipelineDef") -> dict[str, dict[str, str]]:
+    """ADR-0146 D1 — ``{input name: {"role": …, "verdict": "required"}}`` for every input spec
+    that declares ``role:`` or ``verdict:``; the launch door checks the version each one is given
+    (``admission_door.decide_admission``). Raises ``ValueError`` on an unknown role or a
+    ``verdict`` other than ``required``, so a typo fails when the pipeline loads, never by
+    silently checking nothing."""
+    from cairn.core.dataset_roles import normalize_role  # noqa: PLC0415 — keeps the roles module off this model's import path
+
+    out: dict[str, dict[str, str]] = {}
+    for name, spec in (d.inputs or {}).items():
+        if not isinstance(spec, dict) or not ({"role", "verdict"} & set(spec)):
+            continue
+        want: dict[str, str] = {}
+        if spec.get("role") is not None:
+            want["role"] = str(normalize_role(spec["role"], default=None) or "")
+            if not want["role"]:
+                raise ValueError(f"input {name!r}: `role:` is empty")
+        if spec.get("verdict") is not None:
+            if str(spec["verdict"]).strip().lower() != DATASET_VERDICT_REQUIRED:
+                raise ValueError(f"input {name!r}: `verdict:` may only be {DATASET_VERDICT_REQUIRED!r}, "
+                                 f"got {spec['verdict']!r}")
+            want["verdict"] = DATASET_VERDICT_REQUIRED
+        out[name] = want
+    return out
+
+
 def parse_pipeline_def(text: str, *, pack: str, source: str = "<string>") -> PipelineDef:
     """Parse + validate a pipeline definition. Raises :class:`PipelineDefError`."""
     try:
@@ -298,6 +328,10 @@ def parse_pipeline_def(text: str, *, pack: str, source: str = "<string>") -> Pip
     _validate_on(d, source=source)
     _validate_triggers(d, source=source)
     _validate_compare(d, source=source)
+    try:
+        dataset_expectations(d)
+    except ValueError as e:
+        raise PipelineDefError(f"{source}: {e}") from None
 
     for step in d.steps:
         _validate_step(step, pack=pack, source=source, in_loop=False)
@@ -763,7 +797,8 @@ def _type_names(types: frozenset) -> str:
 
 
 def _check_wires(d: PipelineDef, steps: list[PipelineStep],
-                 by_id: dict[str, PipelineStep]) -> None:
+                 by_id: dict[str, PipelineStep],
+                 dependencies: dict[str, list[str]]) -> None:
     """Type-check every `<step>.<field>` / `$input.<key>` wire (#1137 + #1540),
     and require an OPTIONAL wire onto any leg that can be routed off (#1251).
 
@@ -787,6 +822,7 @@ def _check_wires(d: PipelineDef, steps: list[PipelineStep],
     ADR-0087 D2 forbids.
     """
     from cairn.core.engine.artifacts import WireTypeError, check_wire, is_optional  # noqa: PLC0415 - cycle
+    from cairn.core.engine.expr import ExprError, compile_expr  # noqa: PLC0415 - local
     from cairn.core.engine.schemas import types_assignable  # noqa: PLC0415 - local
 
     io_cache: dict[str, tuple[Optional[dict], Optional[dict]]] = {}
@@ -813,8 +849,84 @@ def _check_wires(d: PipelineDef, steps: list[PipelineStep],
                 f"— incompatible types. Fix the wire, or the schemas."
             )
 
+    dependency_ancestors: dict[str, set[str]] = {}
+    for step in steps:
+        ancestors: set[str] = set()
+        pending = list(dependencies.get(step.name, []))
+        while pending:
+            parent = pending.pop()
+            if parent in ancestors:
+                continue
+            ancestors.add(parent)
+            pending.extend(dependencies.get(parent, []))
+        dependency_ancestors[step.name] = ancestors
+
+    def _check_nested_wires(
+        dst: PipelineStep, value: Any, path: tuple[str, ...],
+    ) -> None:
+        if isinstance(value, dict):
+            for child_key, child in value.items():
+                _check_nested_wires(dst, child, path + (f"[{child_key!r}]",))
+            return
+        if isinstance(value, list):
+            for index, child in enumerate(value):
+                _check_nested_wires(dst, child, path + (f"[{index}]",))
+            return
+        if not isinstance(value, str):
+            return
+
+        location = "with" + "".join(path)
+        if value.startswith("$"):
+            try:
+                references = compile_expr(value, source=location).references()
+            except ExprError as e:
+                raise PipelineDefError(
+                    f"pipeline {d.name!r}: step {dst.name!r} has an invalid "
+                    f"nested wire at `{location}`: {e}"
+                ) from e
+
+            for scope, parts in references:
+                if scope == "input":
+                    input_id = parts[0] if parts else ""
+                    if input_id not in (d.inputs or {}):
+                        raise PipelineDefError(
+                            f"pipeline {d.name!r}: step {dst.name!r} has nested "
+                            f"wire {value!r} at `{location}` referencing "
+                            f"undeclared pipeline input {input_id!r}."
+                        )
+                elif scope == "steps":
+                    source_id = parts[0] if parts else ""
+                    if source_id not in by_id:
+                        raise PipelineDefError(
+                            f"pipeline {d.name!r}: step {dst.name!r} has nested "
+                            f"wire {value!r} at `{location}` referencing "
+                            f"unknown step {source_id!r}."
+                        )
+                    # A $default may intentionally read the prior loop iteration;
+                    # its fallback is not a same-iteration dependency.
+                    if (value.startswith("$steps.")
+                            and source_id not in dependency_ancestors[dst.name]):
+                        raise PipelineDefError(
+                            f"pipeline {d.name!r}: step {dst.name!r} has nested "
+                            f"wire {value!r} at `{location}` but does not depend "
+                            f"on producer step {source_id!r}; add it to "
+                            "`depends_on`."
+                        )
+            return
+
+        head, sep, field = value.partition(".")
+        if sep and field and head in by_id:
+            raise PipelineDefError(
+                f"pipeline {d.name!r}: step {dst.name!r} has ambiguous nested "
+                f"value {value!r} at `{location}`; write `$steps.{value}` for "
+                "a step wire."
+            )
+
     for dst in steps:
         for key, binding in (dst.inputs or {}).items():
+            if isinstance(binding, (dict, list)):
+                _check_nested_wires(dst, binding, (f"[{key!r}]",))
+                continue
             if not isinstance(binding, str):
                 continue
             consumed = (dst.consumes or {}).get(key, "")
@@ -889,10 +1001,12 @@ def _optional_inputs(step: PipelineStep) -> list[str]:
     return sorted(k for k, v in (step.consumes or {}).items() if is_optional(v))
 
 
-def _lower_wire(raw: Any, known: Any) -> Any:
+def _lower_wire(raw: Any, known: Any, *, nested: bool = False) -> Any:
     """``<step>.<field>`` (the #1137 authoring grammar) → ``$steps.<step>.<field>``
     (the runtime resolver's grammar). Only rewrites when the head names a REAL
-    step — ``$…`` refs and genuine literals pass through untouched.
+    step — ``$…`` refs and genuine literals pass through untouched. Inside a
+    nested ``with:`` value, bare ``<step>.<field>`` strings are ambiguous with
+    literals and must use the explicit ``$steps.`` spelling.
 
     #1180: ``_check_wires`` validated the authoring form at plan time but the
     plan then carried it VERBATIM, so ``resolve_binding`` treated
@@ -909,9 +1023,9 @@ def _lower_wire(raw: Any, known: Any) -> Any:
     JSON-native.
     """
     if isinstance(raw, dict):
-        return {k: _lower_wire(v, known) for k, v in raw.items()}
+        return {k: _lower_wire(v, known, nested=True) for k, v in raw.items()}
     if isinstance(raw, list):
-        return [_lower_wire(v, known) for v in raw]
+        return [_lower_wire(v, known, nested=True) for v in raw]
     if raw is None or isinstance(raw, (bool, int, float)):
         return raw
     raw = str(raw)
@@ -919,6 +1033,11 @@ def _lower_wire(raw: Any, known: Any) -> Any:
         return raw
     head, sep, field = raw.partition(".")
     if sep and field and head in known:
+        if nested:
+            raise PipelineDefError(
+                f"nested with value {raw!r} is ambiguous with a step wire; "
+                f"write `$steps.{raw}` to reference the step."
+            )
         return f"$steps.{head}.{field}"
     return raw
 
@@ -1070,7 +1189,7 @@ def plan_pipeline(d: PipelineDef) -> PipelinePlan:
 
     order = _toposort(ids, deps)
     by_id = {s.name: s for s in steps}
-    _check_wires(d, steps, by_id)
+    _check_wires(d, steps, by_id, deps)
 
     return PipelinePlan(
         name=d.name,
@@ -1153,7 +1272,7 @@ def load_pipeline_def(path: Path | str) -> PipelineDef:
 PipelineStep.model_rebuild()
 
 __all__ = [
-    "LEG_KINDS", "PipelineDef", "PipelineDefError", "PipelineStep",
-    "load_pipeline_def", "lower_step", "parse_pipeline_def", "pipeline_pack_name",
+    "DATASET_VERDICT_REQUIRED", "LEG_KINDS", "PipelineDef", "PipelineDefError", "PipelineStep",
+    "dataset_expectations", "load_pipeline_def", "lower_step", "parse_pipeline_def", "pipeline_pack_name",
     "plan_pipeline",
 ]

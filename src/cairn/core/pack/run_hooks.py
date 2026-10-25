@@ -22,6 +22,28 @@ and their payloads (every payload also carries ``"event"``):
   (through :mod:`cairn.core.budget_reservations`, stamped with ``run_id``; the
   dispatcher settles or releases it by run id on every terminal). Absent means:
   a run is not checked against a series cap.
+- ``pipeline.launching`` — ``pipeline_ref`` (``pipeline:<pack>/<name>``, or the
+  ``flow:`` stamp of a one-leg wrapper), ``workspace_id``, ``account_id`` (``""``
+  when it cannot be resolved), ``environment`` (``""`` when none), ``source`` (the
+  trigger's ``source``: ``start`` / ``console`` / ``cli`` / ``schedule`` / ``watch`` /
+  ``webhook`` / ``event`` / ``dispatch`` (a template run wrapped in its one-leg pipeline) / an operator's
+  own, ``""`` when unnamed), ``trigger``, ``preset`` (``""`` when
+  none), ``inputs`` (the values the launch will run with: caller's values over the
+  preset and the declared defaults, typed), ``supplied`` (what the caller and the
+  preset supplied, before defaults). ``trigger``, ``inputs`` and ``supplied`` are
+  read-only copies (``MappingProxyType``; lists become tuples). The second
+  QUERY-shaped event: the launch door (:func:`cairn.core.dispatch.pipeline_launch.launch_pipeline_def`,
+  which every pipeline launch goes through) fires it after the plan-time policy
+  gates, the service doors and the admission decision, BEFORE the pipeline record
+  exists, and only when at least one provider is installed. A provider may refuse
+  the launch by raising :class:`AdmissionRefused`; the door raises it as its
+  admission refusal (``AdmissionRefusedError``, the error a refused admission
+  already gives every caller), and no record is created. This event FAILS CLOSED:
+  a provider that raises anything else refuses the launch too, with a generic
+  reason naming the provider. The door takes no side effect before this event,
+  so a refusal leaves nothing to release; a provider should not take one either
+  (a provider after it in name order may still refuse). Absent means: a launch is
+  not checked by anyone but the door itself.
 - ``run.launched`` — ``run_id``, ``template_ref``, ``workspace_id``, ``series_id``
   (``""`` when none), ``lane``: the run is admitted and queued.
 - ``run.finished`` / ``run.failed`` — ``run_id``, ``status``, ``store`` (the
@@ -47,10 +69,18 @@ and their payloads (every payload also carries ``"event"``):
   #1571); absent means a new workspace starts with nothing but its record.
 
 Providers run in entry-point name order, one at a time — after the record is
-persisted, except on ``run.admitting``. :func:`fire` raises only an
-:class:`AdmissionRefused` from a ``run.admitting`` provider (the refusal ends the
-pass); any other failure is logged and the others still run (a refusal raised on
-any other event is logged and ignored, like any failure); discovery fails open like :mod:`cairn.core.pack.loader` and
+persisted, except on ``run.admitting`` and ``pipeline.launching``. :func:`fire`
+raises only an :class:`AdmissionRefused`, and only on those two events (the
+refusal ends the pass). Every other failure is handled by one of two policies:
+
+- **fail open** — every event except ``pipeline.launching``, ``run.admitting``
+  included: the failure is logged and the others still run (a refusal raised on
+  an event that cannot refuse is logged and ignored, like any failure);
+- **fail closed** — ``pipeline.launching`` only: the failure is logged and
+  re-raised as an :class:`AdmissionRefused` with a generic reason, so a broken
+  launch check refuses the launch rather than waving it through.
+
+Discovery fails open on every event, like :mod:`cairn.core.pack.loader` and
 :mod:`cairn.core.pack.seeds` (a provider that does not import or is not
 callable is skipped, recorded in :func:`run_hook_load_failures`, and shown by
 ``cairn doctor``). An empty group means: a finished run is recorded, and scored
@@ -74,8 +104,13 @@ RUN_FAILED = "run.failed"
 LEG_FINISHED = "leg.finished"
 RUN_EVENTS_INGESTED = "run.events_ingested"
 WORKSPACE_CREATED = "workspace.created"
+PIPELINE_LAUNCHING = "pipeline.launching"
 EVENTS = (RUN_ADMITTING, RUN_LAUNCHED, RUN_FINISHED, RUN_FAILED, LEG_FINISHED, RUN_EVENTS_INGESTED,
-          WORKSPACE_CREATED)
+          WORKSPACE_CREATED, PIPELINE_LAUNCHING)
+#: the events a provider may refuse (QUERY-shaped: fired before the record exists)
+REFUSABLE_EVENTS = (RUN_ADMITTING, PIPELINE_LAUNCHING)
+#: the events on which any provider failure refuses, rather than being logged
+FAIL_CLOSED_EVENTS = (PIPELINE_LAUNCHING,)
 
 #: ``async (event, payload) -> None`` — see the module docstring.
 RunHook = Callable[[str, dict[str, Any]], Any]
@@ -84,8 +119,9 @@ _LOAD_FAILURES: list[dict[str, str]] = []
 
 
 class AdmissionRefused(Exception):
-    """Raised by a ``run.admitting`` provider to refuse the run; ``reason`` is what
-    the caller is told (the dispatcher raises it as its ``ValueError``)."""
+    """Raised by a ``run.admitting`` or ``pipeline.launching`` provider to refuse the
+    run or launch; ``reason`` is what the caller is told (the dispatcher raises it as
+    its ``ValueError``, the launch door as its ``AdmissionRefusedError``)."""
 
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
@@ -129,8 +165,11 @@ async def fire(event: str, **payload: Any) -> list[str]:
     """Run every installed hook for ``event``, in name order; return the names
     that ran without raising. Fails open — a run's own completion has already
     been persisted by the time a hook runs, and a hook must not undo that — except
-    for :class:`AdmissionRefused` raised on ``run.admitting``, which is re-raised
-    (the run does not exist yet; refusing it is the event's purpose)."""
+    for :class:`AdmissionRefused` raised on a refusable event (``run.admitting``,
+    ``pipeline.launching``), which is re-raised (the run or launch does not exist
+    yet; refusing it is the event's purpose). On ``pipeline.launching`` it fails
+    CLOSED: any other provider failure is re-raised as an :class:`AdmissionRefused`
+    with a generic reason naming the provider."""
     if event not in EVENTS:
         raise ValueError(f"unknown run-hook event {event!r}; one of {EVENTS}")
     ran: list[str] = []
@@ -142,17 +181,25 @@ async def fire(event: str, **payload: Any) -> list[str]:
                 await result
             ran.append(name)
         except AdmissionRefused as e:
-            if event != RUN_ADMITTING:
+            if event not in REFUSABLE_EVENTS:
                 _log.warning("run hook %r refused on %s, which cannot refuse — ignored: %s", name, event, e.reason)
                 continue
-            _log.info("run hook %r refused run %s: %s", name, payload.get("run_id", ""), e.reason)
+            _log.info("run hook %r refused %s %s: %s", name, event,
+                      payload.get("run_id") or payload.get("pipeline_ref", ""), e.reason)
             raise
-        except Exception:  # noqa: BLE001 — one failing hook must not stop the others or the run
+        except Exception as e:  # noqa: BLE001 — one failing hook must not stop the others or the run
+            if event in FAIL_CLOSED_EVENTS:
+                _log.warning("run hook %r failed on %s — refusing (this event fails closed)", name, event,
+                             exc_info=True)
+                raise AdmissionRefused(
+                    f"run hook {name!r} could not check this launch ({type(e).__name__}); "
+                    f"the launch is refused until it can") from e
             _log.warning("run hook %r failed on %s", name, event, exc_info=True)
     return ran
 
 
-__all__ = ["AdmissionRefused", "ENTRY_POINT_GROUP", "EVENTS", "LEG_FINISHED", "RUN_ADMITTING", "RUN_FAILED",
+__all__ = ["AdmissionRefused", "ENTRY_POINT_GROUP", "EVENTS", "FAIL_CLOSED_EVENTS", "LEG_FINISHED",
+           "PIPELINE_LAUNCHING", "REFUSABLE_EVENTS", "RUN_ADMITTING", "RUN_FAILED",
            "RUN_FINISHED", "RUN_LAUNCHED",
            "RUN_EVENTS_INGESTED", "WORKSPACE_CREATED",
            "RunHook", "fire", "load_run_hooks", "run_hook_load_failures"]

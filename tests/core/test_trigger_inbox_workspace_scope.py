@@ -147,13 +147,15 @@ def test_another_tenants_workspace_cannot_be_named(app_env):
 
 
 def test_without_a_header_another_accounts_member_cannot_read_default(app_env):
-    """No X-Cairn-Workspace resolves to `default`, which the middleware does not check;
-    the route does (default belongs to the default account)."""
+    """No X-Cairn-Workspace resolves to `default`, which belongs to the default
+    account; a member of another account acts in their home workspace (#220), so
+    they see only their own account's deliveries."""
     with TestClient(build_app(Runner(), enable_scheduler=False)) as c:
         _seed_inbox(c, app_env)
         r = c.get("/triggers/inbox", headers=app_env.headers("bob"))
-    assert r.status_code == 404, (r.status_code, r.text)
-    assert "of-None" not in r.text
+    assert r.status_code == 200, (r.status_code, r.text)
+    assert [x["workspace"] for x in r.json()["records"]] == ["acme-ops"]
+    assert "of-None" not in r.text and "of-globex-ops" not in r.text
 
 
 # ═══ replay ═══════════════════════════════════════════════════════════════
@@ -192,11 +194,15 @@ def test_an_admin_of_another_account_replays_only_their_own(app_env):
 
 
 def test_without_a_header_another_accounts_admin_cannot_replay_default(app_env):
+    """Without a header the admin of another account acts in their home workspace
+    (#220): only that workspace's deliveries are replayed, never default's."""
     with TestClient(build_app(Runner(), enable_scheduler=False)) as c:
         _seed_inbox(c, app_env)
         r = c.post("/triggers/inbox/replay", params={"since": SINCE}, headers=app_env.headers("alice"))
-        assert r.status_code == 403, (r.status_code, r.text)
-        assert _pending(c, app_env) == []
+        assert r.status_code == 200, (r.status_code, r.text)
+        assert r.json()["replayed"] == 1
+        assert [(x.workspace, x.input) for x in _pending(c, app_env)] == [
+            ("acme-ops", {"payload": "of-acme-ops"})]
 
 
 def test_the_instance_admin_replays_every_workspace(app_env):

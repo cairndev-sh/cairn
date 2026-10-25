@@ -7,6 +7,10 @@ In about ten minutes you will install cairn, start an engine on your machine,
 launch a pipeline that checks a dataset, decide at its gates, and read what was
 recorded. Nothing here needs an API key or spends money.
 
+To look around without installing, try the live demo at
+[demo.cairndev.sh](https://demo.cairndev.sh), a shared sandbox (don't enter
+real credentials there).
+
 ## 1. Install cairn
 
 ```bash

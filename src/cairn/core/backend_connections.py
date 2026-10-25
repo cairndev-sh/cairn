@@ -73,9 +73,11 @@ async def apply_backend_connection(field: str) -> Optional[str]:
             logger.info("backend %s=%r has a bound connection %r but no injection map — ignored", field, chosen, name)
             return None
 
-        from cairn.core.connections import resolve_connection
+        from cairn.core.connections import DEFAULT_ACCOUNT, resolve_connection
 
-        resolved = await resolve_connection(name)
+        # A profile binding is the deployment's: it resolves the deployment's own
+        # connection and writes the process environment, never a tenant's row.
+        resolved = await resolve_connection(name, account_id=DEFAULT_ACCOUNT)
         if resolved is None:
             logger.warning("backend %s binds connection %r but it is unknown/disabled — env fallback", field, name)
             return None

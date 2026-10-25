@@ -18,7 +18,8 @@ import asyncio
 import logging
 import re
 import uuid
-from typing import Any, List
+from contextlib import nullcontext
+from typing import Any, List, Optional
 
 from llama_index.core.schema import Document, TextNode
 from llama_index.core.workflow import Event, StartEvent, StopEvent, Workflow, step
@@ -28,7 +29,7 @@ from cairn.core.backend_connections import apply_backend_connection
 from cairn.core.workspace import workspace_collection
 from cairn.services.rag.embeddings import EmbeddingProvider, get_embedder
 from cairn.services.rag.readers import read_source
-from cairn.services.rag.stores import get_vector_store
+from cairn.services.rag.stores import SHARED_STORE_LOCK, get_vector_store, on_collection
 from cairn.services.rag.stores.base import VectorStore
 
 logger = logging.getLogger(__name__)
@@ -64,11 +65,15 @@ class IngestWorkflow(Workflow):
         store: VectorStore,
         embedder: EmbeddingProvider,
         *args,
+        collection: Optional[str] = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.store = store
         self.embedder = embedder
+        #: When set, each store call selects this collection under the shared
+        #: store's lock (:func:`on_collection`); ``None`` = the caller owns the store.
+        self.collection = collection
         s = get_settings()
         self.llama_client = None
         if s.llama_cloud_api_key:
@@ -77,6 +82,11 @@ class IngestWorkflow(Workflow):
                 self.llama_client = LlamaCloud(api_key=s.llama_cloud_api_key)
             except ImportError:
                 pass
+
+    def _on_collection(self):
+        if self.collection is None:
+            return nullcontext(self.store)
+        return on_collection(self.store, self.collection, self.embedder.dim, SHARED_STORE_LOCK)
 
     # ── Step 1: Route + parse ─────────────────────────────────────────────────
 
@@ -89,7 +99,9 @@ class IngestWorkflow(Workflow):
     async def parse(self, ev: StartEvent) -> ParsedEvent | StopEvent:
         source: str = ev.file_path
 
-        if await self.store.has_source(source):
+        async with self._on_collection() as store:
+            seen = await store.has_source(source)
+        if seen:
             logger.info("[parse] skipping (already embedded): %s", source)
             return StopEvent(result=f"Skipped {source} — already embedded")
 
@@ -181,7 +193,8 @@ class IngestWorkflow(Workflow):
                 for n in batch
             ]
 
-            count = await self.store.upsert(ids, dense_embs, sparse_vecs, payloads)
+            async with self._on_collection() as store:  # embedding stays outside the lock
+                count = await store.upsert(ids, dense_embs, sparse_vecs, payloads)
             stored += count
             logger.info("[store] %d/%d", stored, len(nodes))
 
@@ -203,9 +216,12 @@ async def ingest_document(file_path: str, collection: str | None = None) -> str:
     embedder = get_embedder()
     # Namespace by workspace (#237); idempotent so an already-scoped collection
     # passed from the indexer is not double-prefixed. Default workspace unchanged.
-    await store.initialize(workspace_collection(collection or s.rag_collection_name), embedder.dim)
-
-    wf = IngestWorkflow(store, embedder, timeout=300, verbose=False)
+    coll = workspace_collection(collection or s.rag_collection_name)
+    async with on_collection(store, coll, embedder.dim, SHARED_STORE_LOCK):
+        pass  # the collection exists before parsing starts, as before
+    # The store is process-wide: each of the workflow's store calls selects `coll`
+    # under the store's lock; parsing and embedding run outside it.
+    wf = IngestWorkflow(store, embedder, collection=coll, timeout=300, verbose=False)
     result = await wf.run(file_path=file_path)
     return str(result)
 

@@ -24,15 +24,22 @@ from typing import Optional
 from cairn.services.rag.lifecycle import CorpusTarget, discover_corpora
 
 
-def list_roles(packs=None) -> dict[str, list[CorpusTarget]]:
-    """Map every declared knowledge role → the corpora (across all packs) that
-    provide into it. Corpora with no ``role`` are omitted (legacy explicit-node
-    corpora don't participate in composition)."""
+def list_roles(packs=None, *, workspace: Optional[str] = None) -> dict[str, list[CorpusTarget]]:
+    """Map every declared knowledge role → the corpora that provide into it, for
+    ONE workspace: every installed pack's corpora (the deployment's packs, so
+    listed in every workspace; retrieval still reads the caller's workspace
+    collection, as before) plus that workspace's own BYO corpora (ADR-0062
+    "Isolation"); another workspace's BYO corpora are never listed.
+    ``workspace`` defaults to :func:`~cairn.core.workspace.current_workspace`.
+    Corpora with no ``role`` are omitted (legacy explicit-node corpora don't
+    participate in composition)."""
+    from cairn.core.workspace import current_workspace
     from cairn.services.rag.byo import workspace_corpus_targets_sync  # BYO union (#516)
 
+    ws = workspace or current_workspace()
     roles: dict[str, list[CorpusTarget]] = {}
-    # pack corpora + workspace (BYO) corpora compose into the same roles
-    for t in list(discover_corpora(packs)) + workspace_corpus_targets_sync():
+    # pack corpora + this workspace's (BYO) corpora compose into the same roles
+    for t in list(discover_corpora(packs)) + workspace_corpus_targets_sync(ws):
         if not t.role:
             continue
         roles.setdefault(t.role, []).append(t)
@@ -54,6 +61,7 @@ def resolve_role(
     ``active_roles`` gates by the environment's attach-list: when a set is
     given and ``role`` is not in it, the role is inactive for this deployment
     and resolves to ``[]``. ``None`` ⇒ every role is active (back-compat).
+    BYO corpora are the current workspace's only (see :func:`list_roles`).
     """
     if active_roles is not None and role not in active_roles:
         return []

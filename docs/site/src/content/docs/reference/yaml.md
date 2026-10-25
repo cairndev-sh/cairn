@@ -78,6 +78,27 @@ inputs:
   $hide: [mock_metrics]  # and drop these
 ```
 
+An input may take a registered dataset version as `dataset:<name>@<N>`,
+`dataset:<name>@latest` or `dataset:<name>` (the same as `@latest`). It
+resolves within the run's workspace only: another workspace's version reads as
+not found, and `@latest` is this workspace's newest version.
+
+Since 0.2.1 an input may also declare the role of the dataset version it takes,
+and require an intake verdict (ADR-0146):
+
+```yaml
+inputs:
+  train_version: {type: str, role: training, verdict: required}
+  val_version:   {type: str, role: validation}
+```
+
+`role:` is one of `training`, `validation`, `test` or `golden`; `verdict:` takes
+only `required`. Any other value fails when the pipeline loads. At launch, for
+each such input with a value, the launch door refuses a value that is not a
+registered `dataset:` ref, a version with another role, or (with
+`verdict: required`) a version with no intake verdict, before any record exists.
+Each check is recorded under `admission.expectations` on the pipeline record.
+
 ### Steps
 
 Every step is exactly one kind, named by the key that carries its target:
@@ -98,7 +119,7 @@ Fields any step can carry:
 | Field | Meaning |
 |---|---|
 | `id` | The step's id. Gates and loops are named by their `gate:` / `loop:` value instead. |
-| `with` | Inputs passed to the leg. `$input.<name>` reads a pipeline input; `$steps.<id>.<field>` reads an earlier leg's output. |
+| `with` | Inputs passed to the leg. `$input.<name>` reads a pipeline input; `$steps.<id>.<field>` reads an earlier leg's output. A value keeps its YAML type, and wires inside maps and lists are checked like top-level ones (the input must be declared, the step must exist and run earlier). Inside a map or list, write the explicit `$steps.<id>.<field>`: a bare `<id>.<field>` there is refused as ambiguous (it could be a literal such as `train.jsonl`). At the top level the bare form still works. |
 | `depends_on` | Steps that must finish first. |
 | `when` | An expression. False skips this leg (recorded as routed off) and the pipeline continues. |
 | `label` | A human-readable name for the run page and the graph. Display only. |

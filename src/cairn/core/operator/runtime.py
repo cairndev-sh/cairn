@@ -46,7 +46,7 @@ from cairn.core.engine.expr import (  # the ONE expression language (#1118)
 from cairn.core.obs.telemetry import span  # per-operator trace span (#242)
 from cairn.core.operator.binding import OperationBinding
 from cairn.core.operator.protocol import Operation, OperationContext
-from cairn.core.workspace import current_workspace  # tenancy scope for remote jobs (#239)
+from cairn.core.workspace import scoped_workspace  # tenancy scope for remote jobs (#239)
 
 if TYPE_CHECKING:
     from cairn.core.operator.effective import ContractEnvelope
@@ -256,10 +256,49 @@ def _apply_output_binding(
 # ─── Inprocess invocation ─────────────────────────────────────────────────
 
 
+async def _run_account() -> str:
+    """The run's account: the owner of the run's workspace (the dispatch layer
+    scopes :func:`~cairn.core.workspace.current_workspace` from the run record)."""
+    from cairn.core.connections import run_account  # noqa: PLC0415 — lazy: keep the connections stack off the import path
+
+    return await run_account()
+
+
+async def _scoped_secrets(secret_keys: list[str] | None, *, is_mocked: bool,
+                          account_id: str | None) -> Any:
+    """``ctx.secrets`` for one invocation, in the run's account.
+
+    #532 — stored connections reach an operator's DECLARED secrets. For the
+    deployment (``default``) they are bridged into ``os.environ`` as before (an
+    operator that reads ``os.environ`` — ``train/kaggle`` — or the env-backed
+    SecretStore sees them). A tenant account's values are never written to the
+    process environment, which every run shares: they back this invocation's
+    ``ctx.secrets`` alone, and the deployment's bound SecretStore is not consulted."""
+    from cairn.core.operator.secrets import build_scoped_secrets  # noqa: PLC0415
+    from cairn.core.secrets_store import scoped_account  # noqa: PLC0415 — lazy: crypto off the import path
+
+    if not secret_keys:
+        return build_scoped_secrets([])
+    acct = account_id if account_id is not None else await _run_account()
+    values: dict[str, str] | None = None
+    if not is_mocked:
+        from cairn.core import connections  # noqa: PLC0415 — lazy, as above
+
+        if scoped_account(acct) is None:
+            await connections.inject_declared_secrets(secret_keys, account_id=acct)
+        else:
+            values = await connections.declared_secret_values(secret_keys, account_id=acct)
+    return build_scoped_secrets(secret_keys, account_id=acct, values=values)
+
+
 async def resolve_declared_compute(binding, *, op_name: str, is_mocked: bool,
-                                   state, template_input, nodes, artifacts, env):
+                                   state, template_input, nodes, artifacts, env,
+                                   account_id: str | None = None):
     """Resolve a declared ``compute_target`` to ``(connection, name)``, or
     ``(None, None)`` when none is declared.
+
+    The name resolves in ``account_id`` (when omitted, the current run's account):
+    a tenant run reaches only its own connections, the deployment only its own.
 
     Shared by the in-process and remote-job paths (#1718). It used to live only
     on the remote_job branch, gated on ``driver_kind == "remote_job"`` — but the
@@ -287,7 +326,7 @@ async def resolve_declared_compute(binding, *, op_name: str, is_mocked: bool,
         return None, None
     # lazy: keep the connections/secret stack off the operator import path
     from cairn.core.connections import resolve_connection  # noqa: PLC0415
-    conn = await resolve_connection(str(target))
+    conn = await resolve_connection(str(target), account_id=account_id)
     if conn is None:
         raise BindingEvalError(
             f"operator {op_name!r} compute_target {target!r} did not resolve to an "
@@ -411,8 +450,13 @@ async def invoke_operator_core(
     run_sync_in_thread: bool = False,
     ctx_overrides: dict[str, Any] | None = None,
     contract: "ContractEnvelope | None" = None,
+    account_id: str | None = None,
 ) -> dict[str, Any]:
     """Everything AFTER binding resolution — the ONE invoke path (#1542).
+
+    ``account_id`` is the run's account (when omitted, derived from the run
+    context: :func:`cairn.core.connections.run_account`). Declared secrets are
+    resolved in it — see :func:`_scoped_secrets`.
 
     #2241 B — ``contract`` (an opted-in operator's recorded shared contract, resolved
     by the caller) is checked three times here: identity against the running class
@@ -479,20 +523,11 @@ async def invoke_operator_core(
     # Secrets are scoped to the declared `secrets:` keys (§24.20.13), backed
     # by the profile-bound `secrets.store` provider (NullSecretStore when
     # nothing is declared or no provider is bound).
-    from cairn.core.operator.secrets import build_scoped_secrets
-
-    # #532 — bridge stored connections → env for the declared secrets, so an
-    # operator that reads os.environ (train/kaggle) or the env-backed
-    # SecretStore actually sees a credential the user connected.
-    if secret_keys and not is_mocked:
-        from cairn.core.connections import inject_declared_secrets
-        await inject_declared_secrets(secret_keys)
-
     ctx = OperationContext(
         pipeline_id=pipeline_id,
         node_name=node_name,
         is_mocked=is_mocked,
-        secrets=build_scoped_secrets(secret_keys),
+        secrets=await _scoped_secrets(secret_keys, is_mocked=is_mocked, account_id=account_id),
         logger=_log,
     )
     _attach_reporter(ctx, operator_cls, run_id=pipeline_id)  # ADR-0103 — before overrides, so a test sink wins
@@ -743,8 +778,6 @@ async def invoke_operator_job(
         RemoteJobDriver,
         run_job_lifecycle,
     )
-    from cairn.core.operator.secrets import build_scoped_secrets
-
     op_name = getattr(operator_cls, "name", operator_cls.__name__)
 
     try:
@@ -771,15 +804,12 @@ async def invoke_operator_job(
     except Exception as e:
         raise BindingEvalError(f"operator {op_name!r} input failed Pydantic validation: {e}") from e
 
-    # #532 — bridge stored connections → env for the declared secrets before the
-    # remote-job operator submits (train/kaggle etc. read os.environ / ~/.kaggle).
-    if binding.secrets and not is_mocked:
-        from cairn.core.connections import inject_declared_secrets
-        await inject_declared_secrets(binding.secrets)
-
+    # #532 — declared secrets before the remote-job operator submits (train/kaggle
+    # etc. read os.environ / ~/.kaggle for a deployment run), in the run's account.
     ctx = OperationContext(
         pipeline_id=pipeline_id, node_name=node_name, is_mocked=is_mocked,
-        secrets=build_scoped_secrets(binding.secrets), logger=_log,
+        secrets=await _scoped_secrets(binding.secrets, is_mocked=is_mocked, account_id=None),
+        logger=_log,
         dataflow_contracts=dataflow_contracts,   # ADR-0118 D4 — the flow door's admitted stage contracts
     )
     _attach_reporter(ctx, operator_cls, run_id=pipeline_id)  # ADR-0103
@@ -950,6 +980,11 @@ async def _invoke_remote_job_durable(
         # provider AND leave a job on the queue. The run then pauses on the same
         # interrupt as a pushed job, and the worker's heartbeat drives the resume
         # through the very same control loop (`build_default_poll`).
+        # The job is the paused run's (#239): its workspace is the one in scope (the
+        # run's, scoped from its record). With auth on and nothing in scope this
+        # refuses before anything is registered or dispatched, rather than
+        # stamping the process default.
+        workspace_id = scoped_workspace()
         pool = _worker_pool(target)
         pinned_image = ""
         if pool is not None:
@@ -957,7 +992,7 @@ async def _invoke_remote_job_durable(
             await store.register(
                 RemoteJobRecord(
                     run_id=run_id, node_name=node_name,
-                    workspace_id=current_workspace(),
+                    workspace_id=workspace_id,
                     provider=getattr(op, "name", op_name),
                     backend=PULL_BACKEND, compute_target=target,
                     input=dict(resolved_input),
@@ -976,7 +1011,7 @@ async def _invoke_remote_job_durable(
             await store.register(
                 RemoteJobRecord(
                     run_id=run_id, node_name=node_name,
-                    workspace_id=current_workspace(),  # inherit the paused run's workspace (#239)
+                    workspace_id=workspace_id,  # inherit the paused run's workspace (#239)
                     provider=getattr(op, "name", op_name),
                     job_id=handle.job_id, backend=handle.backend, job_meta=dict(handle.meta),
                     compute_target=target,

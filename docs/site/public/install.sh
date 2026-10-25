@@ -3,7 +3,7 @@
 #
 #   curl -LsSf https://docs.cairndev.sh/install.sh | sh
 #   curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_EXTRAS=hello,rag sh
-#   curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_VERSION=0.1.3 sh
+#   curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_VERSION=0.3.0 sh
 #
 # Installs uv if it is missing (astral.sh's own installer, into ~/.local/bin, no sudo; like any uv
 # install it adds that directory to your shell's PATH), then installs — or upgrades — the

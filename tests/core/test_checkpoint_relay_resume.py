@@ -204,3 +204,82 @@ def test_sdk_and_yaml_declare_checkpoint(tmp_path):
     from cairn.core.dataflow.defs import FlowDef
     d = FlowDef.model_validate(doc)
     assert d.stages[0].checkpoint is True
+
+
+# ── resume stays inside the leg's workspace ──────────────────────────────────
+
+
+class _Runs:
+    """run_id → workspace, as the run store records it."""
+
+    def __init__(self, workspaces: dict[str, str]) -> None:
+        self.workspaces = workspaces
+
+    async def get(self, run_id, *a, **kw):
+        from types import SimpleNamespace
+
+        ws = self.workspaces.get(run_id)
+        return None if ws is None else SimpleNamespace(id=run_id, workspace_id=ws)
+
+
+def _hooks(store, runs, run_id):
+    from cairn.core.dispatch.leg_hooks import FlowLegHooks
+
+    async def _emit(*a, **kw):
+        return None
+
+    return FlowLegHooks(pipeline_id="p", step_id="s", leg_ref="flow:x", run_id=run_id,
+                        pipeline_store=None, run_store=runs, emit=_emit, artifact_store=store)
+
+
+async def test_a_leg_resumes_only_from_its_own_workspaces_checkpoint(tmp_path, store):
+    """The spec key is a hash of the spec, so two workspaces running the same
+    spec share it. A leg in one workspace never resumes from a checkpoint a run
+    of another workspace relayed; in its own workspace it does."""
+    wd = tmp_path / "wd"
+    run_dataflow(_spec(), wd)
+    await relay_local_checkpoints(wd, run_id="run-a", store=store, dest_root=tmp_path / "durable",
+                                  workspace_id="ws-a")
+    runs = _Runs({"run-a": "ws-a", "leg-a": "ws-a", "leg-b": "ws-b"})
+    key = spec_key(_spec())
+    assert await _hooks(store, runs, "leg-b").resume_provider()(key) is None
+    rf = await _hooks(store, runs, "leg-a").resume_provider()(key)
+    assert rf is not None and rf.stage_index == 0
+
+
+async def test_identical_checkpoint_bytes_resume_from_each_workspaces_own_copy(tmp_path, store):
+    """Identical bytes are one content-addressed identity, but each workspace's
+    relay is its own registration (ADR-0148): its own copy and its own producing
+    run. Each workspace resumes from its own copy, never the other's."""
+    for run_id, ws in (("run-a", "ws-a"), ("run-b", "ws-b")):
+        wd = tmp_path / run_id
+        run_dataflow(_spec(), wd)
+        await relay_local_checkpoints(wd, run_id=run_id, store=store, dest_root=tmp_path / "durable",
+                                      workspace_id=ws)
+    for ws in ("ws-a", "ws-b"):
+        assert len(await store.list_artifacts(kind="dataset", workspace_id=ws)) == 1
+    assert await store.list_artifacts(kind="dataset", workspace_id="ws-c") == []
+    runs = _Runs({"run-a": "ws-a", "run-b": "ws-b"})
+    key = spec_key(_spec())
+    for ws, run_id in (("ws-a", "run-a"), ("ws-b", "run-b")):
+        rf = await find_resume_checkpoint(store, key, workspace_id=ws,
+                                          run_workspace=lambda r: _ws(runs, r))
+        assert rf is not None
+        assert all(f"/durable/{run_id}/" in a["uri"] for a in rf.artifacts), rf.artifacts
+
+
+async def test_a_leg_whose_producer_or_own_run_is_unreadable_starts_fresh(tmp_path, store):
+    wd = tmp_path / "wd"
+    run_dataflow(_spec(), wd)
+    # relayed in the leg's own workspace, so only the unreadable-producer rule can refuse it
+    await relay_local_checkpoints(wd, run_id="run-gone", store=store, dest_root=tmp_path / "durable",
+                                  workspace_id="ws-a")
+    assert len(await store.list_artifacts(kind="dataset", workspace_id="ws-a")) == 1
+    key = spec_key(_spec())
+    assert await _hooks(store, _Runs({"leg-a": "ws-a"}), "leg-a").resume_provider()(key) is None
+    assert await _hooks(store, _Runs({"run-gone": "ws-a"}), "leg-x").resume_provider()(key) is None
+
+
+async def _ws(runs, run_id):
+    run = await runs.get(run_id)
+    return None if run is None else run.workspace_id

@@ -112,6 +112,12 @@ def app_env(monkeypatch, tmp_path):
 
     pipelines = InMemoryPipelineStore()
     monkeypatch.setattr(pipeline_store_mod, "_default_store", pipelines)
+    # the receivers' workspace exists, as it does once a pipeline is enabled in it
+    # (with auth on, a workspace id no store holds is refused)
+    from cairn.core import workspace as W
+    workspaces = W.InMemoryWorkspaceStore()
+    asyncio.run(workspaces.put(W.Workspace(id="acme-ops", name="Acme ops")))
+    monkeypatch.setattr(W, "_store", workspaces)
     # no policies unless a test writes one
     pol_dir = tmp_path / "policies"
     pol_dir.mkdir()

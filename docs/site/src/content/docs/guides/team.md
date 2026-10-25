@@ -28,6 +28,26 @@ cairn remote login -e https://cairn.example.com -u admin
 Sign-up and `cairn remote hash-password` hash passwords with argon2, which the base install
 carries (since 0.1.2; on 0.1.1 install the `auth` extra).
 
+A console sign-in lasts longer than its access token (30 minutes,
+`CAIRN_ACCESS_TOKEN_EXPIRE_MINUTES`). Signing in, signing up or signing in with
+GitHub or Google also sets an httpOnly `cairn_refresh` cookie, and the console
+trades it for a new access token with `POST /auth/refresh`. A remembered sign-in
+lasts `CAIRN_REFRESH_TOKEN_DAYS` (default 30); `POST /token` with
+`remember=false` gives a browser-session cookie the server honours for 12 hours.
+A sign-in's lifetime is fixed when it starts; refreshing does not extend it.
+`POST /auth/logout` ends the sign-in on the server (like a refresh, it needs the
+`X-Cairn-Refresh: 1` header and must come from the console's own origin). Changing a user's password or
+disabling them ends all their sign-ins. Set `CAIRN_PUBLIC_URL` to the address
+people use; behind a TLS-terminating proxy (Caddy with a domain, an ingress, a
+load balancer) this is required. The cookie is `Secure` when that address is
+https, and a refresh is accepted only from that origin or the host the request
+was sent to.
+
+A refresh token sent again within 10 seconds of its rotation renews (two tabs
+refreshing at once, or a refresh whose response was lost, keep the sign-in). The token it displaced, presented 10
+seconds or more later, ends the sign-in for both holders, and the server logs
+"superseded refresh token presented" (ADR-0144, ADR-0145).
+
 ## 2. Create the first account
 
 People other than the configured admin sign up through the API:
@@ -86,10 +106,45 @@ sees only its own workspaces. List and create them over the API:
 curl -s -H "authorization: Bearer $TOKEN" https://cairn.example.com/workspaces
 ```
 
+Creating a workspace with an explicit `id` that already exists is refused
+(`409` when your account holds it, `404` when another account does); a create
+by name alone takes the name's first free slug (`ops-2`). Archiving or
+restoring one (`DELETE` or `PATCH /workspaces/<id>`) needs an owner or admin of
+the account that owns it, or the deployment's admin (`CAIRN_API_USER`);
+another account's workspace answers `404`.
+
 A request acts in a workspace when its path starts with
-`/workspaces/<id>/`, or when it carries the `X-Cairn-Workspace` header. The
-engine installs every pipeline it finds into the `default` workspace when it
-starts.
+`/workspaces/<id>/`, or when it carries the `X-Cairn-Workspace` header. With
+sign-in on, naming a workspace that does not exist answers `404`, the same as
+naming one another account owns; create it first (`POST /workspaces`). So
+`CAIRN_WORKSPACE`, if set, must name a workspace that exists (`default` always
+does); the server warns at startup when it does not. On a multi-node deployment
+the workspace store must be shared (Postgres): each node's SQLite store only
+knows the workspaces created on it.
+
+A request that names neither acts in the server's default workspace
+(`CAIRN_WORKSPACE`, else `default`) if your account owns it, and otherwise in
+your account's oldest active workspace, the one sign-in opens; a
+`CAIRN_WORKSPACE` that does not exist sends every such request there. An
+account with no active workspace gets `404` on every workspace-scoped route,
+but can still sign in, list, create and restore its workspaces. The engine installs every
+pipeline it finds into the `default` workspace when it starts.
+
+New workspace ids are at most 40 characters.
+
+What belongs to an account or a workspace:
+
+- **Connections and secrets** belong to the account. Each account's
+  connections and stored secrets are its own, and its runs resolve only those
+  (see [Connect a provider](/guides/connect-a-provider/)).
+- **Datasets** belong to a workspace. `dataset:` refs and `@latest` see only
+  the workspace's versions, and the `default` workspace does not see other
+  workspaces' datasets.
+- **Knowledge corpora**: retrieval reads the installed packs' corpora plus the
+  workspace's own.
+- **Packs** are deployment-wide. Installing or removing one over the API
+  (`POST /registry/install`, `POST /registry/uninstall`) needs the deployment
+  admin (`CAIRN_API_USER`).
 
 ## 6. Roles, and who decides a gate
 

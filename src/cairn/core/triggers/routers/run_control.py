@@ -14,6 +14,7 @@ from starlette.responses import StreamingResponse
 from cairn.core._time import utc_now_iso
 from cairn.core.dispatch.dispatcher import NotResumableError, OrphanedGateError
 from cairn.core.engine.schema import ApprovalRecord
+from cairn.core.triggers import console_support as support
 from cairn.core.triggers.auth import _oauth2_scheme, require_auth
 from cairn.core.triggers.routers.reviews import decision_actor
 from cairn.core.workspace import current_workspace
@@ -48,7 +49,7 @@ def build_run_control_router(dispatcher, *, pipeline_bridge=None) -> APIRouter:
     # Distinct from /triggers/approve (the action-saga HITL, ADR-0024): this
     # resumes a TEMPLATE run paused at an operation interrupt, routing to the
     # deployment's runtime (in_process recompile / temporal signal / dbos send).
-    @r.post("/runs/{run_id}/resume")
+    @r.post("/runs/{run_id}/resume", dependencies=[Depends(support.writable_workspace)])
     async def resume_run_endpoint(
         run_id: str,
         body: ResumeRequest | None = None,
@@ -126,7 +127,8 @@ def build_run_control_router(dispatcher, *, pipeline_bridge=None) -> APIRouter:
     #    control plane's own API — the `http` job channel. The store is the log:
     #    ingest is idempotent on the worker's (node, seq), control is a run event.
 
-    @r.post("/runs/{run_id}/events/ingest", dependencies=[Depends(require_auth)])
+    @r.post("/runs/{run_id}/events/ingest",
+            dependencies=[Depends(require_auth), Depends(support.writable_workspace_unless_worker)])
     async def ingest_run_events(run_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
         """Append a batch of a worker's report events — once each, whatever the
         worker replayed after a reconnect. Body: ``{"events": [{"type", "data":
@@ -206,7 +208,7 @@ def build_run_control_router(dispatcher, *, pipeline_bridge=None) -> APIRouter:
                                    timeout_s=max(0.0, min(25.0, float(wait_s))))
         return {"run_id": run_id, "control": found}
 
-    @r.post("/runs/{run_id}/control", dependencies=[Depends(require_auth)])
+    @r.post("/runs/{run_id}/control", dependencies=[Depends(require_auth), Depends(support.writable_workspace)])
     async def request_run_control(run_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
         """Ask the run's live worker to ``abort`` or ``checkpoint-and-stop``
         (save a checkpoint at the current step, then stop). Recorded as a
@@ -290,7 +292,7 @@ def build_run_control_router(dispatcher, *, pipeline_bridge=None) -> APIRouter:
 
         return StreamingResponse(_gen(), media_type="text/event-stream")
 
-    @r.post("/runs/{run_id}/cancel")
+    @r.post("/runs/{run_id}/cancel", dependencies=[Depends(support.writable_workspace)])
     async def cancel_run(run_id: str) -> dict[str, Any]:
         await _run_in_ws_or_404(run_id)  # workspace guard (#228 B6)
         inv = await dispatcher.cancel(run_id)
@@ -299,7 +301,7 @@ def build_run_control_router(dispatcher, *, pipeline_bridge=None) -> APIRouter:
         return inv.model_dump(mode="json")
 
     # ── #896 HITL approval lifecycle: expire one / bulk-dismiss stale gates ──
-    @r.post("/runs/{run_id}/expire")
+    @r.post("/runs/{run_id}/expire", dependencies=[Depends(support.writable_workspace)])
     async def expire_run_endpoint(run_id: str) -> dict[str, Any]:
         """Dismiss ONE stale HITL gate: transition an ``awaiting_approval`` run →
         ``expired`` (audited). 409 if the run isn't awaiting approval — you can't
@@ -320,7 +322,7 @@ def build_run_control_router(dispatcher, *, pipeline_bridge=None) -> APIRouter:
         updated = await dispatcher.get(run_id)
         return (updated or inv).model_dump(mode="json")
 
-    @r.post("/approvals/dismiss")
+    @r.post("/approvals/dismiss", dependencies=[Depends(support.writable_workspace)])
     async def dismiss_approvals_endpoint(body: DismissApprovals) -> dict[str, Any]:
         """Bulk-dismiss stale HITL gates (the console action). ``all_stale`` sweeps
         every awaiting_approval run past the governance TTL now; otherwise the named

@@ -5,7 +5,7 @@
 
 image:
   repository: ghcr.io/cairndev-sh/cairn-engine
-  tag: "0.1.3"
+  tag: "0.3.0"
 
 runtime: dbos
 checkpointer: postgres
@@ -26,6 +26,11 @@ postgres:
 
 env:
   profile: /app/.venv/lib/python3.13/site-packages/cairn/profiles/secure.toml   # REQUIRED (#2296)
+  extra:
+    # = https://<ingress.host>. The ingress terminates TLS, so the server sees
+    # http; this makes the console's sign-in cookie Secure and builds the
+    # OAuth callback from the public origin.
+    CAIRN_PUBLIC_URL: https://cairn.example.com
 
 secrets:
   obsJwtSecret: CHANGE-ME-openssl-rand-hex-32

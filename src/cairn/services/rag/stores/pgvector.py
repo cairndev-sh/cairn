@@ -31,6 +31,7 @@ storage tier (runs + events + memory + RAG vectors).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from typing import Any, Optional
@@ -60,6 +61,40 @@ def _require_asyncpg():
 # SQL injection. Everything else uses parameterized queries.
 
 
+#: Postgres keeps only the first 63 bytes of an identifier and silently drops the rest.
+_PG_IDENTIFIER_MAX = 63
+
+
+def pg_table_name(collection: str) -> str:
+    """The table a collection is stored in. A name that fits in 63 bytes is used
+    as is (unchanged from before). A longer one — which Postgres would cut, so
+    that two long names sharing their first 63 bytes, or differing only in the
+    embedder fingerprint at the end, would land in one table — becomes a readable
+    40-byte head plus a 16-hex SHA-256 of the WHOLE name (57 bytes at most)."""
+    raw = collection.encode("utf-8")
+    if len(raw) <= _PG_IDENTIFIER_MAX:
+        return collection
+    head = raw[:40].decode("utf-8", "ignore").rstrip("_")
+    return f"{head}_{hashlib.sha256(raw).hexdigest()[:16]}"
+
+
+def _index_name(table: str, suffix: str) -> str:
+    """The name of one of ``table``'s indexes.
+
+    For a table name of at most 61 bytes this is ``<table>_<suffix>`` cut to 63
+    bytes — the name Postgres has always given these indexes, so existing
+    indexes keep their names. The cut keeps at least ``_e`` / ``_s`` after the
+    table name, so the two indexes of a table differ, and differ from the
+    table. A 62- or 63-byte table name would leave both cut names equal (or
+    equal to the table name), so ``CREATE INDEX IF NOT EXISTS`` skipped an
+    index; such a table gets hashed index names instead (:func:`pg_table_name`
+    of the full ``<table>_<suffix>``)."""
+    full = f"{table}_{suffix}"
+    if len(table.encode("utf-8")) <= _PG_IDENTIFIER_MAX - 2:
+        return full.encode("utf-8")[:_PG_IDENTIFIER_MAX].decode("utf-8", "ignore")
+    return pg_table_name(full)
+
+
 def _create_table_sql(table: str, dim: int) -> str:
     return f"""
         CREATE TABLE IF NOT EXISTS {table} (
@@ -75,7 +110,7 @@ def _create_index_sql(table: str) -> str:
     # HNSW > IVFFlat for typical recall/QPS at small-to-mid scale. Use
     # cosine ops to match the embedder (we normalize on the embedder side).
     return f"""
-        CREATE INDEX IF NOT EXISTS {table}_embedding_idx
+        CREATE INDEX IF NOT EXISTS {_index_name(table, "embedding_idx")}
         ON {table}
         USING hnsw (embedding vector_cosine_ops)
     """
@@ -83,7 +118,7 @@ def _create_index_sql(table: str) -> str:
 
 def _create_source_index_sql(table: str) -> str:
     # Backs delete_by_source / has_source / list_sources cheaply.
-    return f"CREATE INDEX IF NOT EXISTS {table}_source_idx ON {table}(source)"
+    return f"CREATE INDEX IF NOT EXISTS {_index_name(table, 'source_idx')} ON {table}(source)"
 
 
 def _upsert_sql(table: str) -> str:
@@ -208,12 +243,12 @@ class PGVectorStore(VectorStore):
         if self._collection:
             return self._collection
         from cairn.core.provider_settings import get_settings
-        return self._safe_collection(get_settings().rag_collection_name)
+        return pg_table_name(self._safe_collection(get_settings().rag_collection_name))
 
     # ── Contract ───────────────────────────────────────────────────────
 
     async def initialize(self, collection: str, dim: int) -> None:
-        table = self._safe_collection(collection)
+        table = pg_table_name(self._safe_collection(collection))
         if self._initialized_for_dim.get(table) == dim:
             # already created by this store: callers run initialize() per query,
             # save and ingest, so the DDL and the fleet-wide lock run once (#2551)

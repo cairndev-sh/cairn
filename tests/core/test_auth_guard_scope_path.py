@@ -251,8 +251,13 @@ def test_a_run_ingest_token_heartbeats_its_own_runs_job(client, job_store):
     assert r.status_code == 200, (r.status_code, r.text)
 
 
-def test_an_operator_still_heartbeats_any_job(client, job_store):
+def test_a_worker_pool_token_still_heartbeats_any_job(client, job_store):
+    """cairn-platform#224: a worker credential heartbeats any job; a user's token,
+    which the old rule called an operator, no longer does."""
     _register(job_store, "run-x:train", "run-x")
-    tok = auth.create_access_token({"sub": "admin"})
+    tok = auth.mint_worker_pool_token("gpu-a")
     r = client.post("/jobs/run-x:train/heartbeat", json={"worker_id": "w1"}, headers=_bearer(tok))
     assert r.status_code == 200, (r.status_code, r.text)
+    user = auth.create_access_token({"sub": "alice"})
+    r = client.post("/jobs/run-x:train/heartbeat", json={"worker_id": "w1"}, headers=_bearer(user))
+    assert r.status_code == 403, (r.status_code, r.text)

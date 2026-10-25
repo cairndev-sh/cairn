@@ -54,7 +54,7 @@ def test_hostless_ml_target_fails(monkeypatch):
 def test_complete_ml_target_passes(monkeypatch):
     monkeypatch.setenv("OBS_ML_TARGET", "gpu")
     _bind(monkeypatch, gpu=({"provider": "ssh", "host": "10.0.0.1", "user": "ubuntu",
-                             "image": "ghcr.io/evs-cmd/cairn-train-gpu:2026.09"},
+                             "image": "ghcr.io/example/cairn-train-gpu:2026.09"},
                             {"PRIVATE_KEY": "k"}))
     rows = _run()
     assert rows["compute_target:ml_target"].status == "ok"
@@ -78,3 +78,24 @@ def test_a_resolution_error_degrades_to_a_warn(monkeypatch):
     monkeypatch.setattr("cairn.core.connections.resolve_connection", boom, raising=True)
     r = _run()["compute_target:ml_target"]
     assert r.status == "warn" and "store down" in r.detail
+
+
+_BOX = ({"provider": "ssh", "host": "10.0.0.1", "user": "ubuntu"}, {"PRIVATE_KEY": "k"})
+
+
+def test_doctor_reads_the_environment_image_mode(monkeypatch):
+    """ADR-0150 D1 — remote_exec_mode=image with no image anywhere is refused by
+    the engine at submit, so doctor FAILS the row instead of calling it venv."""
+    monkeypatch.setenv("OBS_ML_TARGET", "gpu")
+    monkeypatch.setenv("OBS_REMOTE_EXEC_MODE", "image")
+    _bind(monkeypatch, gpu=_BOX)
+    r = _run()["compute_target:ml_target:mode"]
+    assert r.status == "fail" and "refused at submit" in r.detail
+
+
+def test_doctor_reads_the_environment_image(monkeypatch):
+    monkeypatch.setenv("OBS_ML_TARGET", "gpu")
+    monkeypatch.setenv("OBS_TRAIN_IMAGE", "ghcr.io/example/cairn-train-gpu:fleet")
+    _bind(monkeypatch, gpu=_BOX)
+    r = _run()["compute_target:ml_target:mode"]
+    assert r.status == "ok" and "ghcr.io/example/cairn-train-gpu:fleet" in r.detail

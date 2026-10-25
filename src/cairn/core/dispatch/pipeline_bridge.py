@@ -33,6 +33,7 @@ is Phase 4.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -45,11 +46,26 @@ from cairn.core.engine.bundle import (
 )
 from cairn.core.engine.expr import step_field as _step_field  # ONE lookup (#1118)
 from cairn.core.dataflow.engine_registry import resolve_engine
-from cairn.core.dispatch.coordination import CriticalSections, pipeline_sections_for
-from cairn.core.dispatch.leg_executor import LegOutcome, execute_leg, leg_kind_of, recorded_stage_contracts
-from cairn.core.dispatch.leg_hooks import FlowLegHooks, flow_leg_record, pipeline_spent_usd
+from cairn.core.dispatch.coordination import CriticalSections
+from cairn.core.dispatch.leg_executor import (
+    LegOutcome,
+    cancel_recorded_job,
+    execute_leg,
+    leg_kind_of,
+    recorded_stage_contracts,
+)
+from cairn.core.dispatch.leg_hooks import (
+    FlowLegHooks,
+    compute_target_for_kind,
+    estimate_evidence,
+    flow_leg_record,
+    leg_price_kwargs,
+    pipeline_spent_usd,
+)
+from cairn.core.dispatch.coordination import pipeline_sections_for
 from cairn.core.dispatch.pipeline_resume import plan_resume
 from cairn.core.dispatch.target_concurrency import in_flight_on_target, target_cap
+from cairn.core.workspace import WorkspaceScopeRequired, workspace_scope
 from cairn.core.engine.pipeline_gate import GATE_STATUS, gate_context_for
 # #1791 — the approval-notification subscriber. Core→core; `gate_notify` pulls
 # the profile and the notifier registry lazily, so this adds no import weight.
@@ -322,6 +338,39 @@ def _run_options(rec: PipelineRecord) -> dict[str, Any]:
     raw = (getattr(rec, "trigger", None) or {}).get("run_options") or {}
     return {k: raw[k] for k in _RUN_OPTION_KEYS if k in raw}
 
+def _in_record_workspace(method):
+    """Run a bridge method whose first argument is the pipeline record in that
+    record's workspace (``current_workspace()``). A leg is advanced off a bus
+    event, re-adopted at boot or resumed from a gate — never reliably inside the
+    request that launched it — so the record is what names the workspace, and
+    with it the account the leg's connections and secrets resolve in (#1639's
+    "from the RECORD" rule, applied to execution)."""
+
+    @functools.wraps(method)
+    async def wrapper(self: Any, rec: Any, *args: Any, **kwargs: Any) -> Any:
+        try:
+            scope = workspace_scope(getattr(rec, "workspace_id", "") or "")
+        except WorkspaceScopeRequired:
+            # auth on and the record names no workspace: fail closed AND visibly —
+            # the leg or the pipeline ends failed with the reason, nothing runs.
+            # `_REFUSED` tells a `_submit_step` caller to stop, as a blocked gate does.
+            await self._refuse_unscoped(method.__name__, rec, *args, **kwargs)
+            return _REFUSED
+        with scope:
+            return await method(self, rec, *args, **kwargs)
+
+    return wrapper
+
+
+_NO_WORKSPACE_REASON = "record names no workspace"
+_NO_WORKSPACE_VERDICT = "workspace_unresolved"
+#: What a refused ``_submit_step`` returns (it otherwise returns ``None``): the
+#: pipeline is already failed and persisted, so the caller stops right there.
+#: Both refusals return it: a record that names no workspace, and a wire that
+#: cannot resolve.
+_REFUSED = False
+
+
 class PipelineBridge:
     """Core-owned enforcer that advances bundle pipelines off run completions."""
 
@@ -444,8 +493,9 @@ class PipelineBridge:
             for sid in sorted(released):
                 s, st = rec.plan.step(sid), rec.step_state.get(sid)
                 if s is not None and st is not None and st.status == "pending":
-                    await self._submit_step(
-                        rec, s, iteration_view(raw, sid, rec.plan.loops or {}))
+                    if await self._submit_step(
+                            rec, s, iteration_view(raw, sid, rec.plan.loops or {})) is _REFUSED:
+                        return  # the pipeline is failed and persisted
             rec.status = "running"  # `_advance`'s `_settle` recomputes it
             await self._advance(pipeline_id, _rec=rec)
 
@@ -1437,6 +1487,10 @@ class PipelineBridge:
             # keep submitting downstream legs while the teardown was in flight.)
             if rec.terminal_intent:
                 break
+            # A pass a passed gate leg ran from inside `_submit_step` may have
+            # failed and persisted the record already: start nothing more on it.
+            if rec.status in PIPELINE_TERMINAL:
+                return
             # A finalizer is never dependency-driven — `_run_finalizers` owns it.
             if getattr(s, "finalizer", False):
                 continue
@@ -1493,8 +1547,11 @@ class PipelineBridge:
                     gate_ctx["admission"] = dict(rec.admission)
                 # #2358 — and what the pipeline has spent against its budget, so
                 # the Approvals panel can show cost vs cap on a pipeline gate.
+                # ADR-0151 D4 — and, before the first priced leg, what the run is
+                # estimated to cost on its box (recorded at launch, never re-derived).
                 gate_ctx["evidence"] = {**(gate_ctx.get("evidence") or {}),
-                                        **await self._spend_evidence(rec)}
+                                        **await self._spend_evidence(rec),
+                                        **estimate_evidence(rec, s.id)}
                 await self._mark_awaiting(rec, s, GATE_STATUS, gate_ctx=gate_ctx)
                 # #1468 — the gate firing IS a decision being asked: open its
                 # review record (advisory — the queue stays the source of truth).
@@ -1509,12 +1566,51 @@ class PipelineBridge:
                 await self._subscribe_event(rec.pipeline_id, s.id, s.trigger[len("on:"):])
             elif after_restart and not self._rerun_is_safe(s):
                 await self._park_after_restart(rec, s)
-            else:
-                await self._submit_step(rec, s, outputs, after_restart=after_restart)
+            elif await self._submit_step(rec, s, outputs, after_restart=after_restart) is _REFUSED:
+                return  # failed and persisted, like a blocked gate
         await self._settle(rec)
 
+    async def _refuse_unscoped(self, method: str, rec: PipelineRecord, s: Any, *rest: Any,
+                               adopt: Optional[dict] = None, **_kw: Any) -> None:
+        """The visible half of :func:`_in_record_workspace`'s refusal. A step about
+        to be submitted fails its pipeline (audited, as a wire that cannot resolve
+        does); a leg already created marks its run failed and emits the terminal
+        event its pipeline advances on. A re-adopted flow leg (``adopt``, the
+        engine handle a previous owner recorded) also cancels that engine job:
+        nothing watches it once the leg is refused."""
+        if method == "_submit_step":
+            st = rec.step_state.get(s.id) or StepState()
+            st.status = "failed"
+            st.verdict = _NO_WORKSPACE_VERDICT
+            st.ended_at = _now()
+            rec.step_state[s.id] = st
+            await self._audit(rec, s.id, _NO_WORKSPACE_VERDICT, {"error": _NO_WORKSPACE_REASON})
+            # Once: a finalizer reached here because the pipeline is already ending
+            # (`_run_finalizers` runs only under a terminal intent); failing it again
+            # would re-enter the finalizers. The step is terminal, so it is not retried.
+            if not rec.terminal_intent and rec.status not in PIPELINE_TERMINAL:
+                await self._fail_pipeline(rec, _NO_WORKSPACE_REASON)
+            return
+        run = rest[0]
+        if adopt:
+            try:
+                engine = self._leg_engine(s)
+            except Exception:  # noqa: BLE001 — no engine to reach: the run still fails below
+                logger.exception("leg %s (%s): no engine to cancel the recorded job on", s.ref, run.id)
+                engine = None
+            await cancel_recorded_job(engine, adopt)
+        try:
+            await self.dispatcher.store.update(run.id, status="failed", ended_at=_now(),
+                                               error=_NO_WORKSPACE_REASON)
+            await self.dispatcher._emit(
+                run.id, "failed", {"leg": s.ref, "step_id": s.id, "error": _NO_WORKSPACE_REASON},
+                pipeline_id=rec.pipeline_id)
+        except Exception:  # noqa: BLE001 — nothing left to do but log
+            logger.exception("leg %s (%s): failed to terminalize", s.ref, run.id)
+
+    @_in_record_workspace
     async def _submit_step(self, rec: PipelineRecord, s: Any, outputs: dict, *,
-                           after_restart: bool = False) -> None:
+                           after_restart: bool = False) -> Optional[bool]:
         """Resolve a ready step's inputs from persisted output + submit it as its OWN
         governed run (stamped with the pipeline lineage). The data contract never reads
         an in-graph channel.
@@ -1526,13 +1622,14 @@ class PipelineBridge:
         A non-optional wire that resolves to NOTHING (#1540 — the producer ran
         but has no such field) fails the PIPELINE with the two-sided message as
         the cited reason; letting it propagate would skip the record `put` in
-        `_advance` and wedge the run mid-transition."""
+        `_advance` and wedge the run mid-transition. It returns ``_REFUSED``, so
+        the caller stops: no further leg starts on the failed record."""
         try:
             resolved = resolve_step_inputs(s, bundle_input=rec.inputs, steps=outputs)
         except WireResolutionError as e:
             await self._audit(rec, s.id, "wire_unresolved", {"error": str(e)})
             await self._fail_pipeline(rec, str(e))
-            return
+            return _REFUSED
         # #1180 — a GATE leg has no executable: the approval that routed us here
         # IS the step. Mark done and advance dependents; dispatching its name
         # through run_template was the fourth bug the first full E2E found.
@@ -1797,6 +1894,7 @@ class PipelineBridge:
             run_id=rec.pipeline_id,
         )
 
+    @_in_record_workspace
     async def _run_flow_leg(self, rec: PipelineRecord, s: Any, run: Any, resolved: dict,
                             *, adopt: Optional[dict] = None) -> None:
         """The background half of a flow leg: execute → persist outcome → emit the
@@ -1938,6 +2036,7 @@ class PipelineBridge:
             return None
         return run
 
+    @_in_record_workspace
     async def _run_task_leg(self, rec: PipelineRecord, s: Any, run: Any, resolved: dict) -> None:
         """The background half: resolve the op → validate → run → persist →
         emit terminal. An op failure is an OUTCOME (run `failed`, pipeline
@@ -2248,10 +2347,8 @@ class PipelineBridge:
         local builtin engine): nothing to cap, nothing to look up.
         """
         try:
-            from cairn.core.backend_selection import selected  # noqa: PLC0415 - cycle: selection → profile → pack
-
-            key = "ml_target" if self._leg_flow_kind(s) == "ml" else "dataflow_target"
-            return str(selected(key, default="") or "").strip()
+            # ADR-0151 D1 — the one selection, shared with the launch door's pricing.
+            return compute_target_for_kind(self._leg_flow_kind(s))
         except Exception:  # noqa: BLE001 — an unreadable selection means "no target"
             logger.debug("could not resolve the compute target for leg %s",
                          getattr(s, "ref", ""), exc_info=True)
@@ -2475,7 +2572,9 @@ class PipelineBridge:
             s.ref, inputs=resolved, engine=engine,
             run_id=run.id,
             series_id=series_id,
-            estimated_usd=float(gov.get("estimated_usd", 0.0) or 0.0),
+            # ADR-0151 D2/D5 — a priced leg reserves its RECORDED estimate and settles
+            # its box time; any other leg reserves `governance.estimated_usd` as before.
+            **leg_price_kwargs(rec, s.id, run),
             spent_usd=spent_usd,
             budget_usd=budget_usd,
             # #1288 — the declared leg timeout IS the poll budget; without one,
@@ -2628,7 +2727,8 @@ class PipelineBridge:
                 await self._audit(rec, s.id, "finalizer_skipped", {"error": str(e)})
                 continue
             try:
-                await self._submit_step(rec, s, outputs)
+                if await self._submit_step(rec, s, outputs) is _REFUSED:
+                    continue  # the step is failed with its reason; nothing started
                 await self._audit(rec, s.id, "finalizer_started",
                                   {"terminal_intent": rec.terminal_intent})
             except Exception as e:  # noqa: BLE001 — a finalizer that cannot even
@@ -2805,7 +2905,11 @@ class PipelineBridge:
                 await self.store.put(rec)
                 await self._audit(rec, step_id, "fire_recorded", {"fired_key": fire_key})
             self._cleanup_step_triggers(pipeline_id, step_id)  # a schedule/event step is now firing
-            await self._submit_step(rec, step, outputs)
+            if await self._submit_step(rec, step, outputs) is _REFUSED:
+                await self._decide_review(
+                    pipeline_id, step_id, "rejected", reviewer=approver or "",
+                    rationale=(rec.trigger or {}).get("failure_reason") or _NO_WORKSPACE_REASON)
+                return await self.store.get(pipeline_id)  # type: ignore[return-value]
             await self._audit(rec, step_id, "approved" if approver else "advanced",
                               {"approver": approver})
             if approver:

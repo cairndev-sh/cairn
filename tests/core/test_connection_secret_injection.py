@@ -5,7 +5,7 @@ KAGGLE_USERNAME`). `inject_declared_secrets` resolves, for each secret an
 operator's binding DECLARES, the connection that provides it and sets
 `os.environ[target]` — so an operator reading `os.environ` (train/kaggle) or the
 env-backed SecretStore actually sees a credential the user connected. Hermetic:
-in-memory store + a stubbed `resolve_connection` (the resolver internals are
+in-memory store + a stubbed `resolve_connection_obj` (the resolver internals are
 covered elsewhere)."""
 from __future__ import annotations
 
@@ -34,15 +34,15 @@ async def kaggle_store(monkeypatch):
     ))
     monkeypatch.setattr(conn, "default_connection_store", lambda: store)
 
-    async def _resolve(name, *, store=None):
-        if name == "my-kaggle":
+    async def _resolve(c):  # the row is already in hand (and in the run's account)
+        if c.name == "my-kaggle":
             return ResolvedConnection(
-                name=name, kind="api_key",
+                name=c.name, kind="api_key",
                 secrets={"USERNAME": "alice", "KEY": "sk-kaggle-123"},
             )
         return None
 
-    monkeypatch.setattr(conn, "resolve_connection", _resolve)
+    monkeypatch.setattr(conn, "resolve_connection_obj", _resolve)
     for var in ("KAGGLE_USERNAME", "KAGGLE_KEY", "HF_TOKEN"):
         monkeypatch.delenv(var, raising=False)
     return store

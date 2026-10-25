@@ -27,6 +27,8 @@ from __future__ import annotations
 from cairn.core.settings import getenv
 
 import asyncio
+import contextlib
+import hashlib
 import os
 import re
 import sqlite3
@@ -70,6 +72,50 @@ def reset_current_workspace(token: Token) -> None:
     _active.reset(token)
 
 
+def workspace_scope(workspace_id: Optional[str]) -> Any:
+    """Make ``workspace_id`` the :func:`current_workspace` for the block.
+
+    The dispatch layer enters it from a run's RECORD wherever it executes work
+    outside the request that started it (a pipeline leg advanced off a bus event,
+    a resumed run, a Temporal activity), so everything resolved inside — the
+    run's connections and secrets among it — is resolved for the workspace the
+    record names, not whichever context the executing task happened to inherit.
+
+    A record that names no workspace means the implicit ``default`` with auth off
+    (today's behaviour). With auth on it raises :class:`WorkspaceScopeRequired`:
+    the record cannot say whose work it is, so nothing runs under a guess."""
+    if not (workspace_id or "").strip():
+        from cairn.core.auth_tokens import auth_enabled  # noqa: PLC0415 — keep the import graph of this module flat
+
+        if auth_enabled():
+            raise WorkspaceScopeRequired("the record names no workspace")
+    return _scope(workspace_id)
+
+
+@contextlib.contextmanager
+def _scope(workspace_id: Optional[str]):
+    token = set_current_workspace(workspace_id)
+    try:
+        yield
+    finally:
+        reset_current_workspace(token)
+
+
+def scoped_workspace() -> str:
+    """The workspace in scope (a request's, or a run's scoped from its record),
+    for work started on its behalf — a launch from inside a run lands where the
+    run is. With nothing in scope: the process default with auth off; with auth
+    on, :class:`WorkspaceScopeRequired`."""
+    ws = _active.get()
+    if ws:
+        return ws
+    from cairn.core.auth_tokens import auth_enabled  # noqa: PLC0415 — keep the import graph of this module flat
+
+    if auth_enabled():
+        raise WorkspaceScopeRequired("no workspace in scope to start work in")
+    return current_workspace()
+
+
 def workspace_blob_path(workspace_id: str, *parts: str) -> str:
     """Blob *namespace* key for a workspace: ``workspace/<id>/<parts…>``.
 
@@ -98,18 +144,60 @@ def workspace_collection(name: str, workspace_id: Optional[str] = None) -> str:
     an already-namespaced name is a no-op, so a collection resolved once and
     passed downstream (indexer → ``ingest_document``) is never double-prefixed.
 
-    Concurrency caveat (deferred to SaaS activation, #224 H): the vector stores
-    hold the active collection as mutable instance state on a process-cached
-    store, so *concurrent* different-workspace requests in one process need
-    per-workspace store instances (or a per-call collection arg). Namespacing is
-    correct for single-workspace and sequential multi-workspace access today.
+    In the default workspace a name starting with ``ws_`` (the prefix of every
+    other workspace's collections) raises ``ValueError``.
+
+    **Unambiguous:** two workspaces never share a prefix. A slug id (what
+    ``POST /workspaces`` makes from an ASCII name: ``[a-z0-9]`` runs joined by
+    single dashes, at most :data:`MAX_WORKSPACE_ID_LEN` long) keeps the readable
+    ``ws_<id with - as _>__`` it always had; any other id (non-ASCII, uppercase,
+    underscores, leading/trailing dashes, longer slugs) maps to
+    ``ws__<sha256 prefix>__``, which no slug id can produce, so sanitizing can
+    never fold one workspace onto another (SQLite and Postgres table names are
+    also case-insensitive, hence the lowercase-only slug rule).
+
+    Concurrency: the vector stores hold the active collection as instance state.
+    The process-wide RAG and memory stores are therefore used one collection
+    operation at a time (``cairn.services.rag.stores.on_collection``), and the
+    ``rag/search`` / ``memory/search`` operators keep one store per collection.
     """
     ws = (workspace_id or current_workspace()).strip() or DEFAULT_WORKSPACE
     if ws == DEFAULT_WORKSPACE:
+        # the default workspace's names are bare, so a bare name never carries
+        # another workspace's prefix
+        if name.startswith("ws_"):
+            raise ValueError(f"collection name {name!r} is reserved for workspace-scoped collections")
         return name
-    safe_ws = re.sub(r"[^A-Za-z0-9_]+", "_", ws).strip("_") or DEFAULT_WORKSPACE
-    prefix = f"ws_{safe_ws}__"
+    prefix = _collection_prefix(ws)
     return name if name.startswith(prefix) else f"{prefix}{name}"
+
+
+#: A workspace id in the slug form ``_slug_workspace_id`` produces from an ASCII name.
+_SLUG_WORKSPACE_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+
+#: Longest workspace id a create assigns (``POST /workspaces``, an account's first
+#: workspace). Collection names start with the workspace prefix, and Postgres keeps
+#: only the first 63 bytes of an identifier: with ids this short, the whole prefix
+#: always falls inside those bytes, so two workspaces' tables stay distinct.
+MAX_WORKSPACE_ID_LEN = 40
+
+
+def cap_workspace_id(slug: str, suffix: str = "") -> str:
+    """``slug`` followed by ``suffix`` (a ``-2`` dedupe), cut so the result is at
+    most :data:`MAX_WORKSPACE_ID_LEN` characters (a dash left at the cut is dropped)."""
+    return slug[: MAX_WORKSPACE_ID_LEN - len(suffix)].rstrip("-") + suffix
+
+
+def _collection_prefix(workspace_id: str) -> str:
+    """The collection prefix of a non-default workspace (see :func:`workspace_collection`).
+    A slug id longer than :data:`MAX_WORKSPACE_ID_LEN` (created before the cap)
+    takes the hashed form, so its prefix stays short too."""
+    if _SLUG_WORKSPACE_ID.fullmatch(workspace_id) and len(workspace_id) <= MAX_WORKSPACE_ID_LEN:
+        # a slug's dashes become underscores (the backend-safe alphabet) — the same
+        # sanitizing this prefix always used, so existing collection names hold
+        return f"ws_{re.sub(r'[^A-Za-z0-9_]+', '_', workspace_id)}__"
+    digest = hashlib.sha256(workspace_id.encode("utf-8")).hexdigest()[:16]
+    return f"ws__{digest}__"
 
 
 class WorkspaceDefaults(BaseModel):
@@ -347,6 +435,37 @@ def get_workspace_store() -> Any:
     return _store
 
 
+async def workspace_account(workspace_id: Optional[str] = None, *, store: Any = None) -> str:
+    """The account that owns ``workspace_id`` (default: :func:`current_workspace`).
+
+    This is the account a run in that workspace resolves connections and secrets
+    in. With auth on, omitting ``workspace_id`` outside any workspace scope (no
+    request, no run scoped from its record) raises :class:`WorkspaceScopeRequired`
+    rather than answering for the process default. With auth off, a workspace no
+    store holds (keyless dev naming an id)
+    belongs to the deployment's ``default`` account. With auth on, no account owns
+    such a workspace, so it raises :class:`WorkspaceForbidden` — the same answer
+    :func:`assert_workspace_allowed` gives. A store error propagates: a caller
+    resolving credentials must not fall back to the deployment's on an unknown
+    answer."""
+    from cairn.core.auth_tokens import auth_enabled  # noqa: PLC0415 — keep the import graph of this module flat
+
+    if not (workspace_id or "").strip() and _active.get() is None and auth_enabled():
+        # No workspace named and none in scope (no request, no record-scoped run):
+        # work that has lost its run's workspace — a template's operation node on a
+        # durable runtime's worker — must not resolve as the deployment.
+        raise WorkspaceScopeRequired(
+            "no workspace in scope: with auth on, connections and secrets resolve only "
+            "inside a run's workspace")
+    ws_id = (workspace_id or current_workspace()).strip() or DEFAULT_WORKSPACE
+    ws = await (store or get_workspace_store()).get(ws_id)
+    if ws is None:
+        if auth_enabled():
+            raise WorkspaceForbidden(ws_id)
+        return DEFAULT_ACCOUNT
+    return (getattr(ws, "account_id", "") or "").strip() or DEFAULT_ACCOUNT
+
+
 # ── authorization (#1610, ADR-0094 D3/D4) ─────────────────────────────────
 #
 # THE chokepoint. Before this, `_WorkspaceMiddleware` took the workspace from
@@ -361,6 +480,12 @@ def get_workspace_store() -> Any:
 # Keeping the decision here makes that a change to this function instead of to
 # every call site, which is the same reachability lesson as #1376/#1402: a
 # chokepoint must be a FUNCTION others call, not a BLOCK others copy.
+
+
+class WorkspaceScopeRequired(RuntimeError):
+    """Work that resolves an account's connections or secrets has no workspace to
+    resolve them in, and auth is on. Raised instead of resolving as the
+    deployment."""
 
 
 class WorkspaceForbidden(Exception):
@@ -388,10 +513,15 @@ async def assert_workspace_allowed(
     * ``account_id`` falsy — auth is OFF (keyless dev / single-node OSS). The
       deployment has no tenant boundary to enforce, and inventing one here
       would break every existing single-node install.
-    * the workspace does not exist — a *missing* workspace is the caller's
-      problem to discover through the normal 404 path, not this function's to
-      pre-judge. Refusing here would let a caller probe which ids exist by
-      watching the shape of the failure.
+    * the workspace does not exist AND auth is off — keyless dev may name an id
+      before (or without) creating it.
+
+    With auth on, a workspace no store holds is refused like another account's:
+    no account owns it, so no caller may act in it. Otherwise any account could
+    write records under an id that does not exist yet, and whoever later
+    creates that workspace would inherit them. The refusal is the same
+    :class:`WorkspaceForbidden` (a 404 to the caller) as a cross-account id, so
+    it does not tell a caller which ids exist.
     """
     ws_id = (workspace_id or "").strip()
     acct = (account_id or "").strip()
@@ -399,6 +529,10 @@ async def assert_workspace_allowed(
         return
     ws = await (store or get_workspace_store()).get(ws_id)
     if ws is None:
+        from cairn.core.auth_tokens import auth_enabled  # noqa: PLC0415 — keep the import graph of this module flat
+
+        if auth_enabled():
+            raise WorkspaceForbidden(ws_id)
         return
     if (ws.account_id or DEFAULT_ACCOUNT) != acct:
         raise WorkspaceForbidden(ws_id)

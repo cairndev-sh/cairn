@@ -719,6 +719,12 @@ INVENTORY: list[SettingSpec] = [
         "Lifetime of an issued access token, in minutes (core.auth_tokens).",
     ),
     SettingSpec(
+        "refresh_token_days", "CAIRN_REFRESH_TOKEN_DAYS", "30", "auth",
+        "Lifetime of a remembered console sign-in (the refresh cookie and its server "
+        "row), in days; a sign-in that is not remembered lasts 12 hours "
+        "(core.refresh_tokens, ADR-0142).",
+    ),
+    SettingSpec(
         "api_user", "CAIRN_API_USER", "admin", "auth",
         "Username of the env-configured API user (core.triggers.auth).",
     ),
@@ -747,7 +753,8 @@ INVENTORY: list[SettingSpec] = [
     ),
     SettingSpec(
         "workspace", "CAIRN_WORKSPACE", "default", "auth",
-        "Workspace id used when no request context names one (core.workspace).",
+        "Workspace id used when no request context names one (core.workspace). With auth "
+        "on it must name an existing workspace (`default` always exists).",
     ),
     SettingSpec(
         "oauth_broker", "CAIRN_OAUTH_BROKER", "authlib", "auth",
@@ -992,6 +999,11 @@ INVENTORY: list[SettingSpec] = [
     SettingSpec(
         "remote_exec_mode", "CAIRN_REMOTE_EXEC_MODE", "auto", "dataflow",
         "How the SSH engine runs a flow on a box: auto | image | venv (ADR-0104 D1).",
+    ),
+    SettingSpec(
+        "remote_env", "CAIRN_REMOTE_ENV", None, "dataflow",
+        "Names of control-plane env variables the SSH engine forwards to the job on the box; "
+        "credential-looking names are refused (profile key remote_env).",
     ),
     SettingSpec(
         "dataflow_remote_cmd", "CAIRN_DATAFLOW_REMOTE_CMD", "cairn-dataflow-run", "dataflow",

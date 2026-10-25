@@ -3,18 +3,18 @@
 The proven SSH path ran ``cairn-dataflow-run`` from a virtualenv a human
 pip-installed on the GPU box; it drifted since August and the fine-tune flow
 stopped resolving on the box (#2069). D1 replaces the box install with the
-CI-built ``cairn-train-gpu`` image: the box carries drivers + a container
+deployment's container image: the box carries drivers + a container
 runtime and nothing of cairn's.
 
 These tests pin BOTH modes at the same seam the existing suite uses
 (monkeypatched ``remote_exec._submit``), because the acceptance for D1 is
 "the exact remote command line", not "it ran":
 
-* ``image`` — the docker command shape, the pinned tag, the forwarded env
+* ``image`` — the docker command shape, the named tag, the forwarded env
   (including the #2025 live-channel vars, without which the curve never
   streams back), and the tag recorded on the run for provenance.
 * ``venv`` — byte-for-byte what it submitted before D1, so a box that still
-  carries the legacy install is untouched.
+  runs from its virtualenv is untouched (venv is the default, ADR-0150).
 """
 from __future__ import annotations
 
@@ -27,8 +27,11 @@ import cairn.core.connections as connections
 from cairn.core.dataflow import DataflowSpec, StageRef
 from cairn.core.operator.jobs import JobHandle
 
+from cairn.core.dataflow import EngineError
+
 from operator_dataflow.engines_ssh import (
-    DEFAULT_TRAIN_IMAGE,
+    CONNECTION_IMAGE_REQUIRED,
+    IMAGE_REQUIRED,
     BuiltinSshEngine,
     resolve_exec_mode,
 )
@@ -80,7 +83,7 @@ def _submit(engine: BuiltinSshEngine, spec: DataflowSpec):
 
 
 def test_mode_is_venv_when_nothing_names_an_image(monkeypatch):
-    """No image anywhere = the legacy box install. D1 must not flip a
+    """No image anywhere = the box virtualenv, the default. D1 must not flip a
     deployment to containers behind its operator's back."""
     mode, image, _gpus = resolve_exec_mode({"host": "box"})
     assert mode == "venv" and image == ""
@@ -92,32 +95,30 @@ def test_mode_is_image_when_the_connection_names_one(monkeypatch):
 
 
 def test_mode_is_image_when_obs_train_image_is_set(monkeypatch):
-    monkeypatch.setenv("OBS_TRAIN_IMAGE", "ghcr.io/evs-cmd/cairn-train-gpu:abc123")
+    monkeypatch.setenv("OBS_TRAIN_IMAGE", "ghcr.io/example/cairn-train-gpu:abc123")
     mode, image, _gpus = resolve_exec_mode({"host": "box"})
-    assert mode == "image" and image == "ghcr.io/evs-cmd/cairn-train-gpu:abc123"
+    assert mode == "image" and image == "ghcr.io/example/cairn-train-gpu:abc123"
 
 
 def test_connection_image_beats_the_environment_default(monkeypatch):
     """The connection names the BOX's image; the environment's key is the
     fleet default. More specific wins, and the decision is one function so
     the precedence is readable instead of scattered."""
-    monkeypatch.setenv("OBS_TRAIN_IMAGE", "ghcr.io/evs-cmd/cairn-train-gpu:fleet")
+    monkeypatch.setenv("OBS_TRAIN_IMAGE", "ghcr.io/example/cairn-train-gpu:fleet")
     mode, image, _gpus = resolve_exec_mode({"host": "box", "image": "ghcr.io/x/box-local:9"})
     assert mode == "image" and image == "ghcr.io/x/box-local:9"
 
 
-def test_explicit_mode_image_falls_back_to_the_pinned_default(monkeypatch):
-    """`mode = "image"` with no tag anywhere uses the PINNED default — never
-    `latest`, which is how a box silently runs a different build than the run
-    record claims."""
-    mode, image, _gpus = resolve_exec_mode({"host": "box", "mode": "image"})
-    assert mode == "image" and image == DEFAULT_TRAIN_IMAGE
-    assert not DEFAULT_TRAIN_IMAGE.endswith(":latest")
-    assert ":" in DEFAULT_TRAIN_IMAGE.rsplit("/", 1)[-1]  # a tag is pinned
+def test_explicit_mode_image_with_no_image_anywhere_is_refused(monkeypatch):
+    """`mode = "image"` with no image anywhere has no fallback (#202): the
+    deployment names the build, so the run record can name it too."""
+    with pytest.raises(EngineError) as e:
+        resolve_exec_mode({"host": "box", "mode": "image"})
+    assert str(e.value) == CONNECTION_IMAGE_REQUIRED
 
 
 def test_explicit_mode_venv_wins_over_a_configured_image(monkeypatch):
-    monkeypatch.setenv("OBS_TRAIN_IMAGE", "ghcr.io/evs-cmd/cairn-train-gpu:fleet")
+    monkeypatch.setenv("OBS_TRAIN_IMAGE", "ghcr.io/example/cairn-train-gpu:fleet")
     mode, image, _gpus = resolve_exec_mode({"host": "box", "mode": "venv"})
     assert mode == "venv" and image == ""
 
@@ -128,13 +129,13 @@ def test_explicit_mode_venv_wins_over_a_configured_image(monkeypatch):
 def test_image_mode_submits_the_expected_docker_command(monkeypatch):
     """(a) of the acceptance: the EXACT command line, pull-once, GPUs, the
     workdir bind-mount, and every forwarded env name."""
-    _bind_connection(monkeypatch, image="ghcr.io/evs-cmd/cairn-train-gpu:v0.1.0")
+    _bind_connection(monkeypatch, image="ghcr.io/example/cairn-train-gpu:v0.1.0")
     captured = _capture_submit(monkeypatch)
 
     handle = _submit(BuiltinSshEngine("gpu"), _spec(parent_run="run-parent-9"))
     cmd = captured["inp"].command
 
-    img = "ghcr.io/evs-cmd/cairn-train-gpu:v0.1.0"
+    img = "ghcr.io/example/cairn-train-gpu:v0.1.0"
     # pull happens ONCE — inspect first, pull only on a miss (a `docker pull`
     # every dispatch is a multi-GB download on a metered box).
     assert cmd.startswith(f"docker image inspect {img} >/dev/null 2>&1 || docker pull {img}; ")
@@ -237,8 +238,87 @@ def test_result_records_the_image_tag(monkeypatch, tmp_path):
                        "meta": {"host": "box", "user": "ubuntu", "port": 22,
                                 "workdir": workdir, "known_hosts": "/tmp/kh"}},
         "exec_input": {"command": "docker run …", "env": {}, "fetch": ["result.json"]},
-        "mode": "image", "image": "ghcr.io/evs-cmd/cairn-train-gpu:v0.1.0",
+        "mode": "image", "image": "ghcr.io/example/cairn-train-gpu:v0.1.0",
     })
     result = asyncio.run(BuiltinSshEngine("gpu").result(handle))
-    assert result.stats["engine.image"] == "ghcr.io/evs-cmd/cairn-train-gpu:v0.1.0"
+    assert result.stats["engine.image"] == "ghcr.io/example/cairn-train-gpu:v0.1.0"
     assert result.stats["rows"] == 3
+
+
+# ── no default image: image mode names one or refuses (#202) ─────────
+#
+# The refusal lives at submit (resolve_exec_mode), where the connection and the
+# environment are both known; validate() sees only the spec.
+
+
+def test_environment_image_mode_with_no_image_anywhere_is_refused_before_the_exec_seam(monkeypatch):
+    """The environment selects image mode and nothing names an image: submit
+    refuses with a message naming what to set, and the exec layer is never asked
+    to run anything. There is no built-in fallback image."""
+    monkeypatch.setenv("OBS_REMOTE_EXEC_MODE", "image")
+    _bind_connection(monkeypatch)
+    captured = _capture_submit(monkeypatch)
+    with pytest.raises(EngineError) as e:
+        _submit(BuiltinSshEngine("gpu"), _spec())
+    assert str(e.value) == IMAGE_REQUIRED
+    assert "remote_image" in str(e.value) and "CAIRN_TRAIN_IMAGE" in str(e.value)
+    assert "inp" not in captured
+
+
+def test_connection_image_mode_with_no_image_is_refused_naming_the_connection(monkeypatch):
+    """A connection's own ``mode = "image"`` is not overridden by the
+    environment, so the message says to fix the connection."""
+    _bind_connection(monkeypatch, mode="image")
+    captured = _capture_submit(monkeypatch)
+    with pytest.raises(EngineError) as e:
+        _submit(BuiltinSshEngine("gpu"), _spec())
+    assert str(e.value) == CONNECTION_IMAGE_REQUIRED
+    assert "connection's 'image'" in str(e.value) and "'mode'" in str(e.value)
+    assert "inp" not in captured
+
+
+def test_environment_image_mode_with_a_connection_image_submits_that_image(monkeypatch):
+    monkeypatch.setenv("OBS_REMOTE_EXEC_MODE", "image")
+    _bind_connection(monkeypatch, image="ghcr.io/example/box-local:9")
+    engine = BuiltinSshEngine("gpu")
+    assert engine.validate(_spec()) == []
+    captured = _capture_submit(monkeypatch)
+    handle = _submit(engine, _spec())
+    assert " ghcr.io/example/box-local:9 " in captured["inp"].command
+    assert handle.meta["mode"] == "image"
+    assert handle.meta["image"] == "ghcr.io/example/box-local:9"
+
+
+def test_environment_image_mode_with_a_connection_mode_venv_runs_venv(monkeypatch):
+    monkeypatch.setenv("OBS_REMOTE_EXEC_MODE", "image")
+    _bind_connection(monkeypatch, mode="venv")
+    engine = BuiltinSshEngine("gpu")
+    assert engine.validate(_spec()) == []
+    captured = _capture_submit(monkeypatch)
+    handle = _submit(engine, _spec())
+    assert captured["inp"].command == "cairn-dataflow-run"
+    assert handle.meta["mode"] == "venv" and handle.meta["image"] == ""
+
+
+def test_environment_image_mode_with_remote_image_set_submits_it(monkeypatch):
+    """Positive control: the environment names both the mode and the image."""
+    monkeypatch.setenv("OBS_REMOTE_EXEC_MODE", "image")
+    monkeypatch.setenv("OBS_TRAIN_IMAGE", "ghcr.io/example/cairn-train-gpu:fleet")
+    _bind_connection(monkeypatch)
+    captured = _capture_submit(monkeypatch)
+    handle = _submit(BuiltinSshEngine("gpu"), _spec())
+    assert " ghcr.io/example/cairn-train-gpu:fleet " in captured["inp"].command
+    assert handle.meta["image"] == "ghcr.io/example/cairn-train-gpu:fleet"
+
+
+def test_auto_mode_with_no_image_picks_venv(monkeypatch):
+    """``auto`` (the default) with no image anywhere is the box virtualenv —
+    validate passes and the submitted command is the bare entrypoint."""
+    monkeypatch.setenv("OBS_REMOTE_EXEC_MODE", "auto")
+    engine = BuiltinSshEngine("gpu")
+    assert engine.validate(_spec()) == []
+    _bind_connection(monkeypatch)
+    captured = _capture_submit(monkeypatch)
+    handle = _submit(engine, _spec())
+    assert captured["inp"].command == "cairn-dataflow-run"
+    assert handle.meta["mode"] == "venv" and handle.meta["image"] == ""

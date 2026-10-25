@@ -106,7 +106,7 @@ def test_profiles_from_values_lists_the_enabled_ones():
 
 def _good() -> dict:
     return {
-        "image": {"repository": "ghcr.io/evs-cmd/cairn-engine", "tag": "v0.1.0"},
+        "image": {"repository": "ghcr.io/example/cairn-engine", "tag": "v0.1.0"},
         "runtime": "dbos",
         "ingress": {"host": "cairn.example.com",
                     "certManager": {"clusterIssuer": "letsencrypt-prod"}},
@@ -171,7 +171,7 @@ def test_existing_secret_is_accepted_but_reported_as_unverifiable():
 
 
 def test_latest_tag_warns_and_fails_under_strict():
-    values = dict(_good(), image={"repository": "ghcr.io/evs-cmd/cairn-engine", "tag": "latest"})
+    values = dict(_good(), image={"repository": "ghcr.io/example/cairn-engine", "tag": "latest"})
     results = _full(values)
     assert _fails(results) == set()
     assert next(r for r in results if r.name == "image_tag").status == "warn"

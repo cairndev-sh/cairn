@@ -35,6 +35,7 @@ from rich.table import Table
 
 from cairn.core.connection_probe import ProbeResult, test_connection
 from cairn.core.connections import (
+    DEFAULT_ACCOUNT,
     PROVIDER_CATALOG,
     Connection,
     connection_from_provider,
@@ -420,7 +421,8 @@ def test_cmd(
     provider's **authenticated** health probe (the creds actually work) and
     persist the result. Secret values are checked for presence only — never
     printed. Exit 0 = connected/degraded-but-reachable, 1 = missing/failed."""
-    resolved = asyncio.run(resolve_connection(name))
+    # the CLI is the deployment's own tool: it tests the deployment's connections
+    resolved = asyncio.run(resolve_connection(name, account_id=DEFAULT_ACCOUNT))
     if resolved is None:
         console.print(
             Panel(
