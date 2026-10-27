@@ -8,13 +8,13 @@ process … a brake, not a distributed mutex". With N control-plane replicas
 that scope is the bug: two replicas can advance one pipeline concurrently, or
 both claim the same last slot under a target cap.
 
-This module makes the section fleet-wide on Postgres when that is the selected
-storage backend. The pipeline section is used by both the in-process bridge and
-Temporal worker activities; coordination stays on Postgres while Temporal remains
-the optional durability tier for agentic bodies. Requiring Temporal for
-control-plane scale would tax every future engine (Ray/Spark/Dask) that brings
-its own orchestration. ``CAIRN_STORAGE`` is the selector, exactly as it is for
-the run store and the #1530 budget backend: ``postgres://…`` → fleet-wide
+This module makes the section fleet-wide **on the substrate the owner chose
+(2026-08-24): Postgres, never Temporal** — Temporal stays the optional
+durability tier for agentic bodies; requiring it for control-plane scale
+would tax every future engine (Ray/Spark/Dask) that brings its own
+orchestration. The pipeline section is used by both the in-process bridge and
+Temporal worker activities. ``CAIRN_STORAGE`` is the selector, exactly as it is
+for the run store and the #1530 budget backend: ``postgres://…`` → fleet-wide
 advisory locks, anything else → the same per-key ``asyncio.Lock`` behaviour as
 before (single-process dev and the entire hermetic test suite are unchanged).
 
@@ -229,9 +229,7 @@ class CriticalSections:
         both instances coordinate across processes through the same Postgres
         advisory-lock key."""
         self._pool = None
-        # Keep lock objects alive while holders unwind. Clearing this map while
-        # another owner still has a key held would let a new holder create a
-        # second asyncio.Lock for the same key and bypass local exclusion.
+        self._local.clear()
 
 
 __all__ = ["CriticalSections"]

@@ -20,6 +20,11 @@ from cairn.core.runtime.temporal.pipeline_activities import (
 from cairn.core.storage.pipeline_store import InMemoryPipelineStore, PipelineRecord, StepState
 
 
+@pytest.fixture(autouse=True)
+def isolated_sections(monkeypatch):
+    monkeypatch.setattr(pipeline_activities, "_SECTIONS", CriticalSections(namespace="pipeline"))
+
+
 async def _put_stale_record_while_sectioned_update_waits(
     pstore: InMemoryPipelineStore,
     sections: CriticalSections,
@@ -62,7 +67,6 @@ async def test_temporal_submit_handle_waits_for_a_stale_pipeline_put():
         pipeline_id="pl1", status="running",
         step_state={"prep": StepState(status="running")},
     ))
-    dispatcher = types.SimpleNamespace()
     sections = pipeline_activities._SECTIONS
 
     async def emit(run_id: str, event: str, data: dict[str, Any]) -> None:
@@ -123,7 +127,8 @@ async def test_temporal_mirror_waits_for_a_stale_pipeline_put(monkeypatch):
     assert step.approver == "alice"
 
 
-async def test_run_flow_leg_wires_sectioned_hooks_into_execute(monkeypatch):
+@pytest.mark.parametrize("existing_run", [True, False])
+async def test_run_flow_leg_wires_sectioned_hooks_into_execute(monkeypatch, existing_run):
     """Drive the Temporal owner through ``_run_flow_leg`` to exercise its wiring.
 
     The fake executor calls the real hook callback. A stale whole-record put is
@@ -139,16 +144,17 @@ async def test_run_flow_leg_wires_sectioned_hooks_into_execute(monkeypatch):
     pstore = InMemoryPipelineStore()
     await pstore.put(PipelineRecord(
         pipeline_id="pl1", status="running",
-        step_state={"prep": StepState(status="running", run_id="run-1")},
+        step_state={"prep": StepState(status="running", run_id="run-1" if existing_run else None)},
     ))
     run_store = InMemoryRunStore()
-    await run_store.create(Run(
-        id="run-1",
-        trigger=TriggerEvent(source="manual", payload={}),
-        status="running",
-        bundle_pipeline_id="pl1",
-        step_id="prep",
-    ))
+    if existing_run:
+        await run_store.create(Run(
+            id="run-1",
+            trigger=TriggerEvent(source="manual", payload={}),
+            status="running",
+            bundle_pipeline_id="pl1",
+            step_id="prep",
+        ))
 
     emitted: list[tuple[str, str, dict]] = []
 
@@ -163,7 +169,8 @@ async def test_run_flow_leg_wires_sectioned_hooks_into_execute(monkeypatch):
         lambda: pstore,
     )
     monkeypatch.setattr(pipeline_activities, "_gate_flow_leg", _no_gate)
-    monkeypatch.setattr(pipeline_activities.activity, "heartbeat", lambda: None)
+    heartbeat = asyncio.Event()
+    monkeypatch.setattr(pipeline_activities.activity, "heartbeat", heartbeat.set)
     monkeypatch.setattr(
         "cairn.core.dataflow.defs.flow_def_for",
         lambda ref: types.SimpleNamespace(kind="data"),
@@ -194,10 +201,22 @@ async def test_run_flow_leg_wires_sectioned_hooks_into_execute(monkeypatch):
             "flow:demo/clean", {}, "pl1", "prep", None, {"produces": []},
         )
 
-    await _put_stale_record_while_sectioned_update_waits(pstore, sections, run_leg)
+    if existing_run:
+        await _put_stale_record_while_sectioned_update_waits(pstore, sections, run_leg)
+    else:
+        async with sections.hold("pl1"):
+            task = asyncio.create_task(run_leg())
+            try:
+                await asyncio.wait_for(heartbeat.wait(), timeout=2)
+                assert not task.done()
+            finally:
+                if not heartbeat.is_set():
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+        await task
 
     step = (await pstore.get("pl1")).step_state["prep"]
-    assert step.run_id == "run-1"
+    assert step.run_id == ("run-1" if existing_run else emitted[0][0])
     assert step.handle == {"job_id": "job-2", "engine": "builtin", "meta": {}}
     assert emitted and emitted[-1][1] == "done"
 
