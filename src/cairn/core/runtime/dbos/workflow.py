@@ -21,8 +21,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import nullcontext
+from copy import copy
 from functools import wraps
-from typing import Any
+from typing import Any, Callable, Coroutine
 
 from cairn.core.runtime.dbos import require
 
@@ -35,47 +37,40 @@ from dbos import DBOS  # noqa: E402
 APPROVE_TOPIC = "approve"
 
 
-def _wrap_nodes_for_costs(graph: Any) -> None:
+def _wrap_nodes_for_costs(
+    graph: Any, emit_attempt: Callable[[str, float, str], Coroutine[Any, Any, None]]
+) -> Any:
     """Measure each node without turning the run cap into a node cap.
 
     DBOS copies the dispatcher's observability context into its workflow task.
-    Each node therefore meters in a non-enforcing child scope, folds that scope
-    back into the run context, and queues the same amount for its node event.
-    The wrapper is idempotent because the compiled graph is shared by runs.
+    Each node meters in a child scope that propagates each call to the run.
+    Copy the builder, node specs and runnables because the registry is shared.
     """
     from cairn.core import obs
     from cairn.core.runtime.node_stream import record_node_cost
+    from langgraph.errors import GraphInterrupt
 
-    def settle(
-        node_name: str,
-        outer: obs.RequestCtx | None,
-        measured: obs.RequestCtx,
-    ) -> None:
-        record_node_cost(node_name, measured.cost_usd)
-        if outer is not None:
-            obs.merge_cost(outer, measured)
+    loop = asyncio.get_running_loop()
 
     def wrap(orig: Any, node_name: str) -> Any:
         @wraps(orig)
         async def _costed(*args: Any, **kwargs: Any) -> Any:
-            outer = obs.get()
             cost_ctx: obs.RequestCtx | None = None
             try:
                 with obs.cost_scope(
-                    f"dbos-node-{node_name}", enforce_cap=False
+                    f"dbos-node-{node_name}", enforce_cap=False, propagate_cost=True
                 ) as cost_ctx:
                     output = await orig(*args, **kwargs)
-            except BaseException:
-                # Preserve the node's original failure while retaining spend
-                # already incurred by a failed attempt in the run meter.
+            except BaseException as exc:
                 if cost_ctx is not None:
+                    state = "interrupted" if isinstance(exc, GraphInterrupt) else "failed"
                     try:
-                        settle(node_name, outer, cost_ctx)
-                    except BaseException:  # noqa: BLE001 — accounting never masks node failure
-                        pass
+                        await emit_attempt(node_name, cost_ctx.cost_usd, state)
+                    except Exception:  # noqa: BLE001 - preserve the node's exception
+                        logger.exception("Could not record node attempt %s", node_name)
                 raise
             assert cost_ctx is not None
-            settle(node_name, outer, cost_ctx)
+            record_node_cost(node_name, cost_ctx.cost_usd)
             return output
 
         setattr(_costed, "_cairn_cost_wrapper", True)
@@ -84,29 +79,34 @@ def _wrap_nodes_for_costs(graph: Any) -> None:
     def wrap_sync(orig: Any, node_name: str) -> Any:
         @wraps(orig)
         def _costed(*args: Any, **kwargs: Any) -> Any:
-            outer = obs.get()
             cost_ctx: obs.RequestCtx | None = None
             try:
                 with obs.cost_scope(
-                    f"dbos-node-{node_name}", enforce_cap=False
+                    f"dbos-node-{node_name}", enforce_cap=False, propagate_cost=True
                 ) as cost_ctx:
                     output = orig(*args, **kwargs)
-            except BaseException:
+            except BaseException as exc:
                 if cost_ctx is not None:
+                    state = "interrupted" if isinstance(exc, GraphInterrupt) else "failed"
                     try:
-                        settle(node_name, outer, cost_ctx)
-                    except BaseException:  # noqa: BLE001 — accounting never masks node failure
-                        pass
+                        asyncio.run_coroutine_threadsafe(
+                            emit_attempt(node_name, cost_ctx.cost_usd, state), loop
+                        ).result()
+                    except Exception:  # noqa: BLE001 - preserve the node's exception
+                        logger.exception("Could not record node attempt %s", node_name)
                 raise
             assert cost_ctx is not None
-            settle(node_name, outer, cost_ctx)
+            record_node_cost(node_name, cost_ctx.cost_usd)
             return output
 
         setattr(_costed, "_cairn_cost_wrapper", True)
         return _costed
 
-    for node_name, node in graph.builder.nodes.items():
-        runnable = getattr(node, "runnable", node)
+    builder = copy(graph.builder)
+    builder.nodes = {name: copy(node) for name, node in graph.builder.nodes.items()}
+    for node_name, node in builder.nodes.items():
+        node.runnable = copy(node.runnable)
+        runnable = node.runnable
         orig = getattr(runnable, "afunc", None)
         if (
             orig is not None
@@ -118,6 +118,7 @@ def _wrap_nodes_for_costs(graph: Any) -> None:
         orig = getattr(runnable, "func", None)
         if orig is not None and callable(orig) and not getattr(orig, "_cairn_cost_wrapper", False):
             runnable.func = wrap_sync(orig, node_name)
+    return builder
 
 
 @DBOS.workflow(name="cairn.run_template")
@@ -126,14 +127,16 @@ async def run_template(
     template_sha: str,
     initial_state: dict[str, Any],
     run_id: str,
+    max_cost_usd: float | None = None,
 ) -> dict[str, Any]:
     from langgraph.types import Command  # noqa: PLC0415
 
     from cairn.core.runtime.dbos.registry import lookup, run_store  # noqa: PLC0415
+    from cairn.core.storage import default_store  # noqa: PLC0415
 
     graph = lookup(template_name, template_sha)
     # #1865 — the server's run store (registered at boot); None → default_store().
-    store = run_store()
+    store = run_store() or default_store()
 
     # #1850 — every graph is checkpointed, keyed on the run id. Until now only
     # approval-GATED graphs got a checkpointer (the compiler attaches one solely
@@ -148,6 +151,7 @@ async def run_template(
     # only for the ainvoke segment, never across a HITL wait.
     from cairn.core.runtime.checkpointer import checkpoint_session  # noqa: PLC0415
     from cairn.core.runtime.node_record import record_node_event  # noqa: PLC0415
+    from cairn.core.runtime.node_events import llm_cost_from_node_events  # noqa: PLC0415
     from cairn.core.runtime.node_stream import (  # noqa: PLC0415
         adrive,
         node_cost_scope,
@@ -156,10 +160,13 @@ async def run_template(
     )
 
     cfg = {"configurable": {"thread_id": run_id}}
-    _wrap_nodes_for_costs(graph)
+    async def _attempt(node_name: str, cost: float, state: str) -> None:
+        await record_node_event(run_id, node_name, None, store=store,
+                                llm_cost_usd=cost, state=state)
 
-    # #1865 — this body runs on DBOS's background loop, a different thread from
-    # the dispatcher, so its contextvar node sink never reaches here: a DBOS run
+    builder = _wrap_nodes_for_costs(graph, _attempt)
+
+    # #1865 — recovered workflows cannot rely on the dispatcher's node sink: a DBOS run
     # had no per-node trace, no heartbeat, and a stuck one looked exactly like a
     # slow one. Bind the shared recorder as THIS task's sink and drive through
     # ``adrive`` (streams with subgraphs=True, so nodes inside a composed child
@@ -174,15 +181,27 @@ async def run_template(
             llm_cost_usd=take_node_cost(node_name),
         )
 
+    async def _drive(g: Any, input_or_command: Any) -> Any:
+        from cairn.core import obs  # noqa: PLC0415
+
+        # Recovery starts without the dispatcher's context. Seed a run meter
+        # from durable events so subsequent calls still enforce the run cap.
+        recovered = obs.get() is None
+        scope = (obs.cost_scope(f"dbos-run-{run_id}", max_cost_usd=max_cost_usd)
+                 if recovered else nullcontext(obs.get()))
+        with scope as meter, node_cost_scope(), node_sink_scope(_sink):
+            if recovered and meter is not None:
+                meter.cost_usd = llm_cost_from_node_events(await store.get_events(run_id))
+            return await adrive(g, input_or_command, cfg)
+
     # Segment 1 — initial run (or resume-from-checkpoint on DBOS crash recovery,
     # which re-runs this body from the top: if a checkpoint already exists for
     # this thread, resume from it (None) rather than re-seeding initial state).
     async with checkpoint_session() as saver:
-        g = graph.builder.compile(checkpointer=saver)
+        g = builder.compile(checkpointer=saver)
         snapshot = await g.aget_state(cfg)
         resuming = getattr(snapshot, "created_at", None) is not None
-        with node_cost_scope(), node_sink_scope(_sink):
-            result = await adrive(g, None if resuming else initial_state, cfg)
+        result = await _drive(g, None if resuming else initial_state)
 
     # HITL (ADR-0034): a paused approval interrupt durably waits for a decision
     # delivered via DBOS.send (DBOSRuntime.resume). The recv holds NO checkpointer
@@ -205,9 +224,8 @@ async def run_template(
             run_id, getattr(items[0], "value", None) if items else None, store=store)
         decision = await DBOS.recv_async(APPROVE_TOPIC, timeout_seconds=86400)
         async with checkpoint_session() as saver:
-            g = graph.builder.compile(checkpointer=saver)
-            with node_cost_scope(), node_sink_scope(_sink):
-                result = await adrive(g, Command(resume=decision), cfg)
+            g = builder.compile(checkpointer=saver)
+            result = await _drive(g, Command(resume=decision))
     return dict(result)
 
 

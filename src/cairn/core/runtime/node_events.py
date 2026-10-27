@@ -3,7 +3,7 @@
 A ``node`` event marks one completed graph node in the run's append-only log so
 the console/Pilot per-node trace can show progress + what each step produced.
 
-Three runtimes record these, and they must produce IDENTICAL payloads:
+Three runtimes record these using the same payload format:
 
   - **in-process** — the dispatcher's node sink (``_node_sink``) fires from the
     ``adrive`` streaming helper (``node_stream.py``) in the server process.
@@ -13,7 +13,7 @@ Three runtimes record these, and they must produce IDENTICAL payloads:
     background loop and writes events through its node sink (#1865).
 
 This module owns the shared, size-capped payload builder so all three paths stay
-byte-identical. It depends on nothing but the stdlib, so the dispatcher and
+consistent. It depends on nothing but the stdlib, so the dispatcher and
 either worker runtime can import it without dragging in each other.
 """
 from __future__ import annotations

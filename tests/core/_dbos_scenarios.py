@@ -426,6 +426,211 @@ async def run_cap(d: Path) -> bool:
     return False
 
 
+async def two_node_cap(d: Path) -> bool:
+    from cairn.core import obs
+    from cairn.core.runtime.dbos.registry import set_run_store
+    from cairn.core.runtime.dbos.runtime import DBOSRuntime
+    from cairn.core.storage import default_store
+    from cairn.core.storage.protocols import Run, TriggerEvent
+    from langgraph.graph import END, START, StateGraph
+
+    async def node(state: S) -> dict:
+        obs.record_llm("test-model", 0, 0, 0.0, usd=0.06)
+        return {}
+
+    builder = StateGraph(S)
+    builder.add_node("first", node)
+    builder.add_node("second", node)
+    builder.add_edge(START, "first")
+    builder.add_edge("first", "second")
+    builder.add_edge("second", END)
+    graph = builder.compile()
+    original = [spec.runnable.afunc for spec in graph.builder.nodes.values()]
+    store = default_store()
+    set_run_store(store)
+    await store.create(Run(id="two-cap-run", trigger=TriggerEvent(source="manual", payload={}), status="running"))
+    try:
+        with obs.cost_scope("run-cap", max_cost_usd=0.1) as scope:
+            await DBOSRuntime().invoke(graph, {}, run_id="two-cap-run", template_name="two-cap", template_sha="s")
+    except obs.BudgetExceeded:
+        events = [event.data for event in await store.get_events("two-cap-run") if event.type == "node"]
+        print("scope", scope.cost_usd, "events", events)
+        return (scope.cost_usd == 0.12 and sum(e.get("llm_cost_usd", 0) for e in events) == 0.12
+                and any(e.get("state") == "failed" for e in events)
+                and original == [spec.runnable.afunc for spec in graph.builder.nodes.values()])
+    return False
+
+
+async def recovered_cap(d: Path) -> bool:
+    from cairn.core import obs
+    from cairn.core.runtime.dbos.registry import set_run_store
+    from cairn.core.runtime.dbos.runtime import DBOSRuntime
+    from cairn.core.runtime.node_events import node_event_data
+    from cairn.core.storage import default_store
+    from cairn.core.storage.protocols import Run, TriggerEvent
+    from langgraph.graph import END, START, StateGraph
+
+    calls = []
+
+    async def node(state: S) -> dict:
+        for _ in range(40):
+            calls.append(1)
+            obs.record_llm("test-model", 0, 0, 0.0, usd=0.05)
+        return {}
+
+    builder = StateGraph(S)
+    builder.add_node("n", node)
+    builder.add_edge(START, "n")
+    builder.add_edge("n", END)
+    store = default_store()
+    set_run_store(store)
+    await store.create(Run(id="recovered-run", trigger=TriggerEvent(source="manual", payload={}), status="running"))
+    await store.append_event("recovered-run", "node", node_event_data("old", llm_cost_usd=0.9))
+    try:
+        await DBOSRuntime().invoke(builder.compile(), {}, run_id="recovered-run",
+                                   template_name="recovered", template_sha="s")
+    except obs.BudgetExceeded:
+        events = [event.data for event in await store.get_events("recovered-run") if event.type == "node"]
+        print("calls", len(calls), "events", events)
+        return len(calls) == 3 and events[-1].get("state") == "failed" and events[-1].get("llm_cost_usd") == 0.15
+    return False
+
+
+async def persisted_cap(d: Path) -> bool:
+    from dbos import DBOS, SetWorkflowID
+    from cairn.core import obs
+    from cairn.core.runtime.dbos.registry import register, set_run_store
+    from cairn.core.runtime.dbos.runtime import ensure_launched
+    from cairn.core.runtime.dbos.workflow import run_template
+    from cairn.core.runtime.node_events import node_event_data
+    from cairn.core.storage import default_store
+    from cairn.core.storage.protocols import Run, TriggerEvent
+    from langgraph.graph import END, START, StateGraph
+
+    async def node(state: S) -> dict:
+        obs.record_llm("model", 0, 0, 0, usd=0.06)
+        return {}
+
+    builder = StateGraph(S)
+    builder.add_node("n", node)
+    builder.add_edge(START, "n")
+    builder.add_edge("n", END)
+    store = default_store()
+    set_run_store(store)
+    await store.create(Run(id="persisted-run", trigger=TriggerEvent(source="manual", payload={}), status="running"))
+    await store.append_event("persisted-run", "node", node_event_data("old", llm_cost_usd=0.06))
+    register("persisted", "s", builder.compile())
+    ensure_launched()
+    try:
+        with SetWorkflowID("persisted-run"):
+            await DBOS.start_workflow_async(run_template, "persisted", "s", {}, "persisted-run", 0.1)
+        await DBOS.get_result_async("persisted-run")
+    except obs.BudgetExceeded:
+        events = [event.data for event in await store.get_events("persisted-run") if event.type == "node"]
+        return len(events) == 2 and events[-1].get("llm_cost_usd") == 0.06 and events[-1].get("state") == "failed"
+    return False
+
+
+async def sync_failure(d: Path) -> bool:
+    from cairn.core import obs
+    from cairn.core.runtime.dbos.registry import set_run_store
+    from cairn.core.runtime.dbos.runtime import DBOSRuntime
+    from cairn.core.storage import default_store
+    from cairn.core.storage.protocols import Run, TriggerEvent
+    from langgraph.graph import END, START, StateGraph
+
+    def node(state: S) -> dict:
+        obs.record_llm("model", 0, 0, 0, usd=0.06)
+        raise ValueError("node failed")
+
+    builder = StateGraph(S)
+    builder.add_node("n", node)
+    builder.add_edge(START, "n")
+    builder.add_edge("n", END)
+    graph = builder.compile()
+    original = graph.builder.nodes["n"].runnable.func
+    store = default_store()
+    set_run_store(store)
+    await store.create(Run(id="sync-run", trigger=TriggerEvent(source="manual", payload={}), status="running"))
+    try:
+        await DBOSRuntime().invoke(graph, {}, run_id="sync-run", template_name="sync", template_sha="s")
+    except ValueError:
+        events = [event.data for event in await store.get_events("sync-run") if event.type == "node"]
+        return (len(events) == 1 and events[0].get("state") == "failed"
+                and events[0].get("llm_cost_usd") == 0.06
+                and graph.builder.nodes["n"].runnable.func is original)
+    return False
+
+
+def _recovery_cost_graph(d: Path):
+    from cairn.core import obs
+    from langgraph.graph import END, START, StateGraph
+
+    async def first(state: S) -> dict:
+        obs.record_llm("model", 0, 0, 0, usd=0.06)
+        return {"x": 1}
+
+    async def second(state: S) -> dict:
+        if not (d / "restart").exists():
+            (d / "second-started").touch()
+            await asyncio.sleep(60)
+        obs.record_llm("model", 0, 0, 0, usd=0.06)
+        return {}
+
+    graph = StateGraph(S)
+    graph.add_node("first", first)
+    graph.add_node("second", second)
+    graph.add_edge(START, "first")
+    graph.add_edge("first", "second")
+    graph.add_edge("second", END)
+    return graph.compile()
+
+
+async def cost_crash_submit(d: Path) -> bool:
+    from dbos import DBOS, SetWorkflowID
+    from cairn.core.runtime.dbos.registry import register, set_run_store
+    from cairn.core.runtime.dbos.runtime import ensure_launched
+    from cairn.core.runtime.dbos.workflow import run_template
+    from cairn.core.storage.sqlite.runs import SqliteRunStore
+    from cairn.core.storage.protocols import Run, TriggerEvent
+
+    store = SqliteRunStore(path=str(d / "runs.sqlite"))
+    set_run_store(store)
+    await store.create(Run(id="cost-crash", trigger=TriggerEvent(source="manual", payload={}), status="running"))
+    register("crash-cost", "s", _recovery_cost_graph(d))
+    ensure_launched()
+    with SetWorkflowID("cost-crash"):
+        await DBOS.start_workflow_async(run_template, "crash-cost", "s", {}, "cost-crash", 0.1)
+    for _ in range(200):
+        if (d / "second-started").exists():
+            events = await store.get_events("cost-crash")
+            if any(e.type == "node" and e.data.get("llm_cost_usd") == 0.06 for e in events):
+                sys.stdout.flush()
+                os._exit(0)
+        await asyncio.sleep(0.1)
+    return False
+
+
+async def cost_crash_recover(d: Path) -> bool:
+    from dbos import DBOS
+    from cairn.core import obs
+    from cairn.core.runtime.dbos.registry import register, set_run_store
+    from cairn.core.runtime.dbos.runtime import ensure_launched
+    from cairn.core.storage.sqlite.runs import SqliteRunStore
+
+    store = SqliteRunStore(path=str(d / "runs.sqlite"))
+    set_run_store(store)
+    (d / "restart").touch()
+    register("crash-cost", "s", _recovery_cost_graph(d))
+    ensure_launched()
+    try:
+        await DBOS.get_result_async("cost-crash")
+    except obs.BudgetExceeded:
+        events = [event.data for event in await store.get_events("cost-crash") if event.type == "node"]
+        return len(events) == 2 and sum(e.get("llm_cost_usd", 0) for e in events) == 0.12
+    return False
+
+
 async def graceful_cancel(d: Path) -> bool:
     """#1872 — what a graceful shutdown does: uvicorn's ``asyncio.run()`` cancels
     every task left on the loop. With the sync ``start_workflow`` the workflow
@@ -521,6 +726,12 @@ SCENARIOS = {
     "node_events": node_events,
     "node_events_cost": node_events_cost,
     "run_cap": run_cap,
+    "two_node_cap": two_node_cap,
+    "recovered_cap": recovered_cap,
+    "persisted_cap": persisted_cap,
+    "sync_failure": sync_failure,
+    "cost_crash_submit": cost_crash_submit,
+    "cost_crash_recover": cost_crash_recover,
     "graceful_cancel": graceful_cancel,
 }
 

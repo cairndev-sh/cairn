@@ -1244,10 +1244,8 @@ class RunDispatcher:
                     # events too would double-count the same calls.
                     worker_llm_usd = _llm_cost_from_node_events(await self.store.get_events(inv.id))
                     runtime_name = _settings.runtime()
-                    if runtime_name == "temporal":
-                        llm_usd = worker_llm_usd
-                    elif runtime_name == "dbos":
-                        llm_usd = run_llm_usd or worker_llm_usd
+                    if runtime_name == "dbos":
+                        llm_usd = max(run_llm_usd, worker_llm_usd)
                     else:
                         llm_usd = round(run_llm_usd + worker_llm_usd, 6)
                     payloads = [{"template_name": template_ref,

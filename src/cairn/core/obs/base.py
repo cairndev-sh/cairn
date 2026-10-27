@@ -22,6 +22,7 @@ from time import time
 from typing import Iterator
 
 _cur: ContextVar["RequestCtx | None"] = ContextVar("obs_ctx", default=None)
+_cost_parents: ContextVar[tuple["RequestCtx", ...]] = ContextVar("obs_cost_parents", default=())
 
 
 @dataclass
@@ -70,6 +71,11 @@ def start(request_id: str, session_id: str, query: str) -> RequestCtx:
 def get() -> RequestCtx | None:
     """Current request ctx, or ``None`` if outside a request scope."""
     return _cur.get()
+
+
+def cost_parents() -> tuple[RequestCtx, ...]:
+    """Scopes that receive calls from the current cost meter."""
+    return _cost_parents.get()
 
 
 def record_mcp(
@@ -186,6 +192,7 @@ def cost_scope(
     *,
     enforce_cap: bool = True,
     max_cost_usd: float | None = None,
+    propagate_cost: bool = False,
 ) -> Iterator["RequestCtx"]:
     """Open a lightweight obs scope for cost accumulation only.
 
@@ -199,8 +206,8 @@ def cost_scope(
     Nests safely: the prior ctx (if any) is reset on exit via the ContextVar token.
 
     ``enforce_cap=False`` (#1441) records every call but never raises a cap. A
-    ``max_cost_usd`` value on an enforcing scope overrides the process-wide
-    backstop for that scope and is inherited by durable task contexts.
+    ``max_cost_usd`` can tighten the process-wide backstop. When requested,
+    calls also accrue to the enclosing scope and enforce its cap immediately.
     """
     ctx = RequestCtx(
         request_id=label,
@@ -209,8 +216,12 @@ def cost_scope(
         enforce_cap=enforce_cap,
         max_cost_usd=max_cost_usd,
     )
+    parent = _cur.get()
+    parents = (parent, *_cost_parents.get()) if propagate_cost and parent is not None else ()
+    parent_token = _cost_parents.set(parents)
     token = _cur.set(ctx)
     try:
         yield ctx
     finally:
         _cur.reset(token)
+        _cost_parents.reset(parent_token)

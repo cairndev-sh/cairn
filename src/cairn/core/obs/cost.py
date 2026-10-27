@@ -14,21 +14,22 @@ with ``usd: 0.0`` AND ``priced: False``, so a reader can tell "cost nothing"
 from "cost unknown" (the #1664 lesson; ``operator_compute``'s ``tokens.py``
 refuses the same way). There is no hand-kept price table here any more.
 
-Budget cap: when ``ctx.cost_usd`` exceeds the scope's ``max_cost_usd`` (or the
-process setting when no scope cap is supplied), ``record_llm`` raises
-``BudgetExceeded``. The graph node bubbles it up and the stream emits an SSE
-``error`` frame. Set the cap to ``0`` to disable. A scope opened with
-``enforce_cap=False`` (the dataflow runner and durable node meters, #1441)
-records without a cap so its spend can be folded into an enforcing parent.
+Budget cap: when ``ctx.cost_usd`` exceeds ``settings.max_cost_usd``,
+``record_llm`` raises ``BudgetExceeded``. The graph node bubbles it up and
+the stream emits an SSE ``error`` frame. Set ``max_cost_usd=0`` to disable.
+A scope can tighten this cap, or measure without enforcing its own cap.
 """
 from __future__ import annotations
 
 import math
+from threading import RLock
 from typing import Optional
 
 from cairn.core.provider_settings import get_settings
 from cairn.core.llm.models import get_cost
-from cairn.core.obs.base import RequestCtx, get
+from cairn.core.obs.base import RequestCtx, cost_parents, get
+
+_cost_lock = RLock()
 
 
 class BudgetExceeded(RuntimeError):
@@ -36,12 +37,9 @@ class BudgetExceeded(RuntimeError):
 
 
 def _cap_for(ctx: RequestCtx) -> float:
-    """Return the scope-specific cap, falling back to the process setting."""
-    return float(
-        ctx.max_cost_usd
-        if ctx.max_cost_usd is not None
-        else (get_settings().max_cost_usd or 0.0)
-    )
+    """Return the tightest positive deployment or scope cap."""
+    caps = [cap for cap in (get_settings().max_cost_usd, ctx.max_cost_usd) if cap and cap > 0]
+    return float(min(caps)) if caps else 0.0
 
 
 def merge_cost(parent: RequestCtx, child: RequestCtx) -> None:
@@ -53,14 +51,15 @@ def merge_cost(parent: RequestCtx, child: RequestCtx) -> None:
     """
     if not child.llm_calls:
         return
-    parent.llm_calls.extend(child.llm_calls)
-    parent.cost_usd = round(parent.cost_usd + child.cost_usd, 6)
-    cap = _cap_for(parent) if parent.enforce_cap else 0.0
-    if cap and parent.cost_usd > cap:
-        raise BudgetExceeded(
-            f"session {parent.session_id} over budget: "
-            f"${parent.cost_usd:.3f} > ${cap:.3f}"
-        )
+    with _cost_lock:
+        parent.llm_calls.extend(child.llm_calls)
+        parent.cost_usd = round(parent.cost_usd + child.cost_usd, 6)
+        cap = _cap_for(parent) if parent.enforce_cap else 0.0
+        if cap and parent.cost_usd > cap:
+            raise BudgetExceeded(
+                f"session {parent.session_id} over budget: "
+                f"${parent.cost_usd:.3f} > ${cap:.3f}"
+            )
 
 
 def _litellm_price(model: str) -> Optional[tuple[float, float]]:
@@ -143,11 +142,16 @@ def record_llm(
         "time_to_first_token_ms": time_to_first_token_ms,
         "schema_valid": schema_valid,
     }
-    ctx.llm_calls.append(call)
-    ctx.cost_usd = round(ctx.cost_usd + usd, 6)
-    cap = _cap_for(ctx) if ctx.enforce_cap else 0.0
-    if cap and ctx.cost_usd > cap:
-        raise BudgetExceeded(
-            f"session {ctx.session_id} over budget: "
-            f"${ctx.cost_usd:.3f} > ${cap:.3f}"
-        )
+    exceeded = None
+    with _cost_lock:
+        for meter in (ctx, *cost_parents()):
+            meter.llm_calls.append(call)
+            meter.cost_usd = round(meter.cost_usd + usd, 6)
+            cap = _cap_for(meter) if meter.enforce_cap else 0.0
+            if cap and meter.cost_usd > cap:
+                exceeded = BudgetExceeded(
+                    f"session {meter.session_id} over budget: "
+                    f"${meter.cost_usd:.3f} > ${cap:.3f}"
+                )
+    if exceeded is not None:
+        raise exceeded
