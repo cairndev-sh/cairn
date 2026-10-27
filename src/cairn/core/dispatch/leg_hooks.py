@@ -77,7 +77,9 @@ def flow_leg_record(step_output: Any, outcome: Any) -> dict:
         "metrics": dict(getattr(outcome, "metrics", None) or {}),
     }
     gpu = round(float(getattr(outcome, "gpu_usd", 0.0) or 0.0), 6)
-    llm = payload["llm_cost_usd"] = round(float(getattr(outcome, "cost_usd", 0.0) or 0.0), 6)
+    llm = round(float(getattr(outcome, "cost_usd", 0.0) or 0.0), 6)
+    if llm > 0 or getattr(outcome, "ok", False):
+        payload["llm_cost_usd"] = llm
     if gpu > 0:
         payload["gpu_usd"] = gpu
     if llm <= 0 and gpu <= 0:

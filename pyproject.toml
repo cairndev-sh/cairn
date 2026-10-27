@@ -2,7 +2,7 @@
 # The DISTRIBUTION is `cairndev` (ADR-0121 D3, #2429); the import name `cairn` and the
 # `cairn` command do not change.
 name = "cairndev"
-version = "0.3.0"
+version = "0.3.1"
 description = "A governed control plane for AI and ML work: pipelines that fine-tune, evaluate, compress and serve models, with approval, policy, budget and lineage on every step"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -130,6 +130,8 @@ hello-cairn = "cairn.core.demo_seed:seed_hello_cairn"
 [project.entry-points."cairn.operators"]
 "artifact/promote" = "operator_dataflow.operators.promote:ArtifactPromoteOp"
 "audit/store" = "operator_audit_store.operators.audit_store:AuditStoreOp"
+"compute/acquire" = "operator_remote.operators.acquire:ComputeAcquireOp"
+"compute/release" = "operator_remote.operators.release:ComputeReleaseOp"
 "data/profile" = "operator_data_profile.operators.profile:DataProfileOp"
 "dataflow/run" = "operator_dataflow.operators.run:DataflowRunOp"
 "mcp/call" = "operator_mcp.operators.call:CallOp"

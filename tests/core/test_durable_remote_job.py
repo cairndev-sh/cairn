@@ -218,3 +218,45 @@ async def test_remote_job_without_run_identity_fails_loud(tmp_path, monkeypatch)
 
     reset_remote_job_store()
     reset_checkpointer()
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_remote_job_ends_the_run_instead_of_pausing_again(tmp_path, monkeypatch):
+    """ADR-0151 D9: a job the control loop polls as `cancelled` is closed CANCELLED
+    and the run resumed; the re-run node reads the terminal record and raises
+    JobCancelled — it does not register again or pause on the interrupt forever."""
+    from cairn.core.operator.job_store import CANCELLED
+
+    _durable_env(tmp_path, monkeypatch)
+    compiled = compile_template(_remote_template(tmp_path))
+    rt = InProcessRuntime()
+    graph = compiled.runnable._compiled_graph
+    paused = await rt.invoke(graph, {"run_id": "run-remote-c"}, run_id="run-remote-c")
+    assert "__interrupt__" in paused
+    store = get_remote_job_store()
+
+    async def poll(_rec):
+        return JobStatus(state="cancelled", error="remote job cancelled")
+
+    outcomes: list = []
+
+    async def resume(_rec, status):
+        try:
+            outcomes.append(await rt.resume(graph, {"status": status.state, "error": status.error},
+                                            run_id=_rec.run_id))
+        except Exception as e:  # noqa: BLE001 — the node's terminal raise is the outcome
+            outcomes.append(e)
+
+    tally = await drive_once(store, poll, resume)
+    assert tally.get("running") == 0, f"a cancelled job was counted running: {tally}"
+    assert tally["cancelled"] == 1
+    assert (await store.get("run-remote-c:remote")).status == CANCELLED
+    assert len(outcomes) == 1
+    out = outcomes[0]
+    assert not (isinstance(out, dict) and "__interrupt__" in out), "must not pause again"
+    from cairn.core.operator.jobs import JobCancelled
+
+    assert isinstance(out, JobCancelled), out
+
+    reset_remote_job_store()
+    reset_checkpointer()

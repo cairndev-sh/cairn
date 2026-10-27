@@ -355,7 +355,7 @@ async def assert_can_write_workspace(token: Optional[str]) -> str:
 def require_deployment_admin(admin: Optional[str]) -> None:
     """Refuse a deployment-level action (a pack install or uninstall: process-wide,
     no account's or workspace's) to anyone but the deployment admin
-    (cairn-platform#223). ``admin`` is what ``require_admin`` returned: ``None``
+    (an internal issue). ``admin`` is what ``require_admin`` returned: ``None``
     with auth off (keyless dev, unchanged), else an authenticated owner/admin
     subject. An account's owner or admin is not the deployment's: 403."""
     if admin is not None and not is_env_admin(admin):

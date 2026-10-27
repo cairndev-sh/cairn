@@ -6,7 +6,7 @@ control plane::
     cairn worker --pull --engine-url https://app.example.com --token <worker-pool token> \\
                  --capabilities gpu=T4
 
-With sign-in on, the token is a worker credential (cairn-platform#224): a
+With sign-in on, the token is a worker credential (an internal issue): a
 worker-pool token from ``cairn remote worker-token``, or the deployment admin's.
 
 The loop is four moves, and every one of them already existed in cairn except

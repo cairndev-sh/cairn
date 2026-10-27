@@ -14,7 +14,7 @@ wheel alone carries the builtin operator packs and the core contracts.
 3. In that venv, from a directory outside the checkout:
    ``scripts/check_public_set.py --extras hello``; ``cairn pack check``; the 13 core contract
    packages resolve, all hosted by ``cairndev``, with the names, versions and digests of the
-   pre-fold snapshot (``tests/core/fixtures/contract_resolution_prefold.json``); the 22
+   pre-fold snapshot (``tests/core/fixtures/contract_resolution_prefold.json``); the 24
    builtin ``cairn.operators`` entry points all come from ``cairndev``; ``cairn-dataflow-run``
    starts (with no spec it refuses by name); ``cairn pipeline explain
    hello-cairn/profile-and-publish``.
@@ -59,7 +59,7 @@ BASE = ("cairndev", "cairn-client", "cairn-pack-hello")
 ENGINE = "cairndev"
 SNAPSHOT = ROOT / "tests" / "core" / "fixtures" / "contract_resolution_prefold.json"
 CORE_CONTRACTS = 13
-BUILTIN_OPERATORS = 22
+BUILTIN_OPERATORS = 24  # 22, plus compute/acquire and compute/release (ADR-0151 D6)
 #: The pipeline D7.4 runs in process, and the gates in it that wait for a person.
 PIPELINE = "hello-cairn/profile-and-publish"
 PERSON_GATES = ("review", "promote")

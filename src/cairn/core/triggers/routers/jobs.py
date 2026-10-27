@@ -13,7 +13,7 @@ that run. It may heartbeat that run's job, and nothing else — it cannot claim,
 because a claim hands out ANY queued job and a token scoped to run X must never
 be able to take run Y's work.
 
-cairn-platform#224 — and a claim is a WORKER's act, not a user's. A claim hands
+A claim is also a WORKER's act, not a user's (an internal issue). A claim hands
 out any account's queued job with its input and a run-scoped token for its run,
 so only a worker credential claims, or heartbeats a job that is not a run-scoped
 token's own: the deployment's admin (``CAIRN_API_USER``) or a worker-pool token
@@ -120,7 +120,7 @@ _NOT_A_WORKER = ("claiming or reporting pull-lane jobs needs a worker credential
 
 
 def _is_worker_credential(request: Request, subject: Optional[str]) -> bool:
-    """Whether this caller may claim, and heartbeat any job (cairn-platform#224):
+    """Whether this caller may claim, and heartbeat any job (an internal issue):
     a worker-pool token or the deployment's admin. Auth off (keyless dev) is
     always a worker. With auth on, only claims the guard verified count."""
     if not auth_enabled():
@@ -155,7 +155,7 @@ def build_jobs_router(store_factory=None) -> APIRouter:
         """Hand this worker at most ONE queued job, with a lease. 204 when there
         is nothing it can run — an empty queue is not an error, and a worker
         polls this route forever."""
-        # cairn-platform#224: only a worker credential claims (403 otherwise). A
+        # Only a worker credential claims (403 otherwise; an internal issue). A
         # comment, not the docstring: the docstring is the OpenAPI text.
         if _scoped_run(request, subject) is not None:
             raise HTTPException(
@@ -180,7 +180,7 @@ def build_jobs_router(store_factory=None) -> APIRouter:
         honest answer to a worker whose lease expired while it was working, and
         the signal for it to stop. A per-run token may only heartbeat its own
         run's job (403 otherwise)."""
-        # cairn-platform#224: any other caller needs a worker credential (403).
+        # Any other caller needs a worker credential (403; an internal issue).
         if body.status not in _STATES:
             raise HTTPException(status_code=422, detail=f"status must be one of {', '.join(_STATES)}")
         store = _store()

@@ -156,9 +156,9 @@ class ContractResolution(BaseModel, frozen=True):
     taken ONCE at the launch door from the installed contract distributions and
     never re-derived (ADR-0111 acceptance §4). ``None`` on a plan means the closure
     was not recorded at the launch door — rows older than the field, the backfill
-    (`storage/backfill_pipelines.py`) and the bundle-era `run_bundle` path — i.e.
-    not certified, not wrong. Frozen, tuples: immutable once built. Per-invocation
-    bindings (``invocations``) are #2241's additive delta under this same
+    (`storage/backfill_pipelines.py`) and rows the removed bundle-era
+    `PipelineBridge.run_bundle` path wrote — i.e. not certified, not wrong.
+    Frozen, tuples: immutable once built. Per-invocation bindings (``invocations``) are #2241's additive delta under this same
     ``format``; a different ``format`` is a different contract and refuses to
     hydrate rather than being relabelled legacy."""
     format: Literal["cairn.resolution/1"]

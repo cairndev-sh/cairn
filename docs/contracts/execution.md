@@ -29,7 +29,12 @@
 ## What an engine owns
 `DataflowEngine` protocol (`src/cairn/core/dataflow/engine.py:76`): `validate(spec)` (what
 this engine cannot run), `submit(spec, ctx) → EngineJobHandle`, `poll(handle)`,
-`cancel(handle)` (must kill compute), `result(handle) → DataflowResult`. An engine **is**
+`cancel(handle)` (must kill compute), `result(handle) → DataflowResult`. `poll` reports
+`queued`, `running`, `succeeded`, `failed` (optionally `retriable`) or `cancelled`. A job
+stopped by a cancel reports `cancelled`, never a retriable `failed`, so the leg executor
+does not relaunch it and its run settles `cancelled` (ADR-0151 D9; the builtin SSH engine
+reads the marker `remote/exec`'s cancel leaves). The remote-job `JobStatus` uses the same
+four terminal-or-running states (`operators-and-packs.md`). An engine **is**
 whatever passes the conformance suite (`src/cairn/core/dataflow/conformance.py`; ADR-0081 D3).
 An engine that runs kernels through `run_dataflow` (`src/cairn/core/dataflow/runner.py`,
 core since #2583 / ADR-0129) declares the optional
@@ -63,6 +68,11 @@ settled on the earlier attempt before settling the resumed attempt. The final kn
 written on the leg's `Run` (`llm_cost_usd` → `Run.cost.llm_usd`, `leg_hooks.flow_leg_record`, both
 owners). Unknown engine cost remains absent, never $0; a succeeded leg whose engine reports no
 cost (a GPU train stage today) still records no engine cost.
+
+Known restart limitation: the retry loop's accumulated engine spend is not persisted, so a
+new owner cannot include earlier attempts in its next reservation. On adoption of a priced
+leg, ADR-0152's netting also subtracts earlier attempts' engine spend from the combined amount;
+changing that formula requires a separate decision.
 
 A leg on a priced `compute.ssh` box (ADR-0151 D5, read per attempt by ADR-0152) also records
 its box time under `gpu_usd` → `Run.cost.gpu_usd`, on success AND on failure, timeout or cancel;

@@ -10,7 +10,7 @@
 # ── image ────────────────────────────────────────────────────────────────
 image:
   # Published by .github/workflows/release.yml on every `v*` tag, tagged with the
-  # bare version (`0.3.0`). The GHCR package is public: no pull secret needed.
+  # bare version (`0.3.1`). The GHCR package is public: no pull secret needed.
   repository: ghcr.io/cairndev-sh/cairn-engine
   # Empty → Chart.appVersion. PIN A DIGEST OR TAG IN PROD — `--strict` fails
   # on `latest` because a rolling tag makes "what is deployed" unanswerable.

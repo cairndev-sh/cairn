@@ -12,9 +12,11 @@ is composition over machinery that already shipped: the gate is an ordinary
 ``finalizer:``.
 
 **One module, three callers.** ``compute/acquire`` and ``compute/release`` (the
-operator pack; moving into the public ``cairn-operator-remote`` pack per ADR-0151 D6, until
-then shipped by cairn-platform) and ``cairn compute sweep`` (the CLI) all call the functions here.
-That is deliberate — #1376's rule: a chokepoint is a FUNCTION others call, not a
+builtin ``cairn-operator-remote`` pack, ``operator_remote.operators``, since
+ADR-0151 D6; they reach these functions through the operator contract's
+re-exports in :mod:`cairn.core.operator`, ADR-0120 D7) and ``cairn compute sweep``
+(the CLI) all call the functions here. That is deliberate — #1376's rule: a
+chokepoint is a FUNCTION others call, not a
 convention. If the CLI carried its own copy of the stop logic, the sweep and the
 release could disagree about what "stopped" means, and the disagreement would
 only surface as a bill.

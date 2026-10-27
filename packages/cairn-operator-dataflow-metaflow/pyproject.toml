@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cairn-operator-dataflow-metaflow"
-version = "0.3.0"
+version = "0.3.1"
 description = "The Metaflow dataflow engine (ADR-0089) for cairn's ml and data flows — offered by cairndev[metaflow] (ADR-0134 D2)."
 readme = "README.md"
 license = "Apache-2.0"

@@ -22,8 +22,11 @@ definition time). This loader:
   - Returns the list of operator names discovered
 
 Idempotent: safe to call multiple times. The registry is last-writer-wins
-in non-strict mode; in strict mode (typical for ``cairn run`` / boot
-paths) a duplicate name raises :class:`DuplicateOperatorError`.
+in non-strict mode, with a warning per duplicate name; in strict mode a
+duplicate name raises :class:`DuplicateOperatorError`. Every production
+path loads NON-strictly (the server, the Temporal worker, the DBOS registry,
+``ensure_loaded``'s default), so two installed packs that declare the same
+operator name do not stop a boot: the last registration wins.
 """
 
 from __future__ import annotations
@@ -71,9 +74,9 @@ def load_all_operators(
     """Discover, load, and register every installed operator. Idempotent.
 
     :param strict: If True, raise :class:`DuplicateOperatorError` on
-        cross-pack name collision. ``cairn run`` and boot paths
-        should pass ``strict=True``; dev / doctor paths can leave it
-        False to inspect a partially-broken state.
+        cross-pack name collision. No production path passes it today:
+        the server, workers and ``ensure_loaded`` load non-strictly, so
+        a collision logs a warning and the last registration wins.
     :param registry: Override the registry to load into. Defaults to
         :data:`default_registry`. Tests use this for isolation.
     :return: Sorted list of operator names registered.

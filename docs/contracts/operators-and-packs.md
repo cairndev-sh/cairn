@@ -22,7 +22,12 @@
 only through `ctx.launch` (ADR-0120 D7, #2455: the dispatch layer's closure over the launch
 door; `None` outside a governed run). Side effects happen inside `run`;
 `cancel` must be safe on a terminal job; a `remote_job` operator owns submit/poll and the
-job channel. Failure: raise; the substrate records `Run.error` and `failure_type`.
+job channel. `poll` returns a `JobStatus` whose `state` is `running`, `succeeded`, `failed` or
+`cancelled`. `failed` may be `retriable` (a recoverable death, #552). `cancelled` (ADR-0151 D9)
+means a cancel stopped the job; it is terminal and never retriable, the control loop closes
+the record cancelled, and `run_job_lifecycle` ends with `JobCancelled`. The pull lane does not
+carry `cancelled`: the `/jobs` heartbeat accepts `queued`, `running`, `succeeded` and `failed`
+only, so a pull `Runner` reports a stopped job as `failed`. Failure: raise; the substrate records `Run.error` and `failure_type`.
 Idempotency is the operator's promise where it claims it (`supports_*`); nothing in the
 substrate retries an operator on its behalf except a leg's declared `retry:`. A pack imports
 only `cairn.core.operator` (plus `cairn.core.llm` / `cairn.core.eval` for those operators and

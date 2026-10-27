@@ -36,8 +36,8 @@ def build_templates_router(dispatcher=None) -> APIRouter:
         install record) → uv uninstall → record removed. RCE-class + destructive,
         so auth-gated; engine-bundled/editable packs (no record) are refused with
         409. Restart-to-deactivate — it stays imported until the next start."""
-        # cairn-platform#223 — a pack is process-wide, so the deployment admin's
-        # alone: with auth on, anyone else (an account owner too) gets 403.
+        # A pack is process-wide, so the deployment admin's alone (an internal
+        # issue): with auth on, anyone else (an account owner too) gets 403.
         support.require_deployment_admin(admin)
         # lazy: keep the uninstaller + catalog off the import path
         from cairn.core.registry_install import (

@@ -584,3 +584,149 @@ def test_launch_with_setsid_leads_its_own_group(tmp_path):
         pytest.skip("no setsid on this host (macOS) — the perl branch test covers it")
     pid, pgid = _launch_for_real(tmp_path, os.environ.get("PATH", "/usr/bin:/bin"))
     assert pid == pgid
+
+
+# ── ADR-0151 D9: a cancelled job reads `cancelled`, never a retriable death ──
+def _cancel_handle():
+    from cairn.core.operator.jobs import JobHandle
+    return JobHandle(job_id="h:/w/dir", backend="ssh",
+                     meta={"host": "h", "user": "u", "port": 22, "workdir": "/w/dir", "known_hosts": None})
+
+
+async def test_cancel_marks_the_job_cancelled_before_it_kills(monkeypatch):
+    """The kill ends runner.sh before it writes exit_code, which a poll would read
+    as a recoverable death and retry. The marker, written FIRST, says otherwise."""
+    seen: list[str] = []
+
+    class _RecordingConn(_Conn):
+        async def run(self, cmd, check=False):
+            seen.append(cmd)
+            return await super().run(cmd, check=check)
+
+    async def fake_connect(params):
+        return _RecordingConn({})
+
+    monkeypatch.setattr(remote_exec, "_connect", fake_connect)
+    monkeypatch.setenv("SSH_PRIVATE_KEY", "key")
+    remote_exec._reset_conn_cache()
+    assert await remote_exec._cancel(_cancel_handle()) is True
+    mark = next(i for i, c in enumerate(seen) if "/w/dir/cancelled" in c and "echo" in c)
+    kill = next(i for i, c in enumerate(seen) if "kill -TERM" in c)
+    assert mark < kill, seen
+    remote_exec._reset_conn_cache()
+
+
+async def test_a_failed_marker_write_still_kills(monkeypatch):
+    seen: list[str] = []
+
+    class _MarkerFails(_Conn):
+        async def run(self, cmd, check=False):
+            seen.append(cmd)
+            if "/cancelled" in cmd:
+                raise OSError("read-only file system")
+            return await super().run(cmd, check=check)
+
+    async def fake_connect(params):
+        return _MarkerFails({})
+
+    monkeypatch.setattr(remote_exec, "_connect", fake_connect)
+    monkeypatch.setenv("SSH_PRIVATE_KEY", "key")
+    remote_exec._reset_conn_cache()
+    assert await remote_exec._cancel(_cancel_handle()) is True
+    assert any("kill -TERM" in c for c in seen), seen
+    remote_exec._reset_conn_cache()
+
+
+async def test_poll_after_cancel_is_cancelled_and_not_retriable(monkeypatch):
+    """pid gone, no exit_code — but the cancel marker is there: cancelled, not the
+    #552 recoverable death."""
+    _patch_conn(monkeypatch, {"/cancelled": "cancelled", "exit_code": "", "pid": "4242"})
+    st = await RemoteExecOp().poll(
+        JobHandle(job_id="box:/w", meta={"host": "box", "workdir": "/w"}), _inp(), _ctx())
+    assert st.state == "cancelled" and st.retriable is False
+    assert "without an exit code" not in st.error
+
+
+async def test_a_death_without_the_marker_stays_retriable(monkeypatch):
+    """#552 unchanged: a job that died on its own (OOM, reclaimed box) may relaunch."""
+    _patch_conn(monkeypatch, {"exit_code": "", "pid": "4242"})
+    st = await RemoteExecOp().poll(
+        JobHandle(job_id="box:/w", meta={"host": "box", "workdir": "/w"}), _inp(), _ctx())
+    assert st.state == "failed" and st.retriable is True
+
+
+async def test_submit_clears_a_stale_cancel_marker(monkeypatch):
+    """A relaunch in the same workdir must not read the previous attempt's marker."""
+    seen: list[str] = []
+
+    class _RecordingConn(_Conn):
+        async def run(self, cmd, check=False):
+            seen.append(cmd)
+            return await super().run(cmd, check=check)
+
+    async def fake_connect(params):
+        return _RecordingConn({})
+
+    monkeypatch.setattr(remote_exec, "_connect", fake_connect)
+    remote_exec._reset_conn_cache()
+    await RemoteExecOp().submit(_inp(workdir="/w/dir"), _ctx())
+    rm = next(c for c in seen if c.startswith("rm -f") and "exit_code" in c)
+    assert "/w/dir/cancelled" in rm
+    remote_exec._reset_conn_cache()
+
+
+async def test_a_marker_the_shell_could_not_write_is_logged_and_still_kills(monkeypatch, caplog):
+    """`echo … > file` failing on a read-only or full disk does not raise under
+    check=False: its exit status is read, the failure is logged, the kill still runs."""
+    seen: list[str] = []
+
+    class _ShellFails(_Conn):
+        async def run(self, cmd, check=False):
+            seen.append(cmd)
+            res = await super().run(cmd, check=check)
+            res.exit_status = 1 if "/cancelled" in cmd else 0
+            return res
+
+    async def fake_connect(params):
+        return _ShellFails({})
+
+    monkeypatch.setattr(remote_exec, "_connect", fake_connect)
+    monkeypatch.setenv("SSH_PRIVATE_KEY", "key")
+    remote_exec._reset_conn_cache()
+    with caplog.at_level("WARNING", logger="operator_remote.exec"):
+        assert await remote_exec._cancel(_cancel_handle()) is True
+    assert any("cancel marker" in r.getMessage() and "exit 1" in r.getMessage() for r in caplog.records)
+    assert any("kill -TERM" in c for c in seen), seen
+    remote_exec._reset_conn_cache()
+
+
+async def test_a_cancel_inside_the_launch_window_is_logged(monkeypatch, caplog):
+    """No pid file yet (cancelled just after submit): the marker is written, nothing is
+    killed, and that is logged so the operator knows only compute/release stops the job."""
+
+    class _NoPid(_Conn):
+        async def run(self, cmd, check=False):
+            res = await super().run(cmd, check=check)
+            if "kill -TERM" in cmd:
+                res.stdout = "nopid\n"
+            return res
+
+    async def fake_connect(params):
+        return _NoPid({})
+
+    monkeypatch.setattr(remote_exec, "_connect", fake_connect)
+    monkeypatch.setenv("SSH_PRIVATE_KEY", "key")
+    remote_exec._reset_conn_cache()
+    with caplog.at_level("WARNING", logger="operator_remote.exec"):
+        assert await remote_exec._cancel(_cancel_handle()) is True
+    assert any("launch window" in r.getMessage() for r in caplog.records)
+    remote_exec._reset_conn_cache()
+
+
+async def test_the_cancel_marker_wins_over_a_just_written_exit_code_0(monkeypatch):
+    """The race: the job wrote exit_code 0 a moment before the cancel's marker.
+    The marker is read first, so the job reads cancelled (documented in DESIGN.md)."""
+    _patch_conn(monkeypatch, {"/cancelled": "cancelled", "exit_code": "0"})
+    st = await RemoteExecOp().poll(
+        JobHandle(job_id="box:/w", meta={"host": "box", "workdir": "/w"}), _inp(), _ctx())
+    assert st.state == "cancelled" and st.retriable is False

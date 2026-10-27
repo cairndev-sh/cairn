@@ -114,18 +114,12 @@ def test_client_cannot_say_keeps_running(tmp_path, monkeypatch):
 
 # ── the client mapping itself ────────────────────────────────────────────────
 
-def _fake_metaflow(monkeypatch, *, finished: bool, successful: bool = False,
-                   partial_cost_usd: float | None = None):
+def _fake_metaflow(monkeypatch, *, finished: bool, successful: bool = False):
     mod = types.ModuleType("metaflow")
 
     class _Run:
         def __init__(self, spec):
             self.finished, self.successful = finished, successful
-            self._data = types.SimpleNamespace(partial_cost_usd=partial_cost_usd)
-
-        def __getitem__(self, step_name):
-            assert step_name == "execute"
-            return types.SimpleNamespace(task=types.SimpleNamespace(data=self._data))
 
     mod.Run = _Run
     mod.namespace = lambda ns: None
@@ -143,15 +137,7 @@ def test_client_status_mapping(tmp_path, monkeypatch, finished, successful, expe
     assert st is not None and st.state == expect
 
 
-def test_failed_client_status_reads_persisted_partial_cost(tmp_path, monkeypatch):
-    _fake_metaflow(monkeypatch, finished=True, partial_cost_usd=0.37)
-    eng = MetaflowEngine(**CROSS_BOX)
-    st = eng._status_from_client(_handle(tmp_path, pathspec="CairnFlow/9"))
-    assert st is not None and st.state == "failed"
-    assert st.metrics == {"cost_usd": 0.37}
-
-
-def test_bridge_persists_partial_cost_on_failed_metaflow_task(tmp_path, monkeypatch):
+def test_bridge_keeps_progress_cost_when_execute_fails(tmp_path, monkeypatch):
     mod = types.ModuleType("metaflow")
 
     class _FlowSpec:
@@ -178,18 +164,13 @@ def test_bridge_persists_partial_cost_on_failed_metaflow_task(tmp_path, monkeypa
         flow.spec = {"stages": [{"stage": "paid"}]}
         flow.workdir = str(tmp_path)
 
-        flow.execute()
-
-        assert flow.partial_cost_usd == 0.37
+        with pytest.raises(RuntimeError, match="stage failed after paid call"):
+            flow.execute()
         assert json.loads((tmp_path / "progress.json").read_text(encoding="utf-8"))[
             "cost_usd"] == 0.37
         assert json.loads((tmp_path / "result.json").read_text(encoding="utf-8")) == {
             "error": "RuntimeError: stage failed after paid call",
         }
-        flow.finish()
-        assert flow.next_step == flow.end
-        with pytest.raises(RuntimeError, match="stage failed after paid call"):
-            flow.end()
     finally:
         sys.modules.pop(module_name, None)
 

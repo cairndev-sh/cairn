@@ -821,7 +821,7 @@ def worker_token_cmd(
     name: str = typer.Option(..., "--name", "-n", help="names the worker or pool, e.g. gpu-a"),
     days: int = typer.Option(30, "--days", help="how long the token is valid (1-365 days)"),
 ):
-    """Print a worker-pool token for `cairn worker --pull --token` (cairn-platform#224).
+    """Print a worker-pool token for `cairn worker --pull --token`.
 
     Only a worker credential claims pull-lane jobs: this token, or the deployment
     admin's. It is signed locally with the deployment's CAIRN_JWT_SECRET, so run

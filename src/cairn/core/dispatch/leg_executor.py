@@ -463,6 +463,8 @@ async def execute_leg(
                 await record_flow_parameters(run_id=str(run_id or ""), node=ref, ref=ref,
                                              kind=flow_kind, inputs=config)
                 handle = await engine.submit(spec, None)
+                if reservation is not None and getattr(reservation, "id", None):
+                    handle.meta["_cairn_reservation_id"] = reservation.id
                 if on_submit is not None:
                     # ADR-0086 H1 (#1239) — hand the durable re-attach token to the
                     # caller the moment it exists, not in the terminal outcome: a
@@ -565,11 +567,16 @@ async def execute_leg(
         out.gpu_usd = round(gpu_total, 6)
         note = await _close_attempt(out, reservation, engine_usd=attempt_cost_usd,
                                     box_usd=gpu,
-                                    adopted_run_id=str(run_id or "") if adopted_attempt else "")
+                                    adopted_run_id=str(run_id or "") if adopted_attempt else "",
+                                    adopted_reservation_id=(
+                                        str(((adopt or {}).get("meta") or {}).get("_cairn_reservation_id", ""))
+                                        if adopted_attempt else ""),
+                                    priced=bool(hourly_usd and hourly_usd > 0))
         known_attempt_cost_usd = round(known_attempt_cost_usd + attempt_cost_usd, 6)
         if note:
             ledger_notes.append(note)
-        if out.ok or not retriable or attempt >= attempts:
+        if (out.ok or not retriable or attempt >= attempts
+                or note.startswith("budget ledger: adopted handle does not match")):
             return _with_notes(out, ledger_notes)
         if on_retry is not None:
             # visibility invariant: every retry is announced (run event) with
@@ -592,7 +599,8 @@ def _with_notes(out: LegOutcome, notes: list[str]) -> LegOutcome:
 
 
 async def _close_attempt(out: LegOutcome, reservation: Any, *, engine_usd: float,
-                         box_usd: float, adopted_run_id: str = "") -> str:
+                         box_usd: float, adopted_run_id: str = "",
+                         adopted_reservation_id: str = "", priced: bool = False) -> str:
     """Close one attempt's hold: ``settle`` at ``engine_usd + box_usd`` when it
     succeeded or cost something, else ``release`` (nothing billed).
 
@@ -603,9 +611,12 @@ async def _close_attempt(out: LegOutcome, reservation: Any, *, engine_usd: float
     covers the run's earlier attempts: when it has a window (``box_usd > 0``), what
     the run's claims already settled (``settled_usd_for_run``) is subtracted from
     ``engine_usd + box_usd``, floored at 0, so nothing is settled twice (ADR-0152).
-    With no window (no readable start, or an unpriced leg) nothing overlaps and the
-    engine cost settles as is. The first held row settles at that figure, any further
-    one at 0. If a read fails the rows stay held at their estimate.
+    With no window (no readable start, or an unpriced leg) the engine cost settles
+    as is. New handles carry their reservation ID, so a stale handle cannot close
+    another attempt's hold. For an unpriced legacy handle, an existing settlement
+    makes the identity ambiguous: leave the holds open rather than bill twice.
+    The first held row settles at that figure, any further one at 0. If a read fails
+    or the identified hold is absent while other holds exist, those holds stay open.
 
     Returns a note when the ledger fails — logged, never a change to the engine
     outcome or the box time already accounted; ``""`` otherwise."""
@@ -614,6 +625,15 @@ async def _close_attempt(out: LegOutcome, reservation: Any, *, engine_usd: float
     try:
         if adopted_run_id:
             held_rows = await held_for_run(adopted_run_id)
+            if adopted_reservation_id:
+                matching = [held for held in held_rows if held.id == adopted_reservation_id]
+                if not matching and held_rows:
+                    return ("budget ledger: adopted handle does not match a held reservation; "
+                            "newer holds remain open")
+                held_rows = matching
+            elif held_rows and not priced and await settled_usd_for_run(adopted_run_id) > 0:
+                return ("budget ledger: adopted handle does not match a held reservation; "
+                        "legacy handle has ambiguous settlement, holds remain open")
             if held_rows and billed and box_usd > 0:
                 already = await settled_usd_for_run(adopted_run_id)
                 actual_usd = max(0.0, round(actual_usd - already, 6))

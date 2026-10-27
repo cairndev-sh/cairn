@@ -1078,56 +1078,6 @@ class PipelineBridge:
         losing its DB session (no lease, no reaper)."""
         return self._sections.hold(pipeline_id)
 
-    # ── launch from a bundle ───────────────────────────────────────────────
-
-    async def run_bundle(
-        self,
-        bundle: Any,
-        *,
-        pipeline_name: Optional[str] = None,
-        inputs: dict,
-        environment: Optional[str] = None,
-        workspace_id: str = "default",
-        trigger: Optional[dict] = None,
-    ) -> PipelineRecord:
-        """Launch a ``[[bundle.pipeline]]`` as a governed pipeline (ADR-0069 §5).
-
-        Selects the named pipeline (or the first), plans it, and starts it. A pipeline
-        pinned to ``mode = "graph"`` (legacy flatten) is rejected here — it runs through
-        ``compile_bundle`` (one run), not this path."""
-        from cairn.core.engine.bundle_pipeline import plan_bundle  # noqa: PLC0415 — avoids an import cycle at module load
-
-        pipes = getattr(bundle, "pipeline", None) or []
-        if not pipes:
-            raise ValueError("bundle has no [[bundle.pipeline]] to run")
-        if pipeline_name:
-            pipe = next((p for p in pipes if p.name == pipeline_name), None)
-            if pipe is None:
-                raise ValueError(f"no pipeline named {pipeline_name!r} in this bundle")
-        else:
-            pipe = pipes[0]
-        if getattr(pipe, "mode", "pipeline") == "graph":
-            raise ValueError(
-                f"pipeline {pipe.name!r} is mode='graph' (legacy flatten) — run it via "
-                "compile_bundle, not the pipeline path"
-            )
-        plan = plan_bundle(pipe)
-        meta = getattr(bundle, "meta", None)
-        ref = f"{getattr(meta, 'name', '')}@{getattr(meta, 'version', '')}" if meta else ""
-        env = environment or (getattr(meta, "profile", "") or None)
-        # ADR-0069 Phase 4: under CAIRN_RUNTIME=temporal the pipeline is owned by a durable
-        # PipelineWorkflow (crash-safe); otherwise the in-process bridge advances it.
-        from cairn.core import settings  # noqa: PLC0415
-        if settings.runtime() == "temporal":
-            return await self._start_temporal_pipeline(
-                plan, inputs=inputs, bundle_ref=ref, environment=env,
-                workspace_id=workspace_id, trigger=trigger,
-            )
-        return await self.start_pipeline(
-            plan, inputs=inputs, bundle_ref=ref, environment=env,
-            workspace_id=workspace_id, trigger=trigger,
-        )
-
     async def _start_temporal_pipeline(
         self, plan: Any, *, inputs: dict, bundle_ref: str, environment: Optional[str],
         workspace_id: str, trigger: Optional[dict], admission: Optional[dict] = None,
@@ -1181,12 +1131,10 @@ class PipelineBridge:
         step(s). Returns the persisted record.
 
         Under ``CAIRN_RUNTIME=temporal`` the pipeline is owned by a durable
-        PipelineWorkflow instead. The check lives HERE — this is the method the
-        ONE launch door (`launch_pipeline`: CLI, console, cron) calls — not only
-        in the legacy wrapper: with it there alone, every modern launch path
-        silently ran in-process/non-durable under the temporal runtime. The
-        drift was masked because the asserting tests failed on the missing
-        `temporalio` import instead of on the routing.
+        PipelineWorkflow instead. The check lives HERE because this is the
+        method the ONE launch door (`launch_pipeline`: CLI, console, cron) calls;
+        a check anywhere else would let a launch run in-process and non-durable
+        under the temporal runtime.
         """
         from cairn.core import settings  # noqa: PLC0415 — cycle: settings → storage → dispatch
 
@@ -2925,6 +2873,14 @@ class PipelineBridge:
         ``running`` child runs are left to their own paths — a leg executing in
         some process finishes and its completion no-ops once the pipeline is
         terminal; a queued leg settles itself (`_settle_cancelled_while_queued`).
+        One exception (ADR-0151 D9): a ``running`` FLOW leg on a box the
+        pipeline releases — its recorded compute target equals the connection a
+        ``finalizer:`` ``compute.release`` step resolves to — has its recorded
+        engine job cancelled through ``cancel_recorded_job`` BEFORE the
+        finalizers are submitted (:meth:`_cancel_legs_on_released_boxes`), so the
+        box stop is never the only kill. The run itself still settles through
+        its own path; a cancel that fails is logged and audited and never holds
+        the release back. Every other running leg is unchanged (#207).
         Cancel is one-shot, so it never sees an owner DEAD (that takes two probes,
         ADR-0125 D3) and leaves ``queued``/``running`` legs alone. A leg still
         ``running`` when its process dies AFTER this cancel is settled
@@ -2961,6 +2917,10 @@ class PipelineBridge:
                     # pipeline's own can start once it is set — and the record
                     # becomes `cancelled` when the teardown has settled.
                     rec.terminal_intent = "cancelled"
+                    # ADR-0151 D9 — the job on a box this pipeline releases is
+                    # cancelled BEFORE the release stops the box, so a box stop
+                    # is never the only kill. Best-effort: it never blocks it.
+                    await self._cancel_legs_on_released_boxes(rec)
                     await self._settle(rec)
                 else:
                     rec.status = "cancelled"
@@ -2976,6 +2936,95 @@ class PipelineBridge:
         if stranded_owner:
             await self._cancel_stranded_child_runs(rec)
         return rec
+
+    #: The capability a box-stopping finalizer provides (`compute/release`, ADR-0151 D6).
+    _RELEASE_CAPABILITY = "compute.release"
+
+    def _is_release_step(self, s: Any) -> bool:
+        """A task step whose operator provides ``compute.release``: from its manifest,
+        else from the class's declared capabilities, so a registry without the
+        manifest metadata does not fail open (the box would stop under its job)."""
+        ref = str(getattr(s, "ref", "") or "")
+        if leg_kind_of(ref) != "task":
+            return False
+        name = ref[len("task:"):]
+        try:
+            from cairn.core.operator.registry import default_registry  # noqa: PLC0415 — cycle, as _task_op_risk
+
+            md = default_registry.get_metadata(name)
+            if md is not None:
+                caps = getattr(md, "provides_capabilities", None) or []
+            else:
+                caps = getattr(default_registry.get(name), "capabilities", None) or []
+        except Exception:  # noqa: BLE001 — unknown operator: not a release
+            return False
+        return self._RELEASE_CAPABILITY in list(caps)
+
+    async def _released_boxes(self, rec: PipelineRecord) -> set[str]:
+        """The connections this pipeline's ``finalizer:`` release steps will stop,
+        resolved the way the finalizer itself will resolve its inputs."""
+        boxes: set[str] = set()
+        steps = [s for s in self._finalizer_steps(rec) if self._is_release_step(s)]
+        if not steps:
+            return boxes
+        raw_outputs = await self._collected_outputs(rec)
+        loops = (rec.plan.loops if rec.plan else None) or {}
+        for s in steps:
+            try:
+                resolved = resolve_step_inputs(s, bundle_input=rec.inputs,
+                                               steps=iteration_view(raw_outputs, s.id, loops))
+            except WireResolutionError:
+                continue  # the finalizer will be skipped too: it stops nothing
+            box = str((resolved or {}).get("connection") or "").strip()
+            if box:
+                boxes.add(box)
+        return boxes
+
+    async def _cancel_legs_on_released_boxes(self, rec: PipelineRecord) -> None:
+        """ADR-0151 D9 — on a pipeline cancel, cancel the engine job of every
+        ``running`` flow leg on a box this pipeline's ``compute.release`` finalizer
+        is about to stop, BEFORE the finalizers are submitted.
+
+        The leg's box is its RECORDED compute target (``Run.compute_target``, set
+        at admission), falling back to :meth:`_leg_target` for a run that carries
+        none. The cancel goes through :func:`cancel_recorded_job` with the handle
+        the leg persisted (``StepState.handle``); it never raises. A cancel that
+        was not sent is logged there and audited here (``leg_job_cancel``,
+        ``sent: false``), and the release still runs: the box must stop either
+        way. The run is not settled here — its poll loop sees the cancelled job
+        and settles it through its own path. Any other running leg is left
+        alone, as before (#207)."""
+        boxes = await self._released_boxes(rec)
+        if not boxes:
+            return
+        for s in rec.plan.steps if rec.plan else []:
+            st = rec.step_state.get(s.id)
+            if (st is None or st.status != "running" or not st.handle
+                    or leg_kind_of(getattr(s, "ref", "")) != "flow"):
+                continue
+            target = ""
+            if st.run_id:
+                try:
+                    run = await self.dispatcher.store.get(st.run_id)
+                    target = str(getattr(run, "compute_target", "") or "")
+                except Exception:  # noqa: BLE001 — fall back to the selection below
+                    logger.debug("leg %s: run %s unreadable", s.id, st.run_id, exc_info=True)
+            target = target or self._leg_target(s)
+            if target not in boxes:
+                continue
+            try:
+                engine = self._leg_engine(s)
+            except Exception:  # noqa: BLE001 — no engine to reach: report it, release anyway
+                logger.exception("leg %s (%s): no engine to cancel the job on before release",
+                                 s.id, st.run_id)
+                engine = None
+            sent = await cancel_recorded_job(engine, st.handle)
+            if not sent:
+                logger.warning("leg %s (%s): job %s on %s was not cancelled before release",
+                               s.id, st.run_id, (st.handle or {}).get("job_id"), target)
+            await self._audit(rec, s.id, "leg_job_cancel",
+                              {"run_id": st.run_id, "job_id": (st.handle or {}).get("job_id"),
+                               "target": target, "sent": sent, "before": "release"})
 
     async def _cancel_stranded_child_runs(self, rec: PipelineRecord) -> None:
         """#2540 — settle the cancelled pipeline's ``awaiting_approval`` child runs.

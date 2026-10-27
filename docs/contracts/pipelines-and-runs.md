@@ -106,8 +106,9 @@ installed contract distributions (name, version, descriptor digest) and their de
 record) from the pack facade `registry.contract_resolution_snapshot()`; legs and the Temporal
 owner re-read the record and never re-derive it (the Temporal workflow argument is a
 transport copy that nothing writes back). `None` means the closure was not recorded at the
-launch door — rows older than the field, the backfill, the bundle-era `run_bundle` path:
-not certified, not wrong. An empty installation records a certified empty closure.
+launch door — rows older than the field, the backfill, rows the removed bundle-era
+`PipelineBridge.run_bundle` path wrote: not certified, not wrong. An empty installation
+records a certified empty closure.
 An invalid installed distribution refuses the launch as `PipelinePlanError` before any record
 exists. A def that loads but cannot be planned is a 400 carrying the planner's message at both
 launch doors, `POST /start` and `POST /pipelines/launch`, arm for arm: `PipelinePlanError` (a

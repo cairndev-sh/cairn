@@ -56,14 +56,6 @@ def _known_cost(metrics: dict) -> float | None:
     return round(float(value), 6) if 0 < value < float("inf") else None
 
 
-def _metrics_cost(workdir: Path) -> float | None:
-    try:
-        metrics = json.loads((workdir / "metrics.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    return _known_cost(metrics) if isinstance(metrics, dict) else None
-
-
 class CairnFlow(FlowSpec):
     """Straight-line stage interpreter. One step, N kernels, sequential —
     executed via :func:`run_dataflow`, never re-implemented here.
@@ -113,52 +105,19 @@ class CairnFlow(FlowSpec):
                 payload["cost_usd"] = cost_usd
             _write(wd / "progress.json", payload)
 
-        failure = None
-        result = None
         try:
             result = run_dataflow(parsed, wd, on_progress=on_progress)
         except BudgetExceeded as e:
             _write(wd / "result.json", {"error": str(e), "kind": "budget"})
-            self.failure = f"BudgetExceeded: {e}"
-            self.partial_cost_usd = _metrics_cost(wd)
-            failure = e
+            raise
         except Exception as e:  # noqa: BLE001 — a failed dataflow is a REAL failure (#568)
             _write(wd / "result.json", {"error": f"{type(e).__name__}: {e}"})
-            self.failure = f"{type(e).__name__}: {e}"
-            self.partial_cost_usd = _metrics_cost(wd)
-            failure = e
-
-        # The conformance suite calls this step on a stand-in object. It has no
-        # Metaflow graph, so preserve direct return/exception behavior there.
-        if not isinstance(self, CairnFlow):
-            if failure is not None:
-                raise failure
-            self.result_payload = result.model_dump()
-            return
-        if failure is None:
-            self.result_payload = result.model_dump()
-        self.next(self.finish)
-
-    @step
-    def finish(self):
+            raise
+        self.result_payload = result.model_dump()
         self.next(self.end)
 
     @step
     def end(self):
-        if getattr(self, "failure", None):
-            wd = Path(self.workdir or ".")
-            try:
-                progress = json.loads((wd / "progress.json").read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                progress = {}
-            if not isinstance(progress, dict):
-                progress = {}
-            progress["state"] = "failed"
-            cost_usd = _known_cost({"cost_usd": getattr(self, "partial_cost_usd", None)})
-            if cost_usd is not None:
-                progress["cost_usd"] = cost_usd
-            _write(wd / "progress.json", progress)
-            raise RuntimeError(self.failure)
         wd = Path(self.workdir or ".")
         parsed = DataflowSpec.model_validate(self.spec)
         payload = dict(self.result_payload)

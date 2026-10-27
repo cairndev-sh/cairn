@@ -25,6 +25,31 @@ from cairn.core.storage.memory.runs import InMemoryRunStore
 from cairn.core.storage.protocols import Run
 
 
+@pytest.mark.parametrize("handle_id, expected", [("old", []), ("new", [0.4])])
+async def test_adopt_closes_only_the_handle_reservation(monkeypatch, handle_id, expected):
+    from cairn.core.dispatch import leg_executor as executor
+
+    held = types.SimpleNamespace(id="new")
+    settlements = []
+
+    async def held_for_run(run_id):
+        return [held]
+
+    async def settle(reservation, *, actual_usd):
+        assert reservation is held
+        settlements.append(actual_usd)
+
+    monkeypatch.setattr(executor, "held_for_run", held_for_run)
+    monkeypatch.setattr(executor, "settle", settle)
+    out = executor.LegOutcome(state="failed")
+    note = await executor._close_attempt(
+        out, None, engine_usd=0.4, box_usd=0.0, adopted_run_id="run",
+        adopted_reservation_id=handle_id,
+    )
+    assert settlements == expected
+    assert bool(note) == (handle_id == "old")
+
+
 def _stub_resolution(monkeypatch, *, kind="data", stage="clean.run", checkpoint=False):
     stage = StageRef(stage=stage, checkpoint=checkpoint)
     monkeypatch.setattr("cairn.core.dataflow.defs.load_flow_defs", lambda: {
@@ -67,6 +92,78 @@ class _FlakyEngine:
 
     async def result(self, handle):
         return types.SimpleNamespace(stats={"clean.output": "s3://ok"})
+
+
+async def test_readopt_of_settled_handle_does_not_close_new_attempt(monkeypatch):
+    from cairn.core import budget_reservations as budget
+
+    monkeypatch.setattr(budget, "_backend_instance", budget._MemoryBackend())
+    _stub_resolution(monkeypatch)
+    old = await budget.reserve("series", est_usd=1, spent_usd=0, budget_usd=5, run_id="run")
+    new = await budget.reserve("series", est_usd=1, spent_usd=0, budget_usd=5, run_id="run")
+    await budget.settle(old, actual_usd=0.4)
+
+    class PaidFailure(_FlakyEngine):
+        async def poll(self, handle):
+            return types.SimpleNamespace(state="failed", error="failed", retriable=True,
+                                         metrics={"cost_usd": 0.4})
+
+    engine = PaidFailure()
+    out = await execute_leg(
+        "flow:demo/clean", inputs={}, engine=engine, run_id="run", series_id="series",
+        estimated_usd=1, spent_usd=0, budget_usd=5,
+        adopt={"job_id": "old", "engine": "flaky",
+               "meta": {"_cairn_reservation_id": old.id}},
+        retry=RetryPolicy(maximum_attempts=2, initial_interval_seconds=0),
+    )
+    assert not out.ok and "newer holds remain open" in out.error
+    assert engine.submits == 0
+    assert [r.id for r in await budget.held_for_run("run")] == [new.id]
+    assert await budget.settled_usd_for_run("run") == pytest.approx(0.4)
+
+
+async def test_submitted_handle_carries_its_reservation_id(monkeypatch):
+    _stub_resolution(monkeypatch)
+    reservation = types.SimpleNamespace(id="reservation-1")
+    submitted = []
+
+    async def reserve(*args, **kwargs):
+        return reservation
+
+    async def settle(*args, **kwargs):
+        pass
+
+    async def on_submit(handle):
+        submitted.append(dict(handle.meta))
+
+    monkeypatch.setattr("cairn.core.dispatch.leg_executor.reserve", reserve)
+    monkeypatch.setattr("cairn.core.dispatch.leg_executor.settle", settle)
+    out = await execute_leg("flow:demo/clean", inputs={}, engine=_FlakyEngine(failures=0),
+                            run_id="run", series_id="series", on_submit=on_submit)
+    assert out.ok
+    assert submitted == [{"_cairn_reservation_id": "reservation-1"}]
+
+
+async def test_legacy_unpriced_handle_with_prior_settlement_keeps_hold(monkeypatch):
+    from cairn.core.dispatch import leg_executor as executor
+
+    held = types.SimpleNamespace(id="new")
+
+    async def held_for_run(run_id):
+        return [held]
+
+    async def settled_usd_for_run(run_id):
+        return 0.4
+
+    async def settle(*args, **kwargs):
+        pytest.fail("an ambiguous legacy handle must not settle a newer hold")
+
+    monkeypatch.setattr(executor, "held_for_run", held_for_run)
+    monkeypatch.setattr(executor, "settled_usd_for_run", settled_usd_for_run)
+    monkeypatch.setattr(executor, "settle", settle)
+    note = await executor._close_attempt(executor.LegOutcome(state="failed"), None,
+                                         engine_usd=0.4, box_usd=0, adopted_run_id="run")
+    assert "legacy handle has ambiguous settlement" in note
 
 
 async def _run(engine, *, kind="data", retry=None, monkeypatch=None):
@@ -268,7 +365,7 @@ def test_failed_leg_without_reported_cost_keeps_run_cost_unknown():
     )
 
     assert "cost" not in record
-    assert record["result_payloads"][0]["llm_cost_usd"] == 0.0
+    assert "llm_cost_usd" not in record["result_payloads"][0]
 
 
 async def test_successful_retry_run_includes_cost_of_replaced_attempt(monkeypatch):
