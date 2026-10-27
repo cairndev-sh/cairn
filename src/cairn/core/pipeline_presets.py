@@ -223,6 +223,21 @@ def assert_preset_keys_declared(preset: InputPreset, declared: dict, source: str
     )
 
 
+async def expand_preset(
+    workspace_id: str, d: Any, name: str, *, store: Any = None,
+) -> tuple[InputPreset, str]:
+    """The launch door's preset step for an already-resolved definition ``d``: the one
+    lookup (:func:`resolve_preset`) and the stale-key refusal
+    (:func:`assert_preset_keys_declared`). ``launch_pipeline_def`` and the CLI's
+    ``pipeline explain`` / ``show --plan`` (#231) call it, so a dry run refuses what the
+    launch refuses; the caller layers its inputs over the preset with
+    :func:`merge_over_preset`."""
+    rec, source = await resolve_preset(
+        workspace_id, f"{PIPELINE_PREFIX}{d.pack}/{d.name}", name, store=store)
+    assert_preset_keys_declared(rec, d.inputs or {}, source)
+    return rec, source
+
+
 def merge_over_preset(preset_inputs: dict, supplied: dict) -> tuple[dict, dict]:
     """``(merged, overrides)`` — an explicit ``--input k=v`` wins per key.
 
@@ -277,7 +292,7 @@ def preset_row(preset: InputPreset, source: str) -> dict[str, Any]:
 __all__ = [
     "SOURCE_PACK", "SOURCE_SAVED",
     "PresetNotFoundError", "UnknownPresetInputsError",
-    "assert_preset_keys_declared", "canonical_pipeline_ref", "list_presets",
+    "assert_preset_keys_declared", "canonical_pipeline_ref", "expand_preset", "list_presets",
     "merge_over_preset", "pack_presets", "preset_row", "resolve_preset",
     "touch_preset",
 ]

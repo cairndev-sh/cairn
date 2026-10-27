@@ -12,6 +12,11 @@ Config lives at ``~/.cairn/config.toml``::
     endpoint = "http://localhost:9090"
     token = "eyJ..."        # written by `remote login`
 
+The file holds a credential, so it is written 0600. A verb whose session meets a 401
+prints one line, ``session expired at HH:MM — run `cairn remote login```, and exits
+:data:`EXIT_SESSION_EXPIRED`, watches included (#230). The CLI does not renew its
+sign-in: ADR-0142 D8 keeps the CLI on the access token alone.
+
 Resolution precedence for endpoint/token: explicit ``--endpoint``/``--token`` >
 env (``CAIRN_REMOTE_ENDPOINT`` / ``CAIRN_REMOTE_TOKEN``) > the named/default profile
 > ``http://localhost:9090`` (no token).
@@ -19,6 +24,7 @@ env (``CAIRN_REMOTE_ENDPOINT`` / ``CAIRN_REMOTE_TOKEN``) > the named/default pro
 from __future__ import annotations
 from cairn.core.settings import getenv
 
+import base64
 import contextlib
 import json
 import os
@@ -46,6 +52,9 @@ app = typer.Typer(
 _TERMINAL = {"done", "failed", "cancelled"}
 _LIFECYCLE = {"queued", "running", "awaiting_approval", "resumed", *_TERMINAL}
 _DEFAULT_ENDPOINT = "http://localhost:9090"
+#: #230 — the exit code of a session the server refused (sysexits' EX_NOPERM), so a
+#: script polling the CLI can tell "sign in again" from a failure.
+EXIT_SESSION_EXPIRED = 77
 
 
 # ─── config (~/.cairn/config.toml) ─────────────────────────────
@@ -85,13 +94,16 @@ def _dump_config(cfg: dict) -> str:
 
 
 def _save_config(cfg: dict) -> None:
+    """Write the config 0600 from the start and swap it in whole (#230): it holds the
+    access token, and a second cairn process reading the profile must never see half
+    a file."""
     p = _config_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(_dump_config(cfg), encoding="utf-8")
-    try:
-        p.chmod(0o600)  # the token is a credential
-    except OSError:
-        pass
+    tmp = p.with_name(f".{p.name}.{os.getpid()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(_dump_config(cfg))
+    os.replace(tmp, p)
 
 
 def _resolve(
@@ -108,6 +120,38 @@ def _resolve(
     ).rstrip("/")
     tok = token or getenv("CAIRN_REMOTE_TOKEN") or prof.get("token")
     return ep, tok
+
+
+# ─── session expiry (#230) ─────────────────────────────────────────
+
+
+def _token_claims(token: str) -> dict:
+    """The JWT's claims, read without verifying it (the server verifies; the CLI only
+    wants ``exp`` to say when the session ended). ``{}`` when unreadable."""
+    try:
+        seg = token.split(".")[1]
+        return json.loads(base64.urlsafe_b64decode(seg + "=" * (-len(seg) % 4)))
+    except Exception:  # noqa: BLE001 — not a JWT: nothing to show
+        return {}
+
+
+def _token_exp(token: str) -> Optional[float]:
+    exp = _token_claims(token).get("exp")
+    return float(exp) if isinstance(exp, (int, float)) else None
+
+
+def _session_ended(token: Optional[str], *, then: str = ""):
+    """The one line a session the server refused ends on, and its exit code. With no
+    token at all there is no session: the plain 401 message, exit 1, as before."""
+    if not token:
+        _fail("401 Unauthorized — run `cairn remote login` (or set CAIRN_REMOTE_TOKEN).")
+    exp = _token_exp(token)
+    if exp is not None and exp <= time.time():
+        line = f"session expired at {time.strftime('%H:%M', time.localtime(exp))}"
+    else:
+        line = "session refused by the server (401)"
+    typer.secho(f"{line} — run `cairn remote login`{then}", fg="red", err=True)
+    raise typer.Exit(EXIT_SESSION_EXPIRED)
 
 
 # ─── http helpers ──────────────────────────────────────────────────
@@ -160,6 +204,41 @@ def _reachable(ep: str) -> bool:
     return False
 
 
+# ─── which store the engine reads (#229) ───────────────────────────
+
+
+def engine_store_fingerprint(
+    endpoint: Optional[str] = None, profile: Optional[str] = None,
+) -> Optional[tuple[str, Optional[str]]]:
+    """``(endpoint, fingerprint)`` of the engine this CLI is configured for (the
+    endpoint `cairn remote` uses), read from its ``/healthz``; ``None`` when nothing
+    answers there. The fingerprint is ``None`` for an engine that does not report one."""
+    ep, _ = _resolve(endpoint, None, profile)
+    try:
+        with _api(ep, None, timeout=2.0) as c:
+            body = c.healthz() or {}
+    except Exception:  # noqa: BLE001 — no engine, or no answer: nothing to compare with
+        return None
+    return ep, body.get("store_fingerprint")
+
+
+def store_check() -> Optional[tuple[str, Optional[str], Optional[bool]]]:
+    """``(this CLI's connection store, the engine's endpoint, same store?)`` — what
+    `cairn connect` and `cairn doctor` compare before trusting a write; ``None`` for an
+    in-memory store. The endpoint is ``None`` when no engine answers; *same* is
+    ``None`` when there is nothing to compare with."""
+    from cairn.core.settings import connection_store_identity  # noqa: PLC0415 — keep `cairn remote` light
+
+    mine = connection_store_identity()
+    if mine is None:
+        return None
+    engine = engine_store_fingerprint()
+    if engine is None:
+        return mine[0], None, None
+    ep, fp = engine
+    return mine[0], ep, (None if fp is None else fp == mine[1])
+
+
 @contextlib.contextmanager
 def _ephemeral():
     with socket.socket() as s:
@@ -210,7 +289,8 @@ def _session(endpoint: Optional[str], token: Optional[str], profile: Optional[st
 
 
 def _call(fn, *args, **kwargs):
-    """Run one client call, translating API errors to the CLI's exit style."""
+    """Run one client call, translating API errors to the CLI's exit style. A 401
+    ends the session loudly with exit 77 (#230)."""
     import httpx  # noqa: PLC0415 — lazy with the client
     from cairn_client import CairnAPIError  # noqa: PLC0415
 
@@ -218,10 +298,28 @@ def _call(fn, *args, **kwargs):
         return fn(*args, **kwargs)
     except CairnAPIError as e:
         if e.status_code == 401:
-            _fail("401 Unauthorized — run `cairn remote login` (or set CAIRN_REMOTE_TOKEN).")
+            _session_ended(getattr(getattr(fn, "__self__", None), "token", None))
         _fail(f"{e.status_code}: {e.detail[:300]}")
     except httpx.HTTPError as e:
         _fail(f"transport error talking to the engine: {type(e).__name__}: {e}")
+
+
+def _run_status(endpoint: str, token: Optional[str], run_id: str) -> Optional[str]:
+    """A run's status for a stream that closed without a terminal frame (#230). A 401
+    exits 77 and any other API error is said, never a silent exit 0 that looks like a
+    quiet run; a transport error (an engine restarting) is ``None``: reconnect."""
+    import httpx  # noqa: PLC0415 — lazy with the client
+    from cairn_client import CairnAPIError  # noqa: PLC0415
+
+    try:
+        with _api(endpoint, token) as c:
+            return (c.run(run_id) or {}).get("status")
+    except CairnAPIError as e:
+        if e.status_code == 401:
+            _session_ended(token)
+        _fail(f"{e.status_code}: {e.detail[:300]}")
+    except httpx.HTTPError:
+        return None
 
 
 def _poll_pipeline(c, pipeline_id: str) -> dict:
@@ -240,14 +338,12 @@ def _poll_pipeline(c, pipeline_id: str) -> dict:
             time.sleep(2.0)
         except CairnAPIError as e:
             if e.status_code == 401:
-                # #1234 — the token outlived by a long pipeline (default TTL
-                # ~60 min). The pipeline keeps running server-side; tell the
-                # user how to re-attach instead of printing a bare 401.
-                _fail(
-                    "token expired mid-watch (the pipeline is still running "
-                    "server-side). Refresh it (`cairn remote login`, or set "
-                    f"CAIRN_REMOTE_TOKEN) and re-attach: `cairn remote status {pipeline_id}`."
-                )
+                # #1234, #230 — the token outlived by a long pipeline (default TTL
+                # ~60 min). Say so in one line with how to re-attach, and exit 77:
+                # the pipeline keeps running server-side.
+                _session_ended(c.token, then=(
+                    f", then re-attach: `cairn remote pipeline {pipeline_id}` "
+                    "(it is still running server-side)"))
             _fail(f"{e.status_code}: {e.detail[:300]}")
     _fail("engine stopped responding (5 consecutive poll timeouts).")
 
@@ -288,8 +384,8 @@ def _tail(endpoint: str, token: Optional[str], run_id: str, *, after_seq: int = 
         try:
             with _sse_client(endpoint, token, timeout=None) as c:
                 with c.stream("GET", f"/runs/{run_id}/stream", params={"after_seq": last}) as r:
-                    if r.status_code == 401:
-                        _fail("401 Unauthorized — run `cairn remote login`.")
+                    if r.status_code == 401:  # #230 — end loudly, exit 77
+                        _session_ended(token)
                     if r.status_code == 404:
                         _fail(f"run {run_id} not found")
                     r.raise_for_status()
@@ -321,11 +417,7 @@ def _tail(endpoint: str, token: Optional[str], run_id: str, *, after_seq: int = 
             return
         # Stream closed without a terminal frame: check status; stop if the run
         # actually finished, otherwise reconnect from the last seq we saw.
-        try:
-            with _api(endpoint, token) as c:
-                if c.run(run_id).get("status") in _TERMINAL:
-                    return
-        except Exception:
+        if _run_status(endpoint, token, run_id) in _TERMINAL:
             return
 
 
@@ -653,8 +745,8 @@ def _watch_hitl(endpoint, token, run_id: str, *, approver, decision_opt,
         try:
             with _sse_client(endpoint, token, timeout=None) as c:
                 with c.stream("GET", f"/runs/{run_id}/stream", params={"after_seq": last}) as r:
-                    if r.status_code == 401:
-                        _fail("401 Unauthorized — run `cairn remote login`.")
+                    if r.status_code == 401:  # #230 — end loudly, exit 77
+                        _session_ended(token)
                     if r.status_code == 404:
                         _fail(f"run {run_id} not found")
                     r.raise_for_status()
@@ -689,11 +781,7 @@ def _watch_hitl(endpoint, token, run_id: str, *, approver, decision_opt,
         if saw_terminal:
             return 0
         if not paused:
-            try:
-                with _api(endpoint, token) as c:
-                    st = c.run(run_id).get("status")
-            except Exception:
-                return 0
+            st = _run_status(endpoint, token, run_id)  # #230 — as in `_tail`
             if st in _TERMINAL:
                 return 0
             if st != "awaiting_approval":
@@ -1207,9 +1295,8 @@ def findings(
                     kind = door_kind
                     break
                 except CairnAPIError as e:
-                    if e.status_code == 401:
-                        _fail("401 Unauthorized — run `cairn remote login` "
-                              "(or set CAIRN_REMOTE_TOKEN).")
+                    if e.status_code == 401:  # #230 — end loudly, exit 77
+                        _session_ended(c.token)
                     if e.status_code != 404:
                         _fail(f"{e.status_code}: {e.detail[:300]}")
                     last = e

@@ -22,7 +22,7 @@ set them first when you run outside `cairn dev`:
 |---|---|
 | `cairn dev --engine-only` | Starts the engine on SQLite with the in-process runtime and sign-in as `dev`/`dev`. `--port` sets the port (default 8000), `--db` the SQLite file (default `~/.cairn/dev.db`), `--seed` loads demo records first. Without `--engine-only` it also starts the console's dev server, which is part of cairn-platform. |
 | `cairn demo` | Seeds a demo workspace (default `demo`; `-w` to choose). `--archive` removes the demo workspace again, keeping its runs and audit entries. |
-| `cairn doctor` | Checks the environment configuration and whether configured services are reachable. `--strict` fails on warnings. |
+| `cairn doctor` | Checks the environment configuration and whether configured services are reachable. When an engine answers at the endpoint `cairn remote` uses, it also checks that the engine reads the store this CLI writes (`engine_store`). `--strict` fails on warnings. |
 | `cairn ls` | Lists the installed packs and what each contributes; `cairn ls <pack>` for one pack, `--json` for the raw shape. A pack's deployment profiles (`profiles/*.toml`) are listed with their `visibility` and absolute installed path, the value to give `CAIRN_PROFILE`. `cairn ls operators` prints the operator map. |
 
 ## Pipelines
@@ -30,8 +30,8 @@ set them first when you run outside `cairn dev`:
 | Command | What it does |
 |---|---|
 | `cairn pipeline ls` | Lists every installed pipeline with its legs and content hash, internal ones included. |
-| `cairn pipeline show <ref>` | A pipeline's inputs, legs, gates and wiring. `--plan` shows the execution plan instead. |
-| `cairn pipeline explain <ref>` | What will happen before anything spends: each input and where its value comes from, each leg and what triggers it, the gates and the budget. `-i key=value` shows the effect of a launch input, typed as the launch types it (a `list` input takes JSON or a comma-separated string, `-i report_to=mlflow,wandb`), `-e` resolves for an environment, `--json` prints the raw result. |
+| `cairn pipeline show <ref>` | A pipeline's inputs, legs, gates and wiring. `--plan` shows the execution plan instead; with `--plan`, `--preset <name>` and `-i key=value` first list each input's value and the layer it comes from (`← preset 'name'`). |
+| `cairn pipeline explain <ref>` | What will happen before anything spends: each input and where its value comes from, each leg and what triggers it, the gates and the budget. `-i key=value` shows the effect of a launch input, typed as the launch types it (a `list` input takes JSON or a comma-separated string, `-i report_to=mlflow,wandb`), `-e` resolves for an environment, `--json` prints the raw result. `--preset <name>` starts from a saved or pack-shipped input set, as `cairn remote launch --preset` does: the same lookup, `-i` keys win over the preset's, and an unknown preset or a preset key the pipeline no longer declares is refused (exit 2). Saved presets are read from this CLI's store; `-w` names the workspace. |
 | `cairn pipeline run <ref>` | Launches a pipeline and follows it to the end. `-i key=value` (repeatable; values are parsed as JSON when possible, and a `list` input also takes a comma-separated string), `-e` the environment, `--detach` returns at once. |
 
 A **ref** is `<pack>/<name>`, for example `hello-cairn/profile-and-publish`.
@@ -92,6 +92,14 @@ governed pipeline.
 | `cairn connect ls` | Lists connections: names, kinds and secret keys, never values. |
 | `cairn connect rm <name>` | Deletes a connection, leaving the secret itself untouched. |
 
+`connect add` and `connect rm` write this CLI's store: the one `CAIRN_STORAGE` names,
+else the `CAIRN_CONNECTIONS_DB` file, else `~/.cairn/cairn.db`. Before writing, they ask the engine at the endpoint
+`cairn remote` uses (its `/healthz` reports a fingerprint of its store, never a path or
+DSN) whether it reads the same store. If it reads another one, nothing is written and
+the command exits 3, naming this CLI's store; set `CAIRN_STORAGE` to the value the engine
+was started with (`cairn dev --db PATH` is `sqlite:///PATH`), or pass `--force` to write
+anyway. When no engine answers, the write goes ahead and the line names the store.
+
 ## The record
 
 | Command | What it does |
@@ -102,7 +110,10 @@ governed pipeline.
 ## A remote server
 
 Drive a deployed cairn from your terminal. Log in once; the token is stored in
-your profile.
+your profile (`~/.cairn/config.toml`, written with mode 0600). The token is not renewed:
+a command that meets an expired session, `--watch` and `--follow` included, prints
+`session expired at HH:MM — run cairn remote login` and exits 77. A watched pipeline keeps
+running on the server; log in again and re-attach with `cairn remote pipeline <id>`.
 
 | Command | What it does |
 |---|---|

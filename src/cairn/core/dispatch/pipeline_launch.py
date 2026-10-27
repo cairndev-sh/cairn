@@ -42,9 +42,8 @@ from cairn.core.dispatch.pipeline_preview import (
     assert_no_governance_inputs,
 )
 from cairn.core.pipeline_presets import (
-    assert_preset_keys_declared,
+    expand_preset,
     merge_over_preset,
-    resolve_preset,
     touch_preset,
 )
 
@@ -561,9 +560,7 @@ async def launch_pipeline_def(
     preset_rec = preset_source = None
     preset_overrides: dict = {}
     if preset_name:
-        canon = f"{PIPELINE_PREFIX}{d.pack}/{d.name}"
-        preset_rec, preset_source = await resolve_preset(workspace_id, canon, preset_name)
-        assert_preset_keys_declared(preset_rec, d.inputs or {}, preset_source)
+        preset_rec, preset_source = await expand_preset(workspace_id, d, preset_name)
         supplied, preset_overrides = merge_over_preset(preset_rec.inputs, supplied)
 
     # #2023 (ADR-0102 D2, closing #905 visibly) — an input this pipeline wires

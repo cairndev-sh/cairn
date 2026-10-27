@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+- `cairn pipeline explain` and `cairn pipeline show --plan` take `--preset <name>`, resolved by the launch door's own preset step (`expand_preset`, now shared with `launch_pipeline_def`): the same lookup, the same refusal of a preset key the pipeline no longer declares, and `-i` keys layered over the preset. Each input shows the layer it came from (`← preset 'name'`). (#231)
+- A `cairn remote` session the server refuses ends in one line, `session expired at HH:MM — run cairn remote login` (or `session refused by the server (401)`), and exit code 77, in every verb: `launch --watch` (with how to re-attach; the pipeline keeps running), `logs --follow` and `approve --watch` included. Before, a watch could go quiet or a follow could end with exit 0. The CLI still does not renew its sign-in (ADR-0142 D8). (#230)
+- `/healthz` reports `store_fingerprint`, a short hash naming the connection store the engine reads (`CAIRN_STORAGE`, else `CAIRN_CONNECTIONS_DB`, else the shared SQLite file; never its path or DSN). (#229)
+
+### Changed
+- `cairn connect add` and `cairn connect rm` check, before writing, that the engine at the endpoint `cairn remote` uses reads the store this CLI writes. On a mismatch nothing is written and the command exits 3, naming this CLI's store without credentials; `--force` writes anyway (on `add`, `--force` already meant overwrite). `cairn doctor` reports the same comparison as `engine_store`. When no engine answers, the write goes ahead and names the store. (#229)
+- `~/.cairn/config.toml` is created with mode 0600 and replaced whole, instead of written and then restricted. (#230)
+
 ## [0.3.1] - 2026-10-26
 
 A patch release: GPU time on a priced `compute.ssh` box is counted in the budget, and a public pipeline can start and stop its box. Everything is additive or internal; nothing that worked on 0.3.0 changes unless a pipeline runs on a `compute.ssh` connection that sets `hourly_usd`.
