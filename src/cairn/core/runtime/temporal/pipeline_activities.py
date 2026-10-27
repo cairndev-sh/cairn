@@ -20,8 +20,10 @@ logger = logging.getLogger("cairn.runtime.temporal.pipeline_activities")
 
 require()
 from temporalio import activity  # noqa: E402
+from cairn.core.dispatch.coordination import CriticalSections  # noqa: E402
 
 _DISPATCHER: Any = None  # worker-process dispatcher, built once (holds the store pool)
+_SECTIONS = CriticalSections(namespace="pipeline")
 
 _RUN_TERMINAL = ("done", "succeeded", "failed", "cancelled")
 # #2223 — the failure types of the flow-leg re-adoption checks live beside NEEDS_APPROVAL
@@ -280,7 +282,6 @@ async def _run_flow_leg(
     from cairn.core.dispatch.dispatcher import new_run_id  # noqa: PLC0415 — cycle
     from cairn.core.dispatch.leg_executor import execute_leg, parse_flow_ref, recorded_stage_contracts  # noqa: PLC0415 — cycle
     from cairn.core.dispatch.leg_hooks import FlowLegHooks, flow_leg_record, leg_price_kwargs, pipeline_spent_usd  # noqa: PLC0415 — cycle
-    from cairn.core.dispatch.coordination import pipeline_sections_for  # noqa: PLC0415 — cycle
     from cairn.core.dispatch.pipeline_bridge import (  # noqa: PLC0415 — cycle
         _flow_leg_output,
         _leg_retry_policy,
@@ -294,7 +295,7 @@ async def _run_flow_leg(
     from temporalio.exceptions import ApplicationError  # noqa: PLC0415 — engine code stays out of workflow imports
 
     d = _dispatcher()
-    sections = pipeline_sections_for(d)
+    sections = _SECTIONS
     pstore = default_pipeline_store()
     # Governance + workspace come from the pipeline record (the workflow doesn't
     # carry them). #2223 — an UNREADABLE store is not an ABSENT record: a read
@@ -378,7 +379,17 @@ async def _run_flow_leg(
             workspace_id=workspace_id,
         )
         await d.store.create(run)
-        await _pin_step_run(pstore, pipeline_id, step_id, run.id, section=sections.hold)
+        async def heartbeat_until_pin() -> None:
+            while True:
+                activity.heartbeat()
+                await asyncio.sleep(5.0)
+
+        heartbeat_task = asyncio.create_task(heartbeat_until_pin())
+        try:
+            await _pin_step_run(pstore, pipeline_id, step_id, run.id, section=sections.hold)
+        finally:
+            heartbeat_task.cancel()
+            await asyncio.gather(heartbeat_task, return_exceptions=True)
 
     # The flow's OWN kind picks the engine (#1180 bugs 5-6: kind from the def,
     # with the pack dir/manifest name alias fallback). #2126 — through
@@ -540,14 +551,12 @@ async def pipeline_mirror_state(pipeline_id: str, step_state: dict, status: str)
             StepState,
             default_pipeline_store,
         )
-        from cairn.core.dispatch.coordination import pipeline_sections_for  # noqa: PLC0415
 
         store = default_pipeline_store()
         # The mirror is a whole-record read-modify-write. It must use the same
         # section as pin/handle/approver writers or a stale workflow snapshot can
         # put those fields back after a sibling leg updates them.
-        sections = pipeline_sections_for(_dispatcher())
-        async with sections.hold(pipeline_id):
+        async with _SECTIONS.hold(pipeline_id):
             rec = await store.get(pipeline_id)
             if rec is None:
                 # #2223 — never INVENT a record: a synthesized one (empty governance, the

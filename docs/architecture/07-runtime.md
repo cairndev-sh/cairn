@@ -51,7 +51,11 @@ connections, SSH sessions (engines), GPU rentals (SkyPilot engine), Metaflow API
 ## State
 Checkpointer pools per event loop (`checkpointer.py:_pg_pool_for_loop`), Temporal template
 registry (`temporal/registry.py`), DBOS registry, `_DISPATCHER` singleton in
-`temporal/pipeline_activities.py:54`.
+`temporal/pipeline_activities.py:54`. Pipeline record writes use per-process
+`CriticalSections(namespace="pipeline")`; with Postgres, each process obtains an
+`advisory-locks:pipeline` pool of up to 8 connections and shares exclusion through
+Postgres advisory locks. Without Postgres there is no exclusion between the server and a
+separate worker process.
 
 ## Entry points
 `cairn-worker` → `runtime/temporal/worker.py:main`; `compile_template(... runtime=)` →

@@ -62,7 +62,6 @@ from cairn.core.dispatch.leg_hooks import (
     leg_price_kwargs,
     pipeline_spent_usd,
 )
-from cairn.core.dispatch.coordination import pipeline_sections_for
 from cairn.core.dispatch.pipeline_resume import plan_resume
 from cairn.core.dispatch.target_concurrency import in_flight_on_target, target_cap
 from cairn.core.workspace import WorkspaceScopeRequired, workspace_scope
@@ -387,7 +386,7 @@ class PipelineBridge:
         # Postgres (CAIRN_STORAGE selector), process-local otherwise. The owner
         # decision (2026-08-24): coordination lives on Postgres so scaling the
         # control plane never requires Temporal.
-        self._sections = pipeline_sections_for(dispatcher)
+        self._sections = CriticalSections(namespace="pipeline")
         # run_id → pipeline_id for the child runs WE launched. The firehose carries
         # every run.* terminal; we filter on this map so a non-pipeline run never
         # touches the run store (which would race concurrent store ops — asyncpg

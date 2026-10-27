@@ -10,7 +10,7 @@ import pytest
 
 pytest.importorskip("temporalio")
 
-from cairn.core.dispatch.coordination import CriticalSections, pipeline_sections_for
+from cairn.core.dispatch.coordination import CriticalSections
 from cairn.core.dispatch.leg_hooks import FlowLegHooks
 from cairn.core.runtime.temporal import pipeline_activities
 from cairn.core.runtime.temporal.pipeline_activities import (
@@ -44,7 +44,7 @@ async def test_pin_step_run_waits_for_a_stale_pipeline_put():
         pipeline_id="pl1", status="running",
         step_state={"prep": StepState(status="running")},
     ))
-    sections = pipeline_sections_for(types.SimpleNamespace())
+    sections = pipeline_activities._SECTIONS
 
     await _put_stale_record_while_sectioned_update_waits(
         pstore,
@@ -63,8 +63,7 @@ async def test_temporal_submit_handle_waits_for_a_stale_pipeline_put():
         step_state={"prep": StepState(status="running")},
     ))
     dispatcher = types.SimpleNamespace()
-    sections = pipeline_sections_for(dispatcher)
-    assert pipeline_sections_for(dispatcher) is sections
+    sections = pipeline_activities._SECTIONS
 
     async def emit(run_id: str, event: str, data: dict[str, Any]) -> None:
         return None
@@ -103,7 +102,7 @@ async def test_temporal_mirror_waits_for_a_stale_pipeline_put(monkeypatch):
         )},
     ))
     dispatcher = types.SimpleNamespace()
-    sections = pipeline_sections_for(dispatcher)
+    sections = pipeline_activities._SECTIONS
     monkeypatch.setattr(pipeline_activities, "_DISPATCHER", dispatcher)
     monkeypatch.setattr(
         "cairn.core.storage.pipeline_store.default_pipeline_store",
@@ -157,7 +156,7 @@ async def test_run_flow_leg_wires_sectioned_hooks_into_execute(monkeypatch):
         emitted.append((run_id, event, data))
 
     dispatcher = types.SimpleNamespace(store=run_store, _emit=emit)
-    sections = pipeline_sections_for(dispatcher)
+    sections = pipeline_activities._SECTIONS
     monkeypatch.setattr(pipeline_activities, "_DISPATCHER", dispatcher)
     monkeypatch.setattr(
         "cairn.core.storage.pipeline_store.default_pipeline_store",
@@ -203,12 +202,12 @@ async def test_run_flow_leg_wires_sectioned_hooks_into_execute(monkeypatch):
     assert emitted and emitted[-1][1] == "done"
 
 
-def test_pipeline_bridge_reuses_dispatcher_pipeline_sections():
+def test_pipeline_bridge_owns_process_local_pipeline_sections():
     pytest.importorskip("fcntl")
     from cairn.core.dispatch.pipeline_bridge import PipelineBridge
 
     dispatcher = types.SimpleNamespace()
-    sections = pipeline_sections_for(dispatcher)
     bridge = PipelineBridge(dispatcher)
 
-    assert bridge._sections is sections
+    assert bridge._sections.namespace == "pipeline"
+    assert not hasattr(dispatcher, "_pipeline_sections")

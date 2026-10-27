@@ -225,29 +225,13 @@ class CriticalSections:
         it. ``reset_pools()`` owns its lifecycle, exactly as for store pools.
         Clearing the reference resets the demotion sentinel too, so a bridge
         restarted after a Postgres outage retries instead of staying local
-        forever."""
+        forever. Temporal activities use their own module-level instance, and
+        both instances coordinate across processes through the same Postgres
+        advisory-lock key."""
         self._pool = None
         # Keep lock objects alive while holders unwind. Clearing this map while
         # another owner still has a key held would let a new holder create a
         # second asyncio.Lock for the same key and bypass local exclusion.
 
 
-def pipeline_sections_for(owner: Any) -> CriticalSections:
-    """Return the pipeline-record section owned by ``owner``.
-
-    The bridge and Temporal activities can share one section when they use the
-    same dispatcher. Separate service processes still coordinate through the
-    PostgreSQL advisory lock under the same namespace and pipeline key.
-    """
-    sections = getattr(owner, "_pipeline_sections", None)
-    if sections is not None:
-        return sections
-    sections = CriticalSections(namespace="pipeline")
-    try:
-        setattr(owner, "_pipeline_sections", sections)
-    except (AttributeError, TypeError):
-        pass
-    return sections
-
-
-__all__ = ["CriticalSections", "pipeline_sections_for"]
+__all__ = ["CriticalSections"]
