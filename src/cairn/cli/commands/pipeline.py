@@ -18,6 +18,12 @@ block that lists every effective value beside the document that owns it —
 ``inherited:<leg>``. ADR-0106 D4 keeps those four owners separate on purpose
 (different people, different change cadence); this is the one view that merges
 them for reading without merging them for editing.
+
+``explain`` and ``show --plan`` take ``--preset`` (#231): resolved by the launch
+door's own step (:func:`~cairn.core.pipeline_presets.expand_preset` — the same
+lookup, the same stale-key refusal) and layered under ``-i`` as the launch layers
+it, so each input shows the layer it came from (``← preset 'name'``). Offline like
+the rest: a saved preset is read from this CLI's store, a pack's from the pack.
 """
 from __future__ import annotations
 
@@ -96,6 +102,52 @@ def render_pipeline(d: PipelineDef) -> str:
     return "\n".join(lines)
 
 
+def _parse_inputs(pairs: list[str] | None) -> dict:
+    """``-i key=value`` pairs, JSON-parsed when possible (as ``launch`` takes them)."""
+    import json  # noqa: PLC0415 — keep `cairn --help` light
+
+    inputs: dict = {}
+    for pair in pairs or []:
+        key, sep, raw = pair.partition("=")
+        if not key or not sep:
+            console.print(f"[red]--input must be key=value, got {pair!r}[/red]")
+            raise typer.Exit(2)
+        try:
+            inputs[key] = json.loads(raw)
+        except ValueError:
+            inputs[key] = raw
+    return inputs
+
+
+def _preset_inputs(d: PipelineDef, preset: str, workspace: str) -> dict:
+    """#231 — the preset's inputs, by the launch door's own preset step; its two
+    refusals (no such preset, a key the pipeline no longer declares) exit 2."""
+    if not preset:
+        return {}
+    import asyncio  # noqa: PLC0415
+
+    from cairn.core.pipeline_presets import (  # noqa: PLC0415 — the store stays off `--help`
+        PresetNotFoundError, UnknownPresetInputsError, expand_preset,
+    )
+
+    try:
+        rec, _source = asyncio.run(expand_preset(workspace, d, preset))
+    except (PresetNotFoundError, UnknownPresetInputsError) as e:
+        from rich.markup import escape  # noqa: PLC0415
+
+        console.print(f"[red]{escape(str(e))}[/red]", highlight=False, soft_wrap=True)
+        raise typer.Exit(2) from e
+    return dict(rec.inputs or {})
+
+
+_PRESET = typer.Option(
+    "", "--preset", "-p", help="layer a saved or pack-shipped input set under --input, "
+    "as `cairn remote launch --preset` does")
+_WORKSPACE = typer.Option(
+    "default", "--workspace", "-w", help="whose variables answer the "
+    "`workspace` layer of the resolved view (ADR-0101 D2), and whose saved presets --preset reads")
+
+
 def _inspection_pipeline(ref: str) -> PipelineDef | None:
     """Inspect only declared pipelines, as the run door does (ADR-0106 D1)."""
     raw = ref.strip()
@@ -107,14 +159,34 @@ def _inspection_pipeline(ref: str) -> PipelineDef | None:
 def show_cmd(
     ref: str = typer.Argument(..., help="<pack>/<name> or pipeline:<pack>/<name>"),
     plan: bool = typer.Option(False, "--plan", help="Show the execution plan instead."),
+    input_: list[str] = typer.Option(
+        None, "--input", "-i", help="with --plan: `key=value` you would launch with; repeatable"),
+    preset: str = _PRESET,
+    workspace: str = _WORKSPACE,
 ) -> None:
-    """Show a pipeline's legs, gates, wires — and which runtime runs each leg."""
+    """Show a pipeline's legs, gates, wires — and which runtime runs each leg.
+
+    With ``--plan --preset NAME`` (and ``-i``), the plan is preceded by each declared
+    input's value and the layer it comes from, as the launch would resolve them."""
+    if (preset or input_) and not plan:
+        console.print("[red]--preset and --input apply to --plan[/] — add --plan, or use "
+                      "`cairn pipeline explain` for the full dry run.")
+        raise typer.Exit(2)
     d = _inspection_pipeline(ref)
     if d is None:
         known = [f"{p.pack}/{p.name}" for p in all_pipeline_defs()]
         console.print(f"[red]unknown pipeline {ref!r}[/] — installed: {known or '(none)'}")
         raise typer.Exit(2)
     if plan:
+        if preset or input_:
+            from cairn.core.engine.pipeline_explain import input_layers  # noqa: PLC0415
+
+            layers = input_layers(d, supplied=_parse_inputs(input_), preset_name=preset,
+                                  preset_inputs=_preset_inputs(d, preset, workspace))
+            console.print("  inputs (value ← layer)", markup=False)
+            for key, layer in layers.items():
+                console.print(f"    {key:24s} {layer['value']!s:32s} ← {layer['source']}",
+                              markup=False, highlight=False, soft_wrap=True)
         for s in plan_pipeline(d).steps:
             console.print(f"  {s.id:16s} ref={s.ref:32s} deps={s.depends_on} "
                           f"approval={s.approval}")
@@ -130,9 +202,8 @@ def explain_cmd(
         "when possible) — shows which config values it changes; repeatable"),
     environment: str = typer.Option(
         "", "--environment", "-e", help="resolve gates/engine for THIS environment"),
-    workspace: str = typer.Option(
-        "default", "--workspace", "-w", help="whose variables answer the "
-        "`workspace` layer of the resolved view (ADR-0101 D2)"),
+    preset: str = _PRESET,
+    workspace: str = _WORKSPACE,
     json_out: bool = typer.Option(False, "--json", help="the raw projection"),
 ) -> None:
     """Dry-run how every step will be TRIGGERED — before anything spends (#1792).
@@ -149,6 +220,10 @@ def explain_cmd(
     numbers, the engine/target backends and the gates, each beside the document
     that owns it — so "which file do I edit to change this" is answered without
     opening four of them.
+
+    ``--preset NAME`` layers a saved or pack-shipped input set under ``-i`` exactly
+    as ``cairn remote launch --preset`` does, and refuses what that launch refuses
+    (an unknown name, a key the pipeline no longer declares) (#231).
 
     Offline: installed packs + the environment's selection plane + the
     deployment's policies + this workspace's variables. No run, no engine, no
@@ -173,17 +248,10 @@ def explain_cmd(
         console.print(f"[red]unknown pipeline {ref!r}[/] — installed: {known or '(none)'}")
         raise typer.Exit(2)
 
-    inputs: dict = {}
-    for pair in input_ or []:
-        key, sep, raw = pair.partition("=")
-        if not key or not sep:
-            console.print(f"[red]--input must be key=value, got {pair!r}[/red]")
-            raise typer.Exit(2)
-        try:
-            inputs[key] = json.loads(raw)
-        except ValueError:
-            inputs[key] = raw
+    inputs = _parse_inputs(input_)
     doc = asyncio.run(explain_pipeline(d, environment=environment, inputs=inputs,
+                                       preset_name=preset,
+                                       preset_inputs=_preset_inputs(d, preset, workspace),
                                        workspace_id=workspace))
     if json_out:
         console.print_json(json.dumps(doc, default=str))
@@ -192,6 +260,11 @@ def explain_cmd(
     # terminal width folds every row in half.
     console.print(render_explain(doc), markup=False, highlight=False, soft_wrap=True)
     # next-command discipline (#1792): the verb that acts on what was just read.
+    if preset:
+        flags = "".join(f" -i {p}" for p in input_ or [])
+        console.print(f"\n  launch: cairn remote launch {d.pack}/{d.name} --preset {preset}{flags}",
+                      markup=False, soft_wrap=True)
+        return
     console.print(f"\n  launch: cairn remote launch {d.pack}/{d.name} -i key=value"
                   f"   (add --preset <name> to launch from a saved set)",
                   markup=False, soft_wrap=True)

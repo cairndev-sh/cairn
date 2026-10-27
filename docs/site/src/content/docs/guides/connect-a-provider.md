@@ -38,7 +38,9 @@ name, `${env:NAME}` and the deployment's secret store resolve to nothing for
 it.
 
 `cairn connect` manages connections in the engine's store, so run it with the
-same `CAIRN_STORAGE` as the engine:
+same `CAIRN_STORAGE` as the engine. When an engine answers at the endpoint `cairn
+remote` uses, `connect add` and `connect rm` compare stores first and refuse with exit 3
+if they differ (`--force` writes anyway):
 
 ```bash
 cairn connect providers            # what you can add, and each one's secret keys

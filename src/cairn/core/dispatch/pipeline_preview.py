@@ -22,8 +22,9 @@ refuses, **naming the field**, before any record exists.
 
 The refusal is deliberately narrow: it fires on an input the pipeline itself
 wires into a governance-scoped field, never on a same-named input that goes
-somewhere else. ``train-only``'s ``max_eval_loss`` reaches a flow kernel, not
-``model/gate.thresholds.max_eval_loss``, and must keep working.
+somewhere else. A training pipeline's ``max_eval_loss`` that reaches a flow kernel (the
+train leg's fail-fast ceiling) is not ``model/gate.thresholds.max_eval_loss``, and must
+keep working.
 """
 from __future__ import annotations
 

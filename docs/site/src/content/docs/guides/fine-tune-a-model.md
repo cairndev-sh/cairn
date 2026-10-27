@@ -67,7 +67,10 @@ uv pip install "cairndev[ssh,storage-postgres]" \
 `cairn ls finetune` prints the installed path of the pack's `finetune-ssh`
 profile. Put the settings in one file. Both the engine and the CLI must read
 the **same** `CAIRN_STORAGE`, or the CLI writes connections to a store the
-engine never reads:
+engine never reads. When the engine answers at the endpoint `cairn remote` uses
+(`http://localhost:9090` unless a login or `CAIRN_REMOTE_ENDPOINT` names another),
+`cairn connect add` checks this and refuses with exit 3 when the stores differ;
+`cairn doctor` reports it as `engine_store`.
 
 ```bash
 # engine.env
@@ -142,7 +145,9 @@ cairn remote launch dataset-prep/prepare \
 ```
 
 `cairn remote presets dataset-prep/prepare` lists ready-made presets the pack
-ships; `--preset <name>` launches one.
+ships; `--preset <name>` launches one. To see the plan a preset would launch
+first, `cairn pipeline explain <ref> --preset <name>` shows each input with the layer
+it comes from and refuses what the launch would refuse.
 
 Rows may be in any of these formats:
 
@@ -308,5 +313,7 @@ and recorded like training, is in progress.
   audit sink yet
   ([cairn-extensions#38](https://github.com/cairndev-sh/cairn-extensions/issues/38)).
   Approvals and run events are still recorded in the run store.
-- **Token expiry:** the CLI's login expires. Run `cairn remote login` again if
-  a command answers `401`.
+- **Token expiry:** the CLI's login expires and is not renewed. A command that
+  meets an expired login, a watch included, prints `session expired at HH:MM — run
+  cairn remote login` and exits 77; the pipeline keeps running on the server. Log in
+  again and re-attach with `cairn remote pipeline <id>`.
