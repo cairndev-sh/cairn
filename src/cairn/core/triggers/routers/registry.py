@@ -11,12 +11,13 @@ catalog/install lifecycle, and the versioned installed-workflow records.
 # would be unresolvable in this module's globals when FastAPI builds the
 # OpenAPI schema. Without it, handler annotations bind at def time.
 
-from typing import Any
+from typing import Annotated, Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from cairn.core.refs import ref_key  # ONE ref spelling (#2126)
-from cairn.core.triggers.auth import require_auth
+from cairn.core.triggers import console_support as support
+from cairn.core.triggers.auth import require_admin, require_auth
 from cairn.core.triggers.routers.pipelines import _off_loop  # #2317 listing helper
 
 
@@ -48,8 +49,11 @@ def build_registry_router() -> APIRouter:
         from cairn.core.registry_catalog import load_registry_catalog
         return load_registry_catalog(annotate=True)
 
-    @r.post("/registry/install", dependencies=[Depends(require_auth)])
-    async def registry_install(body: InstallRequest) -> dict[str, Any]:
+    @r.post("/registry/install")
+    async def registry_install(
+        body: InstallRequest,
+        admin: Annotated[Optional[str], Depends(require_admin)],
+    ) -> dict[str, Any]:
         """Install a pack from the registry — **501, by posture** (#1545 D2).
 
         Kept as a door that refuses HONESTLY rather than removed outright: a
@@ -58,6 +62,10 @@ def build_registry_router() -> APIRouter:
         provisional (see #1545). Packs reach production through the image:
         ``cairn pack add`` → CI → rebuild → redeploy.
         """
+        # A pack is process-wide, so the door is the deployment admin's alone (an
+        # internal issue): with auth on, anyone else gets 403 before any install
+        # record is written. (A comment, not the docstring: that is the OpenAPI text.)
+        support.require_deployment_admin(admin)
         # lazy: keep the installer + catalog off the import path
         from cairn.core.registry_install import (
             PackInstallUnsupportedError,
@@ -156,7 +164,7 @@ def build_registry_router() -> APIRouter:
             out.append(d)
         return out
 
-    @r.post("/registry/sync-workflows", dependencies=[Depends(require_auth)])
+    @r.post("/registry/sync-workflows", dependencies=[Depends(require_auth), Depends(support.writable_workspace)])
     async def sync_workflows() -> dict[str, Any]:
         """Populate the installed-workflow registry from discovered templates
         (#225, ADR-0049 — populate-on-discovery): the DB becomes the system of
@@ -166,7 +174,7 @@ def build_registry_router() -> APIRouter:
         from cairn.core.workspace import current_workspace
         return {"synced": await sync_discovered_workflows(workspace_id=current_workspace())}
 
-    @r.post("/registry/enable", dependencies=[Depends(require_auth)])
+    @r.post("/registry/enable", dependencies=[Depends(require_auth), Depends(support.writable_workspace)])
     async def registry_enable(body: InstallRequest) -> dict[str, Any]:
         """Enable one discovered workflow into the current workspace (#258): record
         its provenance so it becomes runnable here, without auto-inheriting the rest
@@ -180,7 +188,7 @@ def build_registry_router() -> APIRouter:
             raise HTTPException(status_code=404, detail=f"workflow {body.ref!r} not found / not enableable")
         return {"enabled": body.ref.strip(), "workspace_id": ws}
 
-    @r.post("/registry/disable", dependencies=[Depends(require_auth)])
+    @r.post("/registry/disable", dependencies=[Depends(require_auth), Depends(support.writable_workspace)])
     async def registry_disable(body: InstallRequest) -> dict[str, Any]:
         """Disable one workflow in the current workspace — the inverse of
         ``/registry/enable``. Soft: flips the workflow's record to ``disabled`` so it

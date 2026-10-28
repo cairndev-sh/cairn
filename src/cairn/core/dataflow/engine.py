@@ -88,7 +88,13 @@ class DataflowEngine(Protocol):
     ``async def check_ready(self) -> list[str]``: reasons this environment cannot launch,
     empty when it can. It is optional and, for the same reason, not a protocol member;
     :mod:`cairn.core.dataflow.engine_door` asks it before any record exists, and an
-    engine without it is ready once installed. It must not install or provision."""
+    engine without it is ready once installed. It must not install or provision.
+
+    ADR-0149 D3 — an engine whose job runs on another machine, which cannot read a
+    control-plane path, DECLARES ``needs_durable_inputs = True``; the leg executor then
+    resolves the leg's ``dataset:`` refs to their durable copies. Optional and not a
+    protocol member for the same reason: read it through :func:`needs_durable_inputs`,
+    which defaults to ``False`` (co-located)."""
 
     name: str
 
@@ -122,6 +128,12 @@ def carries_stage_contracts(engine: Any) -> bool:
     """ADR-0118 D7 — True only for an engine that positively declares it carries stage
     contracts; the control plane refuses an opted-in spec on any other engine."""
     return getattr(engine, "carries_stage_contracts", False) is True
+
+
+def needs_durable_inputs(engine: Any) -> bool:
+    """ADR-0149 D3 — True only for an engine that positively declares its job runs
+    where a control-plane path cannot be read."""
+    return getattr(engine, "needs_durable_inputs", False) is True
 
 
 def is_terminal(status: EngineJobStatus | str) -> bool:

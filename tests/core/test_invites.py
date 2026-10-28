@@ -159,3 +159,32 @@ def test_the_public_prefix_is_narrow():
     assert not _is_public_path("/admin/invites")
     assert not _is_public_path("/auth/invite")        # no trailing slash, no token
     assert not _is_public_path("/auth/invitations/x")
+
+
+# ── the deployment admin's name ─────────────────────────────────────────────
+
+@pytest.mark.parametrize("given", ["admin", "Admin", "  ADMIN  "])
+async def test_an_invite_cannot_be_redeemed_under_the_default_admin_name(given, monkeypatch):
+    """With ``CAIRN_API_USER`` unset the env admin is ``admin``. Redeeming under
+    that name (any case, trimmed) reads as taken, and the invite stays usable."""
+    monkeypatch.delenv("CAIRN_API_USER", raising=False)
+    monkeypatch.delenv("OBS_API_USER", raising=False)
+    inv, raw = await _invite()
+    with pytest.raises(A.InviteError) as e:
+        await A.accept_invite(raw, given, "hashed-pw")
+    assert e.value.reason == "username_taken"
+    assert await A.get_account_store().list_users() == []
+    assert (await A.peek_invite(raw)).state == "pending", "a refusal does not burn the link"
+    user, _ = await A.accept_invite(raw, "newbie", "hashed-pw")
+    assert user.username == "newbie"
+
+
+async def test_an_invite_cannot_be_redeemed_under_the_configured_admin_name(monkeypatch):
+    monkeypatch.setenv("CAIRN_API_USER", "Root-Ops")
+    inv, raw = await _invite()
+    with pytest.raises(A.InviteError) as e:
+        await A.accept_invite(raw, "root-ops", "hashed-pw")
+    assert e.value.reason == "username_taken"
+    # the default name is not held once another one is configured
+    user, _ = await A.accept_invite(raw, "admin", "hashed-pw")
+    assert user.username == "admin"

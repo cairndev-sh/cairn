@@ -277,7 +277,7 @@ async def test_roundtrip_create_get_list_update(_pg_dsn):
     """Live roundtrip against a real Postgres. Run with::
 
         PGSTORE_DSN='postgresql://user:pass@host/db' \
-        pip install 'cairn[storage-postgres]' \
+        pip install 'cairndev[storage-postgres]' \
         pytest tests/core/test_postgres_run_store.py -k roundtrip
     """
     from cairn.core.engine.schema import TriggerEvent

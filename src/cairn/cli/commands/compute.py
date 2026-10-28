@@ -80,7 +80,10 @@ def status(
 
 
 async def _status(name: str) -> dict:
-    box = await load_box(name)
+    from cairn.core.connections import DEFAULT_ACCOUNT  # noqa: PLC0415 — off the CLI import path
+
+    # the CLI is the deployment's own tool: its boxes are the deployment's connections
+    box = await load_box(name, account_id=DEFAULT_ACCOUNT)
     state = ""
     if box.instance_id:
         state = await describe_state(box.instance_id, region=box.region)

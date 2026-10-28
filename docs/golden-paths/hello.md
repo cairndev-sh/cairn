@@ -76,7 +76,8 @@ flowchart TD
 - Storage: SQLite by default, Postgres with `CAIRN_STORAGE`. Bus: in-process by default,
   Postgres with `CAIRN_BUS=postgres://…`. Runtime: in-process by default, DBOS with
   `CAIRN_RUNTIME=dbos`. DBOS is the public durable runtime (ADR-0127).
-- Temporal runs flow legs only: under `CAIRN_RUNTIME=temporal` a `task:` leg fails (#1378,
+- Temporal runs flow, template and gate legs: under `CAIRN_RUNTIME=temporal` a pipeline with a
+  `task:` leg or a `finalizer:` step is refused at launch (#59,
   [07-runtime.md](../architecture/07-runtime.md)), so these pipelines run on in-process or DBOS.
 - Events: on the Postgres bus an `emits` event is durable and replayed to a leg that waits
   on it later. A `kind: event` trigger starts nothing for a message published while no

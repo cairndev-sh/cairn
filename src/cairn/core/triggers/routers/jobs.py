@@ -11,8 +11,15 @@ on top: the **per-run worker token** ``live_channel_env_for`` mints for a
 container (``sub = worker:<run_id>``, ``scope = run-ingest``) exists to report
 that run. It may heartbeat that run's job, and nothing else — it cannot claim,
 because a claim hands out ANY queued job and a token scoped to run X must never
-be able to take run Y's work. A worker that claims holds an operator credential
-(``cairn worker --pull --token``).
+be able to take run Y's work.
+
+A claim is also a WORKER's act, not a user's (an internal issue). A claim hands
+out any account's queued job with its input and a run-scoped token for its run,
+so only a worker credential claims, or heartbeats a job that is not a run-scoped
+token's own: the deployment's admin (``CAIRN_API_USER``) or a worker-pool token
+(``scope=worker-pool``, ``cairn remote worker-token``; the auth guard limits it
+to these two routes). A user's token, of any account and any role, gets 403.
+Auth off (keyless dev) is unchanged: there is no tenant to protect.
 """
 from __future__ import annotations
 
@@ -21,15 +28,19 @@ from typing import Any, Optional
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from cairn.core.operator.job_store import DEFAULT_LEASE_S, RemoteJobRecord, get_remote_job_store
 from cairn.core.operator.jobs import JobStatus, live_channel_env_for
-from cairn.core.triggers.auth import require_auth
-
-#: The ``sub`` prefix ``live_channel_env_for`` gives a per-run worker token.
-WORKER_SUB_PREFIX = "worker:"
+from cairn.core.triggers.auth import (
+    auth_enabled,
+    authenticated_claims,
+    is_env_admin,
+    is_worker_pool_token,
+    require_auth,
+    token_run_scope,
+)
 
 logger = logging.getLogger("cairn.triggers.jobs")
 
@@ -86,12 +97,38 @@ def _clamp_lease(seconds: int) -> int:
     return max(MIN_LEASE_S, min(MAX_LEASE_S, int(seconds or DEFAULT_LEASE_S)))
 
 
-def _scoped_run(subject: Optional[str]) -> Optional[str]:
-    """The run a per-run worker token is scoped to, or ``None`` for any other
-    caller (an operator credential, or keyless dev where ``subject`` is None)."""
-    if subject and subject.startswith(WORKER_SUB_PREFIX):
-        return subject[len(WORKER_SUB_PREFIX):] or None
-    return None
+def _scoped_run(request: Request, subject: Optional[str]) -> Optional[str]:
+    """The run this caller's token is scoped to, or ``None`` for an operator
+    credential (or keyless dev, where ``subject`` is None).
+
+    #208 — the guard's own rule (:func:`token_run_scope`) on the claims the guard
+    authenticated, so a token the guard treats as run-scoped (``scope=run-ingest``
+    or a ``worker:<run>`` subject) is run-scoped here too. ``""`` (a token whose
+    scope and subject disagree) matches no run. Without guard claims and with auth
+    off (keyless dev) the subject alone decides, as before; with auth ON a caller the
+    guard did not vet is run-scoped to no run (fail closed)."""
+    claims = authenticated_claims(request.scope)
+    if claims is None:
+        if auth_enabled() and subject:
+            return ""
+        claims = {"sub": subject} if subject else {}
+    return token_run_scope(claims)
+
+
+_NOT_A_WORKER = ("claiming or reporting pull-lane jobs needs a worker credential: the "
+                 "deployment admin's token or a worker-pool token (cairn remote worker-token)")
+
+
+def _is_worker_credential(request: Request, subject: Optional[str]) -> bool:
+    """Whether this caller may claim, and heartbeat any job (an internal issue):
+    a worker-pool token or the deployment's admin. Auth off (keyless dev) is
+    always a worker. With auth on, only claims the guard verified count."""
+    if not auth_enabled():
+        return True
+    claims = authenticated_claims(request.scope)
+    if claims is None:
+        return False
+    return is_worker_pool_token(claims) or is_env_admin(subject)
 
 
 def _as_response(rec: RemoteJobRecord) -> ClaimedJobResponse:
@@ -113,16 +150,20 @@ def build_jobs_router(store_factory=None) -> APIRouter:
         return (store_factory or get_remote_job_store)()
 
     @r.post("/jobs/claim", response_model=Optional[ClaimedJobResponse], responses={204: {"description": "nothing to claim"}})
-    async def claim_job(body: ClaimRequest,
+    async def claim_job(body: ClaimRequest, request: Request,
                         subject: Annotated[Optional[str], Depends(require_auth)]) -> Any:
         """Hand this worker at most ONE queued job, with a lease. 204 when there
         is nothing it can run — an empty queue is not an error, and a worker
         polls this route forever."""
-        if _scoped_run(subject) is not None:
+        # Only a worker credential claims (403 otherwise; an internal issue). A
+        # comment, not the docstring: the docstring is the OpenAPI text.
+        if _scoped_run(request, subject) is not None:
             raise HTTPException(
                 status_code=403,
                 detail="a per-run worker token ingests that run's events; claiming work "
-                       "needs an operator credential (cairn worker --pull --token <operator jwt>)")
+                       "needs a worker credential (cairn worker --pull --token <worker-pool token>)")
+        if not _is_worker_credential(request, subject):
+            raise HTTPException(status_code=403, detail=_NOT_A_WORKER)
         store = _store()
         rec = await store.claim_next(body.worker_id, capabilities=body.capabilities,
                                      lease_s=_clamp_lease(body.lease_seconds))
@@ -132,22 +173,25 @@ def build_jobs_router(store_factory=None) -> APIRouter:
         return _as_response(rec)
 
     @r.post("/jobs/{job_id}/heartbeat", response_model=HeartbeatResponse)
-    async def heartbeat_job(job_id: str, body: HeartbeatRequest,
+    async def heartbeat_job(job_id: str, body: HeartbeatRequest, request: Request,
                             subject: Annotated[Optional[str], Depends(require_auth)]) -> HeartbeatResponse:
         """Extend the lease and record the worker's ``JobStatus``. Refused (200
         with ``accepted: false``) when this worker no longer holds the job — the
         honest answer to a worker whose lease expired while it was working, and
         the signal for it to stop. A per-run token may only heartbeat its own
         run's job (403 otherwise)."""
+        # Any other caller needs a worker credential (403; an internal issue).
         if body.status not in _STATES:
             raise HTTPException(status_code=422, detail=f"status must be one of {', '.join(_STATES)}")
         store = _store()
-        scoped = _scoped_run(subject)
+        scoped = _scoped_run(request, subject)
         if scoped is not None:
             owner = await store.get(job_id)
-            if owner is None or owner.run_id != scoped:
+            if not scoped or owner is None or owner.run_id != scoped:
                 raise HTTPException(status_code=403,
                                     detail=f"this token is scoped to run {scoped}; it cannot heartbeat {job_id}")
+        elif not _is_worker_credential(request, subject):
+            raise HTTPException(status_code=403, detail=_NOT_A_WORKER)
         ok = await store.heartbeat(
             job_id, body.worker_id,
             JobStatus(state=body.status, output=body.output, error=body.error, metrics=body.metrics),

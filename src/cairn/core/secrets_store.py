@@ -12,6 +12,14 @@ Dispatched by the reference scheme:
 :func:`put_secret(ref, value)` writes to the backend the ref names; :func:`resolve_secret(ref)`
 reads it back (used by ``resolve_connection``). Values are encrypted at rest in the local
 backend; this module never logs a value.
+
+Account scope. A reference minted for a tenant account carries the account
+(``cairn://secrets#<account>/<conn>-<KEY>``). Given the caller's ``account_id``,
+:func:`resolve_secret` and :func:`put_secret` reach only that account's references:
+a bare name or ``${env:…}`` (the server's environment), the deployment's own
+``cairn://`` secrets and another account's are refused. With no account, or the
+``default`` account a single-node or auth-off deployment runs in, nothing changes, and
+references minted before accounts were namespaced keep resolving for the deployment.
 """
 from __future__ import annotations
 from cairn.core.settings import getenv
@@ -275,20 +283,62 @@ def default_backend_scheme() -> str:
     return getenv("CAIRN_SECRET_BACKEND", "").strip().lower() or "local"
 
 
-def mint_ref(connection: str, key: str, *, scheme: Optional[str] = None) -> str:
-    """The reference a new credential will be stored under (scoped by connection so
-    two connections never collide on the same logical key)."""
-    scheme = scheme or default_backend_scheme()
-    slug = re.sub(r"[^a-zA-Z0-9._-]+", "-", f"{connection}/{key}".strip("/"))
+#: The deployment's own account (mirrors :data:`cairn.core.account.DEFAULT_ACCOUNT`):
+#: a single-node or auth-off deployment runs in it, and its references are not namespaced.
+_DEPLOYMENT_ACCOUNT = "default"
+_UNSAFE = re.compile(r"[^a-zA-Z0-9._-]+")
+
+
+def scoped_account(account_id: Optional[str]) -> Optional[str]:
+    """The tenant account a secret reference is confined to, or ``None`` for the
+    deployment (no account, or the ``default`` account)."""
+    a = (account_id or "").strip()
+    return None if not a or a == _DEPLOYMENT_ACCOUNT else _UNSAFE.sub("-", a)
+
+
+def _infisical_locator(tenant: Optional[str]) -> str:
+    proj = os.environ.get("INFISICAL_PROJECT_ID", "").strip() or "cairn"
+    return f"{proj}/cairn/{tenant}" if tenant else f"{proj}/cairn"
+
+
+def ref_in_account(ref: str, account_id: Optional[str]) -> bool:
+    """Whether ``ref`` is one :func:`mint_ref` makes for ``account_id``. The
+    deployment may use any reference; a tenant only its own ``cairn://`` or
+    ``infisical://`` references, never an env name or another account's."""
+    tenant = scoped_account(account_id)
+    if tenant is None:
+        return True
+    scheme = ref_scheme(ref)
+    if scheme == "cairn":
+        locator, key = _split(ref.strip())
+        owner, sep, rest = key.partition("/")
+        return locator == "secrets" and bool(sep) and owner == tenant and bool(rest)
     if scheme == "infisical":
-        proj = os.environ.get("INFISICAL_PROJECT_ID", "").strip() or "cairn"
-        return f"infisical://{proj}/cairn#{slug}"
-    return f"cairn://secrets#{slug}"
+        locator, key = _split(ref.strip())
+        return locator == _infisical_locator(tenant) and bool(key)
+    return False
 
 
-def put_secret(ref: str, value: str) -> str:
+def mint_ref(
+    connection: str, key: str, *, scheme: Optional[str] = None, account_id: Optional[str] = None
+) -> str:
+    """The reference a new credential will be stored under (scoped by connection so
+    two connections never collide on the same logical key, and by ``account_id`` so
+    a tenant account's references are its own; the deployment's are unchanged)."""
+    scheme = scheme or default_backend_scheme()
+    slug = _UNSAFE.sub("-", f"{connection}/{key}".strip("/"))
+    tenant = scoped_account(account_id)
+    if scheme == "infisical":
+        return f"infisical://{_infisical_locator(tenant)}#{slug}"
+    return f"cairn://secrets#{tenant}/{slug}" if tenant else f"cairn://secrets#{slug}"
+
+
+def put_secret(ref: str, value: str, *, account_id: Optional[str] = None) -> str:
     """Write ``value`` to the backend named by ``ref``; return the canonical ref to
-    persist on the connection. Env refs are read-only (set them out-of-band)."""
+    persist on the connection. Env refs are read-only (set them out-of-band). Given a
+    tenant ``account_id``, a ref outside that account raises ``ValueError``."""
+    if not ref_in_account(ref, account_id):
+        raise ValueError(f"secret reference is not in account {account_id!r}")
     scheme = ref_scheme(ref)
     if scheme == "cairn":
         _, key = _split(ref)
@@ -303,9 +353,13 @@ def put_secret(ref: str, value: str) -> str:
     raise ValueError(f"cannot write secret to a read-only ref scheme: {scheme!r} ({ref!r})")
 
 
-def resolve_secret(ref: str) -> Optional[str]:
+def resolve_secret(ref: str, *, account_id: Optional[str] = None) -> Optional[str]:
     """Read the value behind a reference, or ``None`` if absent. Dispatches by scheme;
-    env/bare names fall back to ``os.environ``."""
+    env/bare names fall back to ``os.environ``. Given a tenant ``account_id``, a
+    reference outside that account (an env name, the deployment's or another
+    account's) resolves to ``None`` without reaching any backend."""
+    if not ref_in_account(ref, account_id):
+        return None
     scheme = ref_scheme(ref)
     if scheme == "env":
         m = _ENV_RE.match(ref.strip())

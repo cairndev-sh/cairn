@@ -118,7 +118,7 @@ legacy callsites the migration is gradually replacing.
 ### "One Postgres for everything" prod recipe
 
 ```bash
-pip install 'cairn[storage-postgres,rag-pgvector]'
+pip install 'cairndev[storage-postgres,rag-pgvector]'
 
 export CAIRN_STORAGE=postgres://user:pass@host/cairn          # runs + events
 export RAG_VECTOR_STORE=pgvector                                # RAG vectors

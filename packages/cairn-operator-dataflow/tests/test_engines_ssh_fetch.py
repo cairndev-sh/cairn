@@ -67,8 +67,15 @@ class _FakeConn:
         return self._sftp
 
 
+async def _params(jh, connection=""):
+    # the real one resolves the target connection's key; host/user come from the handle
+    return {"host": jh.meta["host"], "user": jh.meta["user"]}
+
+
 def _wire(monkeypatch, sftp: _FakeSftp) -> None:
     class _Exec:
+        _job_ssh_params = staticmethod(_params)
+
         @staticmethod
         async def _get_conn(params):
             assert params["host"] == "h" and params["user"] == "u"
@@ -170,6 +177,8 @@ def test_localize_resume_ships_bytes_and_drops_seeded_artifacts(tmp_path):
 
 async def test_connection_failure_returns_false(monkeypatch, tmp_path):
     class _Exec:
+        _job_ssh_params = staticmethod(_params)
+
         @staticmethod
         async def _get_conn(params):
             raise ConnectionError("box unreachable")

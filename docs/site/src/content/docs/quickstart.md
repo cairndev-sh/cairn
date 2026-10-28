@@ -7,6 +7,10 @@ In about ten minutes you will install cairn, start an engine on your machine,
 launch a pipeline that checks a dataset, decide at its gates, and read what was
 recorded. Nothing here needs an API key or spends money.
 
+To look around without installing, try the live demo at
+[demo.cairndev.sh](https://demo.cairndev.sh), a shared sandbox (don't enter
+real credentials there).
+
 ## 1. Install cairn
 
 ```bash
@@ -15,13 +19,10 @@ curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_EXTRAS=hello sh
 
 The installer puts `cairn` on your PATH as a [uv](https://docs.astral.sh/uv/)
 tool, installing uv first if it is missing. The `hello` extra adds the example
-pack, `hello-cairn`, with four pipelines to try. Without the script (until the
-packages are on PyPI, cairn's wheels come from the GitHub Release; third-party
-packages still come from PyPI):
+pack, `hello-cairn`, with four pipelines to try. Without the script:
 
 ```bash
-L=https://github.com/cairndev-sh/cairn/releases/expanded_assets/v0.1.3
-pip install 'cairndev[hello]==0.1.3' --find-links "$L"   # inside a virtual environment, Python 3.12 or later
+pip install 'cairndev[hello]'   # inside a virtual environment, Python 3.12 or later
 ```
 
 Check it: `cairn --version`, then `cairn pipeline ls` lists the example's

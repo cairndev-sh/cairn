@@ -9,8 +9,14 @@ Public surface:
   - ``tool_adapter`` — submodule with capability→LangChain-tool adapters
   - ``slack_post(text, channel=None)`` — fire-and-forget chat notify
   - ``is_configured(server)`` — check whether a named MCP server is reachable
-  - ``mcp_server_spec(config, secrets)`` — kind=mcp Connection config → a
-    MultiServerMCPClient connection spec (ValueError when not MCP-shaped)
+  - ``mcp_server_spec(config, secrets, *, allow_stdio=False,
+    allow_private_network=False)`` — kind=mcp Connection config → a
+    MultiServerMCPClient connection spec (ValueError when not MCP-shaped, or
+    when it would start a process or reach an internal address the caller
+    did not allow)
+  - ``no_redirect_http_client(headers, timeout, auth)`` — the
+    ``httpx_client_factory`` a tenant (``allow_private_network=False``) spec
+    carries: the SDK's client with redirects off
   - ``discover_tools(name, spec, timeout=…)`` — short-lived session →
     ``tools/list`` → read-only ``[{name, description, inputs, input_schema}]``
     (#355; the schema itself since ADR-0101 D5)
@@ -37,6 +43,7 @@ __all__ = [
     "slack_post",
     "is_configured",
     "mcp_server_spec",
+    "no_redirect_http_client",
     "discover_tools",
     "discover_tools_cached",
     "reset_tools_cache",
@@ -58,13 +65,39 @@ __all__ = [
 # (the same client cairn.services.mcp.client is built on).
 
 
-def mcp_server_spec(config: dict[str, Any], secrets: dict[str, str] | None = None) -> dict[str, Any]:
+def mcp_server_spec(
+    config: dict[str, Any],
+    secrets: dict[str, str] | None = None,
+    *,
+    allow_stdio: bool = False,
+    allow_private_network: bool = False,
+) -> dict[str, Any]:
     """Normalize a kind=mcp connection ``config`` (+ resolved ``secrets``) into
     a ``MultiServerMCPClient`` connection spec.
 
     Raises ``ValueError`` with a precise message when the config is not
     MCP-shaped — no ``url`` for an http/sse transport, no ``command`` for
     stdio, or an unparseable ``raw_json``.
+
+    Fails closed on where the spec reaches: a ``stdio`` spec runs a command on
+    this server, so it is built only with ``allow_stdio=True``; an http/sse
+    ``url`` must pass the connection probe's address guard
+    (:func:`cairn.core.connection_probe.probe_target_block_reason`: no loopback,
+    link-local, cloud metadata or, unless ``CAIRN_PROBE_ALLOW_PRIVATE``, private
+    address) unless ``allow_private_network=True``. Both are the deployment's
+    call to make, not a tenant connection's.
+
+    Without ``allow_private_network`` the http/sse spec also carries
+    ``httpx_client_factory=``:func:`no_redirect_http_client`, so the client
+    never follows a redirect past the check. Such a spec therefore holds a
+    callable and is not JSON-serialisable: pass it to ``MultiServerMCPClient``
+    (or :func:`discover_tools`) as is, rather than storing or logging it as
+    JSON. With ``allow_private_network`` the spec is unchanged
+    (the SDK's default client, which follows redirects): the deployment already
+    trusts where it points. Known limits of the address check: it resolves the
+    host once, at spec-build time, so it does not defend against DNS
+    rebinding, and a host that does not resolve then passes it.
+    ``CAIRN_PROBE_ALLOW_PRIVATE`` relaxes its private-address rule here too.
     """
     cfg = dict(config or {})
     live = {str(k): str(v) for k, v in (secrets or {}).items() if v}
@@ -98,6 +131,12 @@ def mcp_server_spec(config: dict[str, Any], secrets: dict[str, str] | None = Non
     if transport in ("streamable_http", "http", "sse"):
         if not url:
             raise ValueError(f"transport={transport} needs a 'url' in the connection config")
+        if not allow_private_network:
+            from cairn.core.connection_probe import probe_target_block_reason  # lazy: httpx off import path
+
+            blocked = probe_target_block_reason(url)
+            if blocked:
+                raise ValueError(f"MCP server url is not allowed: {blocked}")
         headers = {str(k): str(v) for k, v in (cfg.get("headers") or {}).items()}
         token = live.get("TOKEN") or live.get("BEARER_TOKEN") or live.get("API_KEY")
         if token and "Authorization" not in headers:
@@ -108,9 +147,16 @@ def mcp_server_spec(config: dict[str, Any], secrets: dict[str, str] | None = Non
         }
         if headers:
             spec["headers"] = headers
+        if not allow_private_network:
+            # The address check above runs once; the MCP SDK's default client
+            # follows redirects, so a checked URL could 30x somewhere the check
+            # would refuse. A tenant spec's client never follows one.
+            spec["httpx_client_factory"] = no_redirect_http_client
         return spec
 
     if transport == "stdio":
+        if not allow_stdio:
+            raise ValueError("transport=stdio runs a command on this server and is not allowed for this caller")
         if not command:
             raise ValueError("transport=stdio needs a 'command' in the connection config")
         args = cfg.get("args") or []
@@ -127,6 +173,31 @@ def mcp_server_spec(config: dict[str, Any], secrets: dict[str, str] | None = Non
         "no MCP endpoint in the connection config — set a 'url' (streamable_http/sse) "
         "or a 'command' (stdio)"
     )
+
+
+def no_redirect_http_client(
+    headers: dict[str, str] | None = None,
+    timeout: Any = None,
+    auth: Any = None,
+) -> Any:
+    """``httpx_client_factory`` for a tenant MCP spec: the MCP SDK's own
+    ``create_mcp_http_client`` (same defaults and signature —
+    ``McpHttpClientFactory`` in ``mcp.shared._httpx_utils``) except that it
+    never follows a redirect, so the address check in :func:`mcp_server_spec`
+    is the only hop the client takes. A 30x surfaces as a failed request."""
+    import httpx  # lazy: httpx off import path
+
+    kwargs: dict[str, Any] = {
+        "follow_redirects": False,
+        # the SDK's MCP_DEFAULT_TIMEOUT / MCP_DEFAULT_SSE_READ_TIMEOUT (mcp 1.27);
+        # a test pins this against create_mcp_http_client so drift shows up
+        "timeout": timeout if timeout is not None else httpx.Timeout(30.0, read=300.0),
+    }
+    if headers is not None:
+        kwargs["headers"] = headers
+    if auth is not None:
+        kwargs["auth"] = auth
+    return httpx.AsyncClient(**kwargs)
 
 
 def _first_line(text: Any, cap: int = 240) -> str:

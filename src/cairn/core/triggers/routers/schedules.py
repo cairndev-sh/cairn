@@ -5,8 +5,9 @@ Extracted verbatim from server.py (#1191).
 """
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from cairn.core.triggers import console_support as support
 from cairn.core.workspace import current_workspace
 
 
@@ -140,7 +141,7 @@ def build_schedules_router(runner, scheduler, rag_scheduler) -> APIRouter:
             )
         return typed
 
-    @r.post("/triggers/scheduled")
+    @r.post("/triggers/scheduled", dependencies=[Depends(support.writable_workspace)])
     async def create_scheduled(body: dict[str, Any]) -> dict[str, Any]:
         """Create a console-authored cron schedule (#354): validate the cron,
         the ref AND the inputs (same validator the fire path uses) before
@@ -233,7 +234,7 @@ def build_schedules_router(runner, scheduler, rag_scheduler) -> APIRouter:
             previous = nxt
         return {"cron": cron, "next": fires}
 
-    @r.patch("/triggers/scheduled/{schedule_id}")
+    @r.patch("/triggers/scheduled/{schedule_id}", dependencies=[Depends(support.writable_workspace)])
     async def toggle_scheduled(schedule_id: str, body: dict[str, Any]) -> dict[str, Any]:
         """Pause/resume a stored schedule — the off switch unattended crons need —
         and (#1246) change its downtime ``misfire`` policy without recreating it."""
@@ -264,7 +265,7 @@ def build_schedules_router(runner, scheduler, rag_scheduler) -> APIRouter:
             scheduler.resync_stored()
         return {"id": row.id, "enabled": row.enabled, "misfire": row.misfire}
 
-    @r.delete("/triggers/scheduled/{schedule_id}")
+    @r.delete("/triggers/scheduled/{schedule_id}", dependencies=[Depends(support.writable_workspace)])
     async def delete_scheduled(schedule_id: str) -> dict[str, Any]:
         from cairn.core.storage.schedule_store import default_schedule_store
 

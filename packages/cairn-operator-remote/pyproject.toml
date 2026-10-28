@@ -6,12 +6,14 @@
 [project]
 name = "cairn-operator-remote"
 version = "0.1.0"
-description = "Run a command/job on any SSH box you own — generic remote compute (remote.exec)."
+description = "Run a command/job on any SSH box you own — generic remote compute (remote.exec) — and start and stop the box (compute.acquire, compute.release)."
 readme = "README.md"
 license = "Apache-2.0"
 authors = [{name = "cairn maintainers"}]
 requires-python = ">=3.11"
-# stdlib only on the base path; SSH is the [ssh] extra (lazy-imported).
+# stdlib only on the base path; SSH is the [ssh] extra (lazy-imported). compute/acquire and
+# compute/release call EC2 through cairn.core.compute_lifecycle, whose boto3 is a base
+# dependency of the engine wheel, so they add nothing to an install.
 dependencies = []
 
 [project.urls]
@@ -25,6 +27,8 @@ ssh = ["asyncssh>=2.14"]
 
 [project.entry-points."cairn.operators"]
 "remote/exec" = "operator_remote.operators.exec:RemoteExecOp"
+"compute/acquire" = "operator_remote.operators.acquire:ComputeAcquireOp"
+"compute/release" = "operator_remote.operators.release:ComputeReleaseOp"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/operator_remote"]

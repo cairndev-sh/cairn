@@ -70,14 +70,18 @@ async def _has_hf_token() -> bool:
     the token value itself is never read into a log, an audit row, or the
     caller's control flow beyond this truthiness check."""
     from cairn.core.connections import (  # noqa: PLC0415 — off the hot import path
+        lookup_account,
         default_connection_store,
         resolve_connection_obj,
+        run_account,
     )
 
     try:
+        # the launching run's own account: a tenant's token, never the deployment's
+        account = lookup_account(await run_account())
         store = default_connection_store()
         try:
-            conn = await store.get_by_name("huggingface")
+            conn = await store.get_by_name("huggingface", account_id=account)
         finally:
             close = getattr(store, "close", None)
             if callable(close):

@@ -18,6 +18,11 @@ Subcommands::
     cairn connect providers
     cairn connect presets
 
+Before ``add`` or ``rm`` writes, the CLI checks that the engine it is configured for
+(the endpoint ``cairn remote`` uses) reads the same store (#229): the engine reports a
+fingerprint of its store on ``/healthz``. When they differ the write is refused with
+exit 3, unless ``--force``.
+
 ``--preset`` builds a kind=mcp connection from a shipped connector preset
 (``cairn/connectors/<name>.toml``, read only by ``cairn.services.mcp.presets``)
 through the same catalog path as ``cairn connect add mcp``; flags override the
@@ -30,11 +35,13 @@ import shlex
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
 from cairn.core.connection_probe import ProbeResult, test_connection
 from cairn.core.connections import (
+    DEFAULT_ACCOUNT,
     PROVIDER_CATALOG,
     Connection,
     connection_from_provider,
@@ -53,6 +60,41 @@ app = typer.Typer(
 )
 console = Console()
 
+#: #229 — the exit code of a write refused because the running engine reads another store.
+EXIT_STORE_MISMATCH = 3
+
+
+def _guard_store(force: bool) -> None:
+    """#229 — refuse a write the running engine would never see.
+
+    The qualification run's failure: an engine on ``--db ~/.cairn/train.db``, a shell
+    without ``CAIRN_STORAGE``, and ``connect add`` reported success into
+    ``~/.cairn/cairn.db``. Only a store with no credentials in its name is printed.
+    """
+    from cairn.cli.commands import remote  # noqa: PLC0415 — the engine endpoint is `cairn remote`'s
+
+    checked = remote.store_check()
+    if checked is None:
+        return  # an in-memory store is nobody else's
+    mine, ep, same = checked
+    if same:
+        return
+    if same is None:
+        why = (f"the engine at {ep} does not report its store" if ep
+               else "no engine answered to compare stores with")
+        console.print(f"[dim]writing to {escape(mine)} — {why}[/]")
+        return
+    if force:
+        console.print(f"[yellow]writing to {escape(mine)} anyway (--force): the engine at "
+                      f"{ep} reads another store and will not see this.[/]")
+        return
+    console.print(
+        f"[red]✗ not written:[/] this CLI writes {escape(mine)}, but the engine at {ep} "
+        "reads a different store, so it would never see this. Run the CLI on the "
+        "engine's store (set CAIRN_STORAGE to what the engine was started with; "
+        "`cairn dev --db PATH` is sqlite:///PATH), or pass --force to write here anyway.")
+    raise typer.Exit(EXIT_STORE_MISMATCH)
+
 
 def _kv(pairs: list[str] | None) -> dict[str, str]:
     """Parse repeatable ``key=value`` options into a dict (ignores blank keys)."""
@@ -67,6 +109,7 @@ def _kv(pairs: list[str] | None) -> dict[str, str]:
 
 def _persist(conn: Connection, force: bool) -> bool:
     """Upsert a connection; return False if it exists and ``force`` is off."""
+    _guard_store(force)
 
     async def _save() -> bool:
         store = default_connection_store()
@@ -139,7 +182,8 @@ def add_cmd(
     description: str = typer.Option(None, "--description", help="override description"),
     disabled: bool = typer.Option(False, "--disabled", help="create it disabled"),
     force: bool = typer.Option(
-        False, "--force", help="overwrite an existing connection of the same name"
+        False, "--force", help="overwrite an existing connection of the same name; "
+        "also write when the running engine reads another store"
     ),
     via: str = typer.Option(
         None, "--via", help="broker an OAuth connection: --via oauth (provider can be "
@@ -420,7 +464,8 @@ def test_cmd(
     provider's **authenticated** health probe (the creds actually work) and
     persist the result. Secret values are checked for presence only — never
     printed. Exit 0 = connected/degraded-but-reachable, 1 = missing/failed."""
-    resolved = asyncio.run(resolve_connection(name))
+    # the CLI is the deployment's own tool: it tests the deployment's connections
+    resolved = asyncio.run(resolve_connection(name, account_id=DEFAULT_ACCOUNT))
     if resolved is None:
         console.print(
             Panel(
@@ -473,8 +518,11 @@ async def _probe_by_name(name: str):
 @app.command("rm")
 def rm_cmd(
     name: str = typer.Argument(..., help="connection name to remove"),
+    force: bool = typer.Option(
+        False, "--force", help="remove even when the running engine reads another store"),
 ) -> None:
     """Delete a connection. Removes only the reference — never the secret value."""
+    _guard_store(force)
 
     async def _rm() -> bool:
         store = default_connection_store()

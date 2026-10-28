@@ -948,6 +948,44 @@ def _owns(existing: Any, ref: str, owned_prefixes: tuple[str, ...]) -> bool:
     return not by and any(str(existing.id).startswith(p) for p in owned_prefixes)
 
 
+def _http_ingress_path(text: Any) -> str:
+    """The HTTP ingress path a stored trigger row's YAML declares, else ``""``
+    (a schedule row, an event row, or text that does not parse)."""
+    if not isinstance(text, str) or not text:
+        return ""
+    try:
+        spec = load_trigger_spec_text(text)
+    except Exception:  # noqa: BLE001 — an unreadable row claims no path
+        return ""
+    if getattr(spec.ingress, "transport", "http") != "http":
+        return ""
+    return str(spec.ingress.path or "")
+
+
+async def _claimed_elsewhere(store: Any, rid: str, row: Any, workspace_id: str) -> str:
+    """Why *row* may not be written for *workspace_id*: its id, its name or its HTTP
+    ingress path already belongs to ANOTHER workspace (#213). ``""`` when it may.
+
+    Ids and names are global in every store and ``create`` is an upsert, so writing
+    the row would replace the other workspace's row and move it here; a shared
+    ingress path would put two workspaces behind one receiver."""
+    other = await store.get(rid)
+    if other is not None and other.workspace_id != workspace_id:
+        return f"its id {rid!r} belongs to workspace {other.workspace_id!r}"
+    by_name = getattr(store, "get_by_name", None)
+    name = getattr(row, "name", "")
+    if callable(by_name) and name:
+        other = await by_name(name)
+        if other is not None and other.workspace_id != workspace_id:
+            return f"its name {name!r} belongs to workspace {other.workspace_id!r}"
+    path = _http_ingress_path(getattr(row, "yaml", None))
+    if path:
+        for other in await store.list(None):
+            if other.workspace_id != workspace_id and _http_ingress_path(other.yaml) == path:
+                return f"its path {path} belongs to workspace {other.workspace_id!r}"
+    return ""
+
+
 async def _converge(
     *, plan: dict[str, Any], ref: str, workspace_id: str, res: MaterialiseResult,
     store: Any, owns_close: bool, compare: tuple[str, ...],
@@ -968,6 +1006,17 @@ async def _converge(
                 await store.delete(rid, workspace_id)
                 res.removed.append(rid)
         for rid, row in plan.items():
+            why = await _claimed_elsewhere(store, rid, row, workspace_id)
+            if why:
+                # #213 — fail closed: the other workspace keeps its row untouched.
+                path = _http_ingress_path(getattr(row, "yaml", None))
+                logger.error(
+                    "not arming %s for %s in workspace %r: %s. A trigger belongs to one "
+                    "workspace; give this one its own path (and name) or disable it there",
+                    f"webhook receiver {path}" if path else rid, ref, workspace_id, why,
+                )
+                res.unarmed.append(f"{rid} ({why})")
+                continue
             existing = await store.get(rid, workspace_id)
             if existing is None:
                 await store.create(row)

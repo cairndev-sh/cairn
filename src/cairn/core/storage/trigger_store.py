@@ -26,7 +26,9 @@ from __future__ import annotations
 from cairn.core.settings import getenv
 
 import asyncio
+import functools
 import os
+import threading
 import re
 from typing import Optional
 
@@ -75,6 +77,31 @@ class StoredTrigger(BaseModel):
             object.__setattr__(self, "id", _slug(self.name))
 
 
+class TriggerOwnedByAnotherWorkspace(ValueError):
+    """A write would take over another workspace's trigger row (#213).
+
+    Ids and names are unique across the whole store, not per workspace, and every
+    backend's ``create`` is an upsert: a row written for workspace B with an id or
+    name that A's row already holds used to REPLACE A's row and move it to B, so B
+    captured A's receiver. ``create`` refuses that instead; a caller answering an
+    HTTP request maps this to 409."""
+
+    def __init__(self, trigger_id: str, name: str, owner: str, workspace_id: str) -> None:
+        self.trigger_id, self.name, self.owner, self.workspace_id = trigger_id, name, owner, workspace_id
+        super().__init__(
+            f"trigger {name!r} (id {trigger_id!r}) already exists in workspace {owner!r}; "
+            f"workspace {workspace_id!r} cannot create or replace it — give it another name"
+        )
+
+
+def _claim_conflict(rows: "list[tuple[str, str, str]]", t: "StoredTrigger") -> None:
+    """Raise when any existing ``(id, name, workspace_id)`` row with ``t``'s id or
+    name belongs to another workspace (#213)."""
+    for rid, name, ws in rows:
+        if (rid == t.id or name == t.name) and ws != t.workspace_id:
+            raise TriggerOwnedByAnotherWorkspace(t.id, t.name, ws, t.workspace_id)
+
+
 class InMemoryTriggerStore:
     """Volatile store (tests / no-config default)."""
 
@@ -82,6 +109,7 @@ class InMemoryTriggerStore:
         self._by_id: dict[str, StoredTrigger] = {}
 
     async def create(self, t: StoredTrigger) -> StoredTrigger:
+        _claim_conflict([(r.id, r.name, r.workspace_id) for r in self._by_id.values()], t)
         self._by_id[t.id] = t
         return t
 
@@ -117,13 +145,30 @@ class InMemoryTriggerStore:
         pass
 
 
+def _conn_locked(fn):
+    """#163 — one ``sqlite3`` connection, shared across threads
+    (``check_same_thread=False``): every use holds the store's thread lock. The
+    asyncio lock serializes callers on one event loop only: a cached instance
+    (``StorageBackend.triggers``) used from two event loops, as test clients'
+    portal threads do, a cancelled ``to_thread`` whose worker keeps running, a
+    direct ``list_sync`` call, or ``close`` racing an in-flight read could each
+    drive the connection from two threads at once, which crashes CPython's
+    sqlite3 module (a segfault, not an exception). An RLock: re-entrant on
+    purpose (a locked caller may read again)."""
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        with self._conn_lock:
+            return fn(self, *args, **kwargs)
+    return wrapper
+
+
 class SqliteTriggerStore:
     """Embedded-SQLite store — restart-safe, single file. Mirrors
     :class:`~cairn.core.connections.SqliteConnectionStore`: the full
     :class:`StoredTrigger` serializes to a JSON ``data`` blob, async ops run via
-    ``asyncio.to_thread`` under a lock so they never block the event loop. The
-    load/merge path (router build, synchronous) uses :meth:`list_sync` — WAL +
-    ``check_same_thread=False`` make concurrent reads safe."""
+    ``asyncio.to_thread`` so they never block the event loop. The load/merge path
+    (router build, synchronous) uses :meth:`list_sync`. WAL does NOT make one
+    shared connection safe across threads: every use holds ``_conn_lock`` (#163)."""
 
     def __init__(self, path: str | None = None) -> None:
         import sqlite3  # stdlib, but the connection is an instance handle
@@ -136,6 +181,7 @@ class SqliteTriggerStore:
         if path != ":memory:":
             os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         self.path = path
+        self._conn_lock = threading.RLock()  # #163 — see _conn_locked
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
@@ -166,11 +212,24 @@ class SqliteTriggerStore:
         self._conn.commit()
         self._lock = asyncio.Lock()
 
+    @_conn_locked
     def _create_sync(self, t: StoredTrigger) -> None:
-        self._conn.execute(
-            "INSERT OR REPLACE INTO triggers (id, name, source, workspace_id, data) VALUES (?,?,?,?,?)",
-            (t.id, t.name, t.source, t.workspace_id, t.model_dump_json()),
-        )
+        # #213 — INSERT OR REPLACE drops any row holding this id OR name, whatever
+        # its workspace; refuse when that row is another workspace's. The check and the
+        # write share one IMMEDIATE transaction: another store instance on the same file
+        # (default_trigger_store() builds one per call) cannot write in between.
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            _claim_conflict(self._conn.execute(
+                "SELECT id, name, workspace_id FROM triggers WHERE id=? OR name=?", (t.id, t.name),
+            ).fetchall(), t)
+            self._conn.execute(
+                "INSERT OR REPLACE INTO triggers (id, name, source, workspace_id, data) VALUES (?,?,?,?,?)",
+                (t.id, t.name, t.source, t.workspace_id, t.model_dump_json()),
+            )
+        except BaseException:
+            self._conn.rollback()
+            raise
         self._conn.commit()
 
     async def create(self, t: StoredTrigger) -> StoredTrigger:
@@ -178,6 +237,7 @@ class SqliteTriggerStore:
             await asyncio.to_thread(self._create_sync, t)
         return t
 
+    @_conn_locked
     def _get_sync(self, sql: str, params: tuple) -> Optional[StoredTrigger]:
         row = self._conn.execute(sql, params).fetchone()
         return StoredTrigger.model_validate_json(row[0]) if row else None
@@ -198,6 +258,7 @@ class SqliteTriggerStore:
                 self._get_sync, "SELECT data FROM triggers WHERE name=?", (name,)
             )
 
+    @_conn_locked
     def list_sync(self, workspace_id: Optional[str] = None) -> list[StoredTrigger]:
         """Synchronous read for the load/merge path (router build is sync).
         ``workspace_id=None`` → all (the global router); a value → scoped to that
@@ -216,6 +277,7 @@ class SqliteTriggerStore:
         async with self._lock:
             return await asyncio.to_thread(self.list_sync, workspace_id)
 
+    @_conn_locked
     def _delete_sync(self, trigger_id: str, workspace_id: Optional[str]) -> bool:
         if workspace_id is not None:
             cur = self._conn.execute(
@@ -231,6 +293,7 @@ class SqliteTriggerStore:
         async with self._lock:
             return await asyncio.to_thread(self._delete_sync, trigger_id, workspace_id)
 
+    @_conn_locked
     def close(self) -> None:
         self._conn.close()
 
@@ -254,7 +317,9 @@ _INSERT_TRIGGER_PG_SQL = """
     ON CONFLICT (id) DO UPDATE
     SET name = EXCLUDED.name, source = EXCLUDED.source,
         workspace_id = EXCLUDED.workspace_id, data = EXCLUDED.data
+    WHERE triggers.workspace_id = EXCLUDED.workspace_id
 """
+_SELECT_TRIGGER_PG_CLAIMS = "SELECT id, name, workspace_id FROM triggers WHERE id = $1 OR name = $2"
 _SELECT_TRIGGER_PG_BY_ID = "SELECT data::text FROM triggers WHERE id = $1"
 _SELECT_TRIGGER_PG_BY_ID_WS = "SELECT data::text FROM triggers WHERE id = $1 AND workspace_id = $2"
 _SELECT_TRIGGER_PG_BY_NAME = "SELECT data::text FROM triggers WHERE name = $1"
@@ -306,9 +371,15 @@ class PostgresTriggerStore(PgSchemaInit):
     async def create(self, t: StoredTrigger) -> StoredTrigger:
         pool = await self._get_pool()
         async with pool.acquire() as c:
-            await c.execute(
+            # #213 — never take over another workspace's row; the WHERE on the
+            # upsert keeps that true even if a row lands between the two statements.
+            rows = await c.fetch(_SELECT_TRIGGER_PG_CLAIMS, t.id, t.name)
+            _claim_conflict([(r["id"], r["name"], r["workspace_id"]) for r in rows], t)
+            status = await c.execute(
                 _INSERT_TRIGGER_PG_SQL, t.id, t.name, t.source, t.workspace_id, t.model_dump_json()
             )
+            if status.split()[-1] == "0":  # the upsert's WHERE refused the update
+                raise TriggerOwnedByAnotherWorkspace(t.id, t.name, "another workspace", t.workspace_id)
         return t
 
     async def get(self, trigger_id: str, workspace_id: Optional[str] = None) -> Optional[StoredTrigger]:

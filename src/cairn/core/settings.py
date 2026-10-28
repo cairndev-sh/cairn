@@ -26,6 +26,7 @@ lookup that does it, and every module reads a cairn variable through it.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 from urllib.parse import urlsplit, urlunsplit
@@ -186,6 +187,43 @@ def default_sqlite_db() -> str:
     # registry stores use (it previously stripped a slash more than they did).
     return sqlite_path_from_url(getenv("CAIRN_STORAGE", "")) or str(
         Path.home() / ".cairn" / "cairn.db")
+
+
+def store_identity(sqlite_path: Optional[str] = None) -> Optional[tuple[str, str]]:
+    """``(label, fingerprint)`` naming the store this process's config-family stores
+    use, or ``None`` for an in-memory one (#229).
+
+    ``CAIRN_STORAGE`` selects it as the stores do: a Postgres DSN is labelled
+    ``postgres <host>:<port>/<db>`` (never the user or password), anything else is the
+    SQLite file, ``sqlite_path`` when the caller's store has its own path, else
+    :func:`default_sqlite_db`, labelled by its resolved path. The fingerprint, a
+    short sha256 of the label, is what ``/healthz`` advertises, so the CLI can tell
+    whether it writes the store a running engine reads without either side showing
+    the other a path.
+    """
+    url = getenv("CAIRN_STORAGE", "").strip()
+    if url.startswith(("postgres://", "postgresql://")):
+        parts = urlsplit(url)
+        try:
+            port = parts.port or 5432
+        except ValueError:
+            port = 5432
+        label = f"postgres {parts.hostname or 'localhost'}:{port}/{parts.path.lstrip('/')}"
+    else:
+        path = sqlite_path or default_sqlite_db()
+        if not path or path == ":memory:":
+            return None
+        label = f"sqlite {os.path.realpath(path)}"  # as sqlite3 opens it: no `~` expansion
+    return label, hashlib.sha256(label.encode()).hexdigest()[:16]
+
+
+def connection_store_identity() -> Optional[tuple[str, str]]:
+    """:func:`store_identity` of the connection store, chosen as
+    ``connections.default_connection_store`` chooses it: ``CAIRN_STORAGE`` first, then
+    the ``CAIRN_CONNECTIONS_DB`` SQLite path. The engine's ``/healthz`` and the CLI's
+    store check both call this, so a ``CAIRN_CONNECTIONS_DB`` set on either side is
+    compared, not silently ignored on one of them (#229)."""
+    return store_identity(getenv("CAIRN_CONNECTIONS_DB", "").strip() or None)
 
 
 # ─── Run store ───────────────────────────────────────────────────────
@@ -719,6 +757,12 @@ INVENTORY: list[SettingSpec] = [
         "Lifetime of an issued access token, in minutes (core.auth_tokens).",
     ),
     SettingSpec(
+        "refresh_token_days", "CAIRN_REFRESH_TOKEN_DAYS", "30", "auth",
+        "Lifetime of a remembered console sign-in (the refresh cookie and its server "
+        "row), in days; a sign-in that is not remembered lasts 12 hours "
+        "(core.refresh_tokens, ADR-0142).",
+    ),
+    SettingSpec(
         "api_user", "CAIRN_API_USER", "admin", "auth",
         "Username of the env-configured API user (core.triggers.auth).",
     ),
@@ -747,7 +791,8 @@ INVENTORY: list[SettingSpec] = [
     ),
     SettingSpec(
         "workspace", "CAIRN_WORKSPACE", "default", "auth",
-        "Workspace id used when no request context names one (core.workspace).",
+        "Workspace id used when no request context names one (core.workspace). With auth "
+        "on it must name an existing workspace (`default` always exists).",
     ),
     SettingSpec(
         "oauth_broker", "CAIRN_OAUTH_BROKER", "authlib", "auth",
@@ -992,6 +1037,11 @@ INVENTORY: list[SettingSpec] = [
     SettingSpec(
         "remote_exec_mode", "CAIRN_REMOTE_EXEC_MODE", "auto", "dataflow",
         "How the SSH engine runs a flow on a box: auto | image | venv (ADR-0104 D1).",
+    ),
+    SettingSpec(
+        "remote_env", "CAIRN_REMOTE_ENV", None, "dataflow",
+        "Names of control-plane env variables the SSH engine forwards to the job on the box; "
+        "credential-looking names are refused (profile key remote_env).",
     ),
     SettingSpec(
         "dataflow_remote_cmd", "CAIRN_DATAFLOW_REMOTE_CMD", "cairn-dataflow-run", "dataflow",

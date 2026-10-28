@@ -8,7 +8,7 @@ non-zero on FAIL** so a PR / pipeline is blocked.
 
 CI-agnostic by design: "non-zero exit blocks the pipeline" is universal, so this
 works in GitHub Actions, GitLab CI, Jenkins, a git hook, or a bare shell with no
-server and no GitHub integration — ``pip install cairn && cairn gate …``. See
+server and no GitHub integration — ``pip install cairndev && cairn gate …``. See
 ``examples/ci/`` for ready-to-copy GitHub / GitLab workflows (incl. posting the
 cited findings as a PR comment via ``gh pr comment``).
 

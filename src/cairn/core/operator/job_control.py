@@ -60,11 +60,14 @@ async def _safe_resume(resume: ResumeFn, rec: RemoteJobRecord, status: JobStatus
         logger.exception("resume failed for run %s (job %s)", rec.run_id, rec.id)
 
 
-async def _safe_cancel(cancel: CancelFn, rec: RemoteJobRecord) -> None:
+async def _safe_cancel(cancel: CancelFn, rec: RemoteJobRecord) -> bool:
+    """``True`` when the cancel reached the job; a failure is logged, never raised."""
     try:
         await cancel(rec)
     except Exception:  # noqa: BLE001 — a cancel failure must not kill the loop
         logger.exception("cancel failed for run %s (job %s)", rec.run_id, rec.id)
+        return False
+    return True
 
 
 async def _try_relaunch(
@@ -113,7 +116,7 @@ async def drive_once(
     ``retriable`` (box/instance gone, OOM — not a clean training error) AND has a
     recorded ``checkpoint_uri`` AND is under ``max_attempts`` is RE-SUBMITTED to
     resume from that checkpoint instead of failing the run. Returns a
-    ``{done, failed, aborted, relaunched, running, claimed}`` tally."""
+    ``{done, failed, cancelled, aborted, relaunched, running, claimed}`` tally."""
     # ADR-0104 D2 (#565): a pull worker that died stops extending its lease. Put
     # its job back on the queue BEFORE this tick reads the active set, so a lost
     # worker costs one lease, not the run. Guarded because ``store`` is a
@@ -127,7 +130,7 @@ async def drive_once(
         except Exception:  # noqa: BLE001 — a failed sweep must not kill the loop
             logger.debug("worker-lease sweep failed", exc_info=True)
     active = await store.claim_active(limit=limit)
-    done = failed = aborted = relaunched = running = 0
+    done = failed = cancelled = aborted = relaunched = running = 0
     for rec in active:
         # #2025: live report events first, so a job that finishes this tick
         # has its whole curve in the store before the run resumes.
@@ -179,6 +182,12 @@ async def drive_once(
             await store.mark_failed(rec.id, status.error)
             await _safe_resume(resume, rec, status)
             failed += 1
+        elif status.state == "cancelled":
+            # ADR-0151 D9 — stopped by a cancel: terminal, never relaunched, and not
+            # a trajectory the learning gate may judge. Closed and resumed as such.
+            await store.mark_cancelled(rec.id)
+            await _safe_resume(resume, rec, status)
+            cancelled += 1
         elif cancel is not None and learning is not None and (status.metrics or {}).get("eval_losses"):
             # Mid-train quality gate: is it learning? If not, abort to stop spend.
             v = learning_verdict(status.metrics["eval_losses"], learning)
@@ -192,7 +201,7 @@ async def drive_once(
                 running += 1
         else:
             running += 1  # still running — leave it active for the next tick
-    return {"done": done, "failed": failed, "aborted": aborted, "relaunched": relaunched,
+    return {"done": done, "failed": failed, "cancelled": cancelled, "aborted": aborted, "relaunched": relaunched,
             "running": running, "claimed": len(active)}
 
 
@@ -229,6 +238,37 @@ async def run_control_loop(
 # ─── default wiring (resolve operator by provider; resume via dispatcher) ──
 
 
+async def _record_compute(rec: RemoteJobRecord) -> Any:
+    """The job's compute connection, resolved in the account that owns the job's
+    workspace. The control worker runs outside any request, so the record — not
+    the ambient context — names the account; a tenant's job never resolves the
+    deployment's connection or another account's by the same name."""
+    from cairn.core.connections import resolve_connection  # noqa: PLC0415 — lazy: off the import path
+    from cairn.core.workspace import workspace_account  # noqa: PLC0415 — lazy, as above
+
+    # called inside workspace_scope(rec.workspace_id): a record naming no workspace has
+    # already been refused with auth on, and means the implicit default with auth off
+    account = await workspace_account(rec.workspace_id or None)
+    return await resolve_connection(rec.compute_target, account_id=account)
+
+
+async def _record_scope(rec: RemoteJobRecord, op: Any) -> Any:
+    """``workspace_scope(rec.workspace_id)`` for a job driven outside any request.
+    A record that names no workspace is refused with auth on; the job it names is
+    then cancelled (``op.cancel``, best-effort) before the refusal propagates, as
+    nothing will poll or resume it any more and it would keep running."""
+    from cairn.core.workspace import WorkspaceScopeRequired, workspace_scope  # noqa: PLC0415 — lazy: off the import path
+
+    try:
+        return workspace_scope(rec.workspace_id)
+    except WorkspaceScopeRequired:
+        try:
+            await op.cancel(rec.handle())
+        except Exception:  # noqa: BLE001 — best-effort: the refusal itself must still land
+            logger.exception("could not cancel refused job %s (run %s)", rec.id, rec.run_id)
+        raise
+
+
 def build_default_poll(registry: Any = None) -> PollFn:
     """A ``poll`` that resolves the operator by ``record.provider`` (operator
     name) from the registry, reconstructs its input, rebuilds a context (with
@@ -254,11 +294,10 @@ def build_default_poll(registry: Any = None) -> PollFn:
         # ADR-0118 D4 — the flow door's admitted stage contracts, persisted in its handle meta
         ctx = OperationContext(pipeline_id=rec.run_id, node_name=rec.node_name,
                                dataflow_contracts=(rec.job_meta or {}).get("dataflow_contracts"))
-        if rec.compute_target:
-            from cairn.core.connections import resolve_connection  # lazy: off the import path
-
-            ctx.compute = await resolve_connection(rec.compute_target)
-        return await op.poll(rec.handle(), inp, ctx)
+        with await _record_scope(rec, op):  # the job's own workspace, not the worker's
+            if rec.compute_target:
+                ctx.compute = await _record_compute(rec)
+            return await op.poll(rec.handle(), inp, ctx)
 
     return poll
 
@@ -280,11 +319,10 @@ def build_default_relaunch(registry: Any = None) -> RelaunchFn:
         # ADR-0118 D4 — the flow door's admitted stage contracts, persisted in its handle meta
         ctx = OperationContext(pipeline_id=rec.run_id, node_name=rec.node_name,
                                dataflow_contracts=(rec.job_meta or {}).get("dataflow_contracts"))
-        if rec.compute_target:
-            from cairn.core.connections import resolve_connection  # lazy: off the import path
-
-            ctx.compute = await resolve_connection(rec.compute_target)
-        return await op.submit(inp, ctx)
+        with await _record_scope(rec, op):  # the job's own workspace, not the worker's
+            if rec.compute_target:
+                ctx.compute = await _record_compute(rec)
+            return await op.submit(inp, ctx)
 
     return relaunch
 
@@ -333,17 +371,17 @@ async def cancel_remote_jobs_for_run(run_id: str, *, registry: Any = None) -> in
 
     Called when a run is cancelled so a cancelled run does NOT orphan the remote
     (GPU) job — a leaked marketplace pod or an SSH training process keeps billing
-    (#601). Best-effort per job (a cancel failure is logged, never raised);
-    returns the number of jobs cancelled."""
+    (#601). Best-effort per job (a cancel failure is logged, never raised); every
+    record is closed, and the count is of the jobs the cancel actually reached."""
     from cairn.core.operator.job_store import get_remote_job_store  # noqa: PLC0415
 
     store = get_remote_job_store()
     cancel = build_default_cancel(registry)
     n = 0
     for rec in await active_remote_jobs_for_run(run_id, store=store):
-        await _safe_cancel(cancel, rec)
+        reached = await _safe_cancel(cancel, rec)
         await store.mark_cancelled(rec.id)
-        n += 1
+        n += int(reached)
     return n
 
 
@@ -367,6 +405,8 @@ def build_default_resume(dispatcher: Any) -> ResumeFn:
     async def resume(rec: RemoteJobRecord, status: JobStatus) -> None:
         if status.state == "succeeded":
             decision = {"status": "succeeded", "result": _result_dict(status.output)}
+        elif status.state == "cancelled":  # ADR-0151 D9 — a cancel, not a crash
+            decision = {"status": "cancelled", "error": status.error or "remote job cancelled"}
         else:
             decision = {"status": "failed", "error": status.error or "remote job failed"}
         await dispatcher.resume_run(rec.run_id, decision)

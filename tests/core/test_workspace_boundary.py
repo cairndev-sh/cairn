@@ -57,10 +57,11 @@ async def test_no_workspace_asserted_is_permissive():
     await assert_workspace_allowed("", "acme", store=await _store())
 
 
-async def test_a_missing_workspace_is_left_to_the_normal_404_path():
-    """Refusing here would let a caller probe which ids exist by watching the
-    shape of the failure — a missing workspace and a forbidden one must fail
-    the same way."""
+async def test_with_auth_off_a_missing_workspace_is_permitted():
+    """Auth off (no JWT secret in this module's environment): no tenant boundary, so
+    a missing workspace is not refused here. With auth on it is refused exactly like
+    another account's (tests/core/test_unknown_workspace_404.py), so the two fail
+    the same way and existence never leaks."""
     await assert_workspace_allowed("no-such-ws", "acme", store=await _store())
 
 

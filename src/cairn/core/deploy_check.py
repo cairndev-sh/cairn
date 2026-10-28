@@ -576,6 +576,127 @@ def env_from_values(values: dict) -> dict[str, str]:
     return env
 
 
+#: A pullWorker.extraEnv name the chart refuses (_helpers.tpl cairn.pullWorkerUnsafeName):
+#: extraEnv is rendered into a ConfigMap, so credentials and database settings go in the
+#: worker's own Secret instead. A marker counts as an underscore-separated segment or a
+#: segment suffix, case-insensitively: HF_TOKEN and APITOKEN are refused,
+#: TOKENIZERS_PARALLELISM is not.
+_PULL_WORKER_UNSAFE_SEGMENT = re.compile(r"(KEY|SECRET|TOKEN|PASSWORD|DSN)S?\Z")
+#: A value carrying a password in a URL (cairn.pullWorkerUnsafeValue).
+_URL_WITH_PASSWORD = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^/?#@\s]*:[^/?#@\s]+@")
+_ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+
+
+def pull_worker_unsafe_name(name: str) -> bool:
+    """The chart's rule for a pullWorker.extraEnv name (see the constants above)."""
+    u = str(name).upper()
+    return (any(_PULL_WORKER_UNSAFE_SEGMENT.search(seg) for seg in u.split("_"))
+            or u.endswith("STORAGE") or u == "OTEL_EXPORTER_OTLP_HEADERS"
+            or "CONNECTION_STRING" in u or u.startswith("CAIRN_CONN_"))
+
+
+def _pull_worker_extra_env_checks(values: dict) -> list[CheckResult]:
+    """The chart's pullWorker.extraEnv refusals, before a render: names that look like a
+    secret or a database setting, and values with a password in a URL. Names and URL
+    credentials only — any other credential belongs in the worker's Secret."""
+    extra = _get(values, "pullWorker", "extraEnv", default={}) or {}
+    if not isinstance(extra, dict):
+        return [CheckResult("pull_worker_extra_env", "fail",
+                            "pullWorker.extraEnv must be a map of NAME: value.", category="secrets")]
+    out: list[CheckResult] = []
+    for name, value in extra.items():
+        if not _ENV_NAME_RE.match(str(name)):
+            out.append(CheckResult("pull_worker_extra_env", "fail",
+                                   f"pullWorker.extraEnv key {name!r} is not an environment "
+                                   "variable name.", category="secrets"))
+        elif pull_worker_unsafe_name(name):
+            out.append(CheckResult("pull_worker_extra_env", "fail",
+                                   f"pullWorker.extraEnv.{name} looks like a secret or a database "
+                                   "setting — extraEnv is rendered into a ConfigMap; put it in the "
+                                   "worker's own Secret (pullWorker.existingSecret).",
+                                   category="secrets"))
+        elif _URL_WITH_PASSWORD.search(str(value)):
+            out.append(CheckResult("pull_worker_extra_env", "fail",
+                                   f"pullWorker.extraEnv.{name} has a URL with a password in it — "
+                                   "put the credential in the worker's own Secret.",
+                                   category="secrets"))
+    return out
+
+
+def _control_plane_service_account(values: dict) -> str:
+    """The control plane's ServiceAccount name, when the values alone decide it
+    (cairn.serviceAccountName); ``""`` when it depends on the release name."""
+    name = str(_get(values, "serviceAccount", "name", default="") or "").strip()
+    if name:
+        return name
+    if not _get(values, "serviceAccount", "create", default=True):
+        return "default"
+    return str(_get(values, "fullnameOverride", default="") or "").strip()
+
+
+def _pull_worker_service_account_checks(values: dict) -> list[CheckResult]:
+    """The chart's pull-worker ServiceAccount refusals: create=false with no name, and
+    the control plane's ServiceAccount (when the values name it)."""
+    create = _get(values, "pullWorker", "serviceAccount", "create", default=True)
+    name = str(_get(values, "pullWorker", "serviceAccount", "name", default="") or "").strip()
+    if not create and not name:
+        return [CheckResult("pull_worker_service_account", "fail",
+                            "pullWorker.serviceAccount.create=false needs "
+                            "pullWorker.serviceAccount.name (the pre-provisioned ServiceAccount).",
+                            category="secrets")]
+    override = str(_get(values, "fullnameOverride", default="") or "").strip()
+    worker = name or (f"{override}-pull-worker" if override else "")
+    control = _control_plane_service_account(values)
+    if worker and control and worker == control:
+        return [CheckResult("pull_worker_service_account", "fail",
+                            f"the pull worker's ServiceAccount {worker!r} is the control plane's — "
+                            "name another one (pullWorker.serviceAccount.name).",
+                            category="secrets")]
+    return []
+
+
+def _pull_worker_token_checks(values: dict) -> list[CheckResult]:
+    """The chart's pull-worker token refusals (_helpers.tpl), before a render: no token,
+    both values, a non-string token, the JWT secret, and the control plane's Secret.
+
+    The release name is a `helm install` argument, so the control plane's Secret is
+    known here only when `secrets.existingSecret` or `fullnameOverride` names it; a
+    pull-worker Secret that merely looks like the chart's default name is a warning."""
+    def fail(msg: str) -> CheckResult:
+        return CheckResult("pull_worker_token", "fail", msg, category="secrets")
+
+    raw = _get(values, "pullWorker", "token", default="")
+    if raw and not isinstance(raw, str):
+        return [fail(f"pullWorker.token must be a string, not {type(raw).__name__} — quote it.")]
+    token = (raw or "").strip()
+    existing = str(_get(values, "pullWorker", "existingSecret", default="") or "").strip()
+    if token and existing:
+        return [fail("pullWorker.token AND pullWorker.existingSecret are both set — pick one.")]
+    if not token and not existing:
+        return [fail("pullWorker.enabled=true but neither pullWorker.token nor "
+                     "pullWorker.existingSecret is set (a whitespace-only token counts as "
+                     "unset) — the pull worker reads a worker-pool token (`cairn remote "
+                     "worker-token --name <pool>`) from a Secret of its own.")]
+    jwt = str(_get(values, "secrets", "obsJwtSecret", default="") or "").strip()
+    if token and jwt and token == jwt:
+        return [fail("pullWorker.token equals secrets.obsJwtSecret — the worker must never "
+                     "hold the control plane's JWT secret.")]
+    if existing:
+        cp = str(_get(values, "secrets", "existingSecret", default="") or "").strip()
+        override = str(_get(values, "fullnameOverride", default="") or "").strip()
+        known = {n for n in (cp, f"{override}-secrets" if override and not cp else "") if n}
+        if existing in known:
+            return [fail(f"pullWorker.existingSecret is {existing!r}, the control plane's "
+                         "Secret — give the worker a Secret of its own.")]
+        if not cp and existing.endswith("-secrets"):
+            return [CheckResult(
+                "pull_worker_token", "warn",
+                f"pullWorker.existingSecret {existing!r} looks like the chart's control-plane "
+                "Secret name (<release>-secrets); the chart refuses it if it is.",
+                category="secrets")]
+    return []
+
+
 def check_values(values: dict, strict: bool = False) -> list[CheckResult]:
     """The chart-only rules — everything else comes from ``check_deploy``."""
     out: list[CheckResult] = []
@@ -637,6 +758,10 @@ def check_values(values: dict, strict: bool = False) -> list[CheckResult]:
             "pullWorker.enabled=true but pullWorker.command is empty — the chart does not "
             "hard-code D2's command (#565); supply it explicitly.",
             category="runtime"))
+    if _get(values, "pullWorker", "enabled"):
+        out.extend(_pull_worker_token_checks(values))
+        out.extend(_pull_worker_extra_env_checks(values))
+        out.extend(_pull_worker_service_account_checks(values))
 
     # ── ingress ──────────────────────────────────────────────────────────
     if _get(values, "ingress", "enabled", default=True):
@@ -778,12 +903,41 @@ _SSH_REQUIRED = {
 }
 
 
+def _exec_unit(conn_mode: str, conn_image: str, env_mode: str,
+               env_image: str) -> tuple[str, str, bool]:
+    """What the builtin SSH engine will run on a box: ``(kind, image,
+    from_connection)`` with ``kind`` one of ``venv`` / ``image`` / ``refused``.
+
+    A TWIN of ``operator_dataflow.engines_ssh.resolve_exec_mode`` — core may
+    not import an operator pack, so the precedence is restated here and
+    ``tests/core/test_exec_unit_parity.py`` runs one matrix through both. The
+    connection's ``mode`` beats the environment's ``remote_exec_mode``; the
+    connection's ``image`` beats ``remote_image``; ``auto`` (or anything else)
+    is image when an image is named, else venv; image mode with no image
+    anywhere is refused at submit (ADR-0150 D1). ``from_connection`` says
+    whether the connection's own ``mode`` chose it, which decides the remedy."""
+    mode = (conn_mode or "").strip().lower()
+    from_connection = bool(mode)
+    if not mode:
+        mode = (env_mode or "").strip().lower() or "auto"
+    named = (conn_image or "").strip() or (env_image or "").strip()
+    if mode not in ("image", "venv"):
+        mode = "image" if named else "venv"
+    if mode == "venv":
+        return "venv", "", from_connection
+    if not named:
+        return "refused", "", from_connection
+    return "image", named, from_connection
+
+
 def check_compute_ssh(
     key: str,
     target: str,
     config: dict | None,
     *,
     has_key: bool | None = None,
+    env_mode: str | None = None,
+    env_image: str | None = None,
 ) -> list[CheckResult]:
     """Validate the ``compute.ssh`` connection an environment names as its
     compute target. Pure: the caller resolves the connection.
@@ -797,11 +951,15 @@ def check_compute_ssh(
     Empty ``target`` returns no rows: an environment with no compute target
     runs ML in-process, which is a legal dev shape.
 
-    A second row reports the EXECUTION UNIT (ADR-0104 D1): a target with no
-    image still runs from the box's hand-installed virtualenv, which is the
-    thing that drifted and blocked 2026-09-07 (#2069), and an image pinned to
-    ``:latest`` (or to no tag at all) means the run record cannot name the
-    build that produced its artifacts.
+    A second row reports the EXECUTION UNIT (ADR-0104 D1, ADR-0150 D1) with
+    the engine's own precedence (:func:`_exec_unit`): ``env_mode`` /
+    ``env_image`` are the environment's selected ``remote_exec_mode`` /
+    ``remote_image``. Venv is OK; image mode with no image anywhere is a FAIL,
+    because the engine refuses it at submit; an image pinned to ``:latest``
+    (or to no tag at all) warns, because the run record then cannot name the
+    build that produced its artifacts. A caller that cannot read the
+    environment passes neither, and a row whose answer depends on it is a
+    conditional warn that says so.
     """
     name = f"compute_target:{key}"
     if not (target or "").strip():
@@ -834,34 +992,55 @@ def check_compute_ssh(
         f"{key} → {target!r} = {config.get('user')}@{config.get('host')}:{port}",
         category="runtime")]
 
-    image = str(config.get("image") or "").strip()
-    mode = str(config.get("mode") or "").strip().lower()
+    conn_image = str(config.get("image") or "").strip()
+    conn_mode = str(config.get("mode") or "").strip()
     mode_name = f"{name}:mode"
-    if mode == "venv" or (not image and mode != "image"):
+    if env_mode is None and env_image is None:
+        # The environment was not read: decide only what holds for every
+        # environment, and say the rest depends on it.
+        outcomes = {_exec_unit(conn_mode, conn_image, m, i)
+                    for m in ("auto", "venv", "image") for i in ("", "<environment image>")}
+        if len(outcomes) != 1:
+            out.append(CheckResult(
+                mode_name, "warn",
+                f"{target!r}: what runs depends on the environment's "
+                f"`remote_exec_mode` / `remote_image`, which were not read here — "
+                f"the box's virtualenv when no image is named; image mode with no "
+                f"image on the connection or in `remote_image` / CAIRN_TRAIN_IMAGE "
+                f"is refused at submit",
+                category="runtime"))
+            return out
+        kind, image, from_connection = outcomes.pop()
+    else:
+        kind, image, from_connection = _exec_unit(
+            conn_mode, conn_image, env_mode or "", env_image or "")
+    if kind == "venv":
         out.append(CheckResult(
-            mode_name, "warn",
-            f"{target!r} runs from the box's hand-installed virtualenv (venv "
-            f"mode) — that install drifts and stopped carrying the flow kernel "
-            f"the fine-tune flow needs (#2069). Set the connection's `image` "
-            f"(or the `remote_image` backend / CAIRN_TRAIN_IMAGE) to the pinned "
-            f"cairn-train-gpu tag; ADR-0104 D1.",
+            mode_name, "ok", f"{target!r} runs from the box's virtualenv (venv mode)",
             category="runtime"))
         return out
-    tag = image.rsplit("/", 1)[-1].partition(":")[2] if image else ""
-    if not image:
+    if kind == "refused":
+        if from_connection:
+            detail = (f"{target!r} sets mode = image but no image is named — every "
+                      f"dispatch is refused at submit. Set the connection's `image` "
+                      f"to a pinned tag, or change its `mode` (the environment's "
+                      f"`remote_exec_mode` does not override a connection's mode).")
+        else:
+            detail = (f"{target!r} runs in image mode (`remote_exec_mode`) but no "
+                      f"image is named — every dispatch is refused at submit. Set "
+                      f"`remote_image` / CAIRN_TRAIN_IMAGE or the connection's "
+                      f"`image` to a pinned tag, or set `remote_exec_mode` to auto "
+                      f"or venv.")
+        out.append(CheckResult(mode_name, "fail", detail, category="runtime"))
+        return out
+    tag = image.rsplit("/", 1)[-1].partition(":")[2]
+    if not tag or tag == "latest":
         out.append(CheckResult(
             mode_name, "warn",
-            f"{target!r} is in image mode but names no image — the engine falls "
-            f"back to its pinned default; pin the tag explicitly so the "
-            f"environment, not the code, decides which build runs.",
-            category="runtime"))
-    elif not tag or tag == "latest":
-        out.append(CheckResult(
-            mode_name, "warn",
-            f"{target!r} runs {image!r} — a moving tag. The run record then "
-            f"cannot name the build that produced its artifacts (the ambiguity "
-            f"behind #1776). Pin an immutable tag, e.g. the image workflow's "
-            f":<sha>.",
+            f"{target!r} runs the image {image!r} — a moving tag. The run record "
+            f"then cannot name the build that produced its artifacts (the "
+            f"ambiguity behind #1776). Pin an immutable tag, e.g. the image "
+            f"workflow's :<sha>.",
             category="runtime"))
     else:
         out.append(CheckResult(

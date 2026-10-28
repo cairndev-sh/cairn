@@ -8,6 +8,7 @@ Stage 4  Synthesize      LLM generates grounded answer with citations
 from __future__ import annotations
 
 import logging
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -18,7 +19,7 @@ from cairn.core.backend_connections import apply_backend_connection
 from cairn.core.workspace import workspace_collection
 from cairn.services.rag.embeddings import EmbeddingProvider, get_embedder
 from cairn.services.rag.schemas import QueryResponse, SourceNode
-from cairn.services.rag.stores import get_vector_store
+from cairn.services.rag.stores import SHARED_STORE_LOCK, get_vector_store, on_collection
 from cairn.services.rag.stores.base import VectorStore
 
 logger = logging.getLogger(__name__)
@@ -74,11 +75,15 @@ class QueryWorkflow(Workflow):
         *args,
         synthesis_prompt: str | None = None,
         job_tag: str = "rag",
+        collection: str | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.store = store
         self.embedder = embedder
+        #: When set, the retrieval selects this collection under the shared store's
+        #: lock (:func:`on_collection`); ``None`` = the caller owns the store.
+        self.collection = collection
         self.synthesis_prompt = synthesis_prompt or _DEFAULT_SYNTHESIS_PROMPT
         self.job_tag = job_tag
 
@@ -102,11 +107,16 @@ class QueryWorkflow(Workflow):
 
     @step
     async def hybrid_retrieve(self, ev: EmbeddedQueryEvent) -> RetrievedEvent:
-        candidates = await self.store.search(
-            dense=ev.dense_emb,
-            sparse=ev.sparse_vec,
-            top_k=ev.top_k * 3,
-        )
+        # only select + retrieve hold the shared store's lock: the query is embedded
+        # before it and the answer synthesised after it
+        scope = (nullcontext(self.store) if self.collection is None
+                 else on_collection(self.store, self.collection, self.embedder.dim, SHARED_STORE_LOCK))
+        async with scope as store:
+            candidates = await store.search(
+                dense=ev.dense_emb,
+                sparse=ev.sparse_vec,
+                top_k=ev.top_k * 3,
+            )
         logger.info("[retrieve] %d candidates after RRF", len(candidates))
         return RetrievedEvent(
             query_str=ev.query_str,
@@ -211,7 +221,8 @@ async def search(
     collection = workspace_collection(collection or s.rag_collection_name)
 
     try:
-        await store.initialize(collection, embedder.dim)
+        async with on_collection(store, collection, embedder.dim, SHARED_STORE_LOCK):
+            pass  # the collection exists (or the error surfaces) before the query runs
     except Exception as exc:
         logger.warning("RAG store initialization failed: %s", exc)
         return {"answer": "Knowledge base is not available.", "sources": []}
@@ -220,6 +231,7 @@ async def search(
         store, embedder,
         synthesis_prompt=synthesis_prompt,
         job_tag=job_tag,
+        collection=collection,  # the store is shared: the retrieval selects it again
         timeout=120,
         verbose=False,
     )

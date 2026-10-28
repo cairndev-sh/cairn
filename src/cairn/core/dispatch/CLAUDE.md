@@ -21,6 +21,8 @@ third launch path; do not call `compile_template` + run directly (the CLI dev lo
 
 **Allowed deps.** `engine`, `operator`, `approval`, `policy`, `storage`, `dataflow`, `bus`,
 `runtime`, `obs`, `budget_reservations`, `liveness` (the owner id, lock and probe — ADR-0125),
+`connections` (function-local: a compute target's connection config — `max_in_flight`,
+`hourly_usd` — read core-to-core, no secret resolved; ADR-0151 D1),
 doors, `pack` (function-local imports only:
 profiles, loader, provisioning, the contract-resolution facade — #2240 C). **Forbidden.** any operator pack (`from
 operator_…` — AST test), `cairn.packs.*`, new imports of `cairn.core.triggers` (existing

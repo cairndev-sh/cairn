@@ -10,7 +10,7 @@
 # ── image ────────────────────────────────────────────────────────────────
 image:
   # Published by .github/workflows/release.yml on every `v*` tag, tagged with the
-  # bare version (`0.1.3`). The GHCR package is public: no pull secret needed.
+  # bare version (`0.3.1`). The GHCR package is public: no pull secret needed.
   repository: ghcr.io/cairndev-sh/cairn-engine
   # Empty → Chart.appVersion. PIN A DIGEST OR TAG IN PROD — `--strict` fails
   # on `latest` because a rolling tag makes "what is deployed" unanswerable.
@@ -68,17 +68,59 @@ worker:
   tolerations: []
   affinity: {}
 
-# ── pull worker — D2 (#565), NOT implemented by this chart ───────────────
-# D2 builds `cairn worker --pull`: a machine that dials OUT to the control
-# plane, claims work and reports over the job channel. The chart ships the
-# DEPLOYMENT shape only; the command is yours to supply once D2 lands, so this
-# chart never has to guess a flag that does not exist yet.
+# ── pull worker (`cairn worker --pull`, #565) ─────────────────────────────
+# A machine that dials OUT to the control plane, claims jobs and reports over
+# the job channel. The chart has no default command; supply one:
 #   pullWorker:
 #     enabled: true
-#     command: ["cairn", "worker", "--pull", "--control-plane", "https://cairn.example.com"]
+#     command: ["cairn", "worker", "--pull", "--engine-url", "https://cairn.example.com"]
+# With auth on (the chart's default) claiming needs a worker credential: a
+# worker-pool token, minted where CAIRN_JWT_SECRET is set with
+#   cairn remote worker-token --name <pool>
+# and read from CAIRN_ENGINE_TOKEN (or `--token`). A signed-in user's token gets
+# 403 on /jobs/claim. The worker reads the token from a Secret of its OWN and
+# its settings from a ConfigMap of its own (an allowlist plus extraEnv), and runs
+# under a ServiceAccount of its own with no API token mounted. It receives no
+# database settings, no OTEL headers, no env.extra (apart from the
+# CAIRN_ENGINE_URL fallback) and nothing from the control plane's Secret or
+# ServiceAccount.
 pullWorker:
   enabled: false
   command: []          # REQUIRED when enabled — rendering fails without it
+  # REQUIRED when enabled, one of the two. `token` is rendered into the
+  # <release>-pull-worker Secret; `existingSecret` names a Secret you manage,
+  # holding the key CAIRN_ENGINE_TOKEN (and anything else the worker's jobs
+  # need). Never the control plane's Secret: the chart refuses that. The token
+  # is trimmed; whitespace only counts as unset. Changing `token` rolls the
+  # worker; rotating the token inside an existingSecret does not (restart it:
+  # kubectl rollout restart deployment/<release>-pull-worker). A Secret you
+  # already have named <release>-pull-worker collides with the rendered one.
+  token: ""            # a worker-pool token (`cairn remote worker-token --name <pool>`)
+  existingSecret: ""
+  # CAIRN_ENGINE_URL in the worker's ConfigMap (empty → env.extra.CAIRN_ENGINE_URL,
+  # else env.extra.OBS_ENGINE_URL, else none; the command's --engine-url works
+  # either way).
+  engineUrl: ""
+  # The ONLY way to give the worker other settings (it does not read env.extra).
+  # Rendered into its ConfigMap. The chart refuses a NAME that looks like a secret
+  # or a database setting (a KEY/SECRET/TOKEN/PASSWORD/DSN segment, *_STORAGE,
+  # CONNECTION_STRING, CAIRN_CONN_*, OTEL_EXPORTER_OTLP_HEADERS) and a VALUE with a
+  # password in a URL (scheme://user:pass@…). That check covers names and URL
+  # credentials only: any other credential belongs in the worker's Secret
+  # (existingSecret). The same goes for MLFLOW_TRACKING_URI and
+  # OTEL_EXPORTER_OTLP_ENDPOINT, which the worker gets verbatim.
+  extraEnv: {}
+  serviceAccount:
+    # true: the chart renders the worker's ServiceAccount (name below, else
+    # <release>-pull-worker). false: name an existing one (required), never the
+    # control plane's. The pod never mounts an API token either way.
+    create: true
+    name: ""
+    # e.g. eks.amazonaws.com/role-arn or iam.gke.io/gcp-service-account for the
+    # worker's own cloud identity (create=true only). The cloud-side binding is
+    # keyed to the ServiceAccount NAME (IRSA trust policy, GKE Workload Identity
+    # binding, EKS Pod Identity association): point it at this one.
+    annotations: {}
   replicaCount: 1
   resources:
     requests:
@@ -156,7 +198,9 @@ env:
   apiUser: admin            # CAIRN_API_USER
   requireAuth: true         # CAIRN_REQUIRE_AUTH
   profile: ""               # CAIRN_PROFILE — REQUIRED (#2296): the deployment profile; the chart refuses to render without it
-  # Anything else, verbatim, into the ConfigMap.
+  # Anything else, verbatim, into the ConfigMap. Behind the chart's TLS ingress
+  # set CAIRN_PUBLIC_URL here to https://<ingress.host> (the sign-in cookie is
+  # Secure only then; the OAuth callback is built from it).
   extra: {}
 
 # ── artifacts (the dbos-postgres tier's MinIO/S3 fields) ─────────────────

@@ -154,6 +154,7 @@ def compile_template(
     _validate_schema_refs(spec, path)
 
     # Dispatch to the right builder
+    unsupported_mock_operators: list[str] = []
     if isinstance(spec.flow, PromptFlow):
         runnable = _build_prompt(spec, prose)
         flow_type = "prompt"
@@ -176,6 +177,7 @@ def compile_template(
             spec, prose, registry,
             operations_dir=operations_dir,
             source_path=path,
+            unsupported_mock_operators=unsupported_mock_operators,
         )
         flow_type = "state_machine"
     else:
@@ -193,6 +195,7 @@ def compile_template(
         flow_type=flow_type,
         runnable=runnable,
         content_hash=content_hash,
+        unsupported_mock_operators=tuple(dict.fromkeys(unsupported_mock_operators)),
     )
 
 
@@ -658,6 +661,7 @@ def _build_state_machine(
     runtime: Runtime | None = None,
     operations_dir: Path | None = None,
     source_path: Path | None = None,
+    unsupported_mock_operators: list[str] | None = None,
 ):
     """Compile a behavior-tree state_machine to a LangGraph StateGraph.
 
@@ -730,6 +734,7 @@ def _build_state_machine(
         max_cost_usd=_budget_cost_cap(spec),
         operations_dir=operations_dir,
         from_pack=from_pack,
+        unsupported_mock_operators=unsupported_mock_operators,
     )
 
     # Track ID counter for synthetic nodes (parallel dispatch/join etc.)
@@ -918,6 +923,7 @@ class _ActionNodeFactory:
         operations_dir: Path | None = None,
         from_pack: str | None = None,
         contract_prefix: str = "",
+        unsupported_mock_operators: list[str] | None = None,
     ):
         self.nodes_map = nodes_map
         # #2241 C — a flattened child's nodes keep their bare refs in the parent graph;
@@ -937,6 +943,9 @@ class _ActionNodeFactory:
         # pack's identity (within-pack rule + cross-pack encapsulation). None
         # (templates outside any pack) → permissive resolution.
         self.from_pack = from_pack
+        self.unsupported_mock_operators: list[str] = (
+            unsupported_mock_operators if unsupported_mock_operators is not None else []
+        )
         self._built: dict[str, Any] = {}
         # Set True when any OperationBTNode is gateable at compile time
         # (operator requires_approval, or its binding declares approval.required),
@@ -1309,6 +1318,10 @@ def _compile_bt(bt: BTNode, graph: StateGraph, factory: _ActionNodeFactory, fres
         from cairn.core.engine.skill_engine import resolve_template_path
         sub_path = resolve_template_path(bt.template, from_pack=factory.from_pack)
         sub_compiled = compile_template(sub_path, registry=factory.registry)
+        factory.unsupported_mock_operators.extend(
+            f"{bt.template}/{operator}"
+            for operator in sub_compiled.unsupported_mock_operators
+        )
 
         # Phase 2b — validate the parent's inputs/outputs mapping against the
         # child's declared schemas. Eager, at compile time. The validator
@@ -1510,6 +1523,11 @@ def _compile_bt(bt: BTNode, graph: StateGraph, factory: _ActionNodeFactory, fres
                 f"OperationBTNode {bt.node_ref!r} ({binding_site}) "
                 f"references unregistered operator {binding.operator!r}: {e}"
             ) from e
+
+        if not getattr(op_cls, "supports_mock", False):
+            factory.unsupported_mock_operators.append(
+                f"{bt.node_ref} ({binding.operator})"
+            )
 
         # 2b (#1107): `with:`-form / bare inline nodes elaborate against the
         # operator's schemas — unmapped required → $input.<f>, optional →

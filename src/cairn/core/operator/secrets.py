@@ -20,7 +20,7 @@ provider class from the operator registry, cached. Call
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Mapping, Optional
 
 from cairn.core.operator.protocol import NullSecretStore, SecretStore
 
@@ -101,16 +101,49 @@ def reset_secret_provider() -> None:
     _CACHE = _UNSET
 
 
-def build_scoped_secrets(declared: list[str]) -> SecretStore:
+class _AccountSecretValues:
+    """The backend of a tenant account's ``ctx.secrets``: the values its own
+    connections supplied for this invocation, and nothing else."""
+
+    def __init__(self, values: Mapping[str, str]) -> None:
+        self._values = dict(values)
+
+    def get(self, name: str) -> str:
+        if name not in self._values:
+            raise KeyError(f"secret {name!r} is not supplied by a connection of this account")
+        return self._values[name]
+
+    def available_keys(self) -> list[str]:
+        return sorted(self._values)
+
+
+def build_scoped_secrets(
+    declared: list[str],
+    *,
+    account_id: Optional[str] = None,
+    values: Optional[Mapping[str, str]] = None,
+) -> SecretStore:
     """Build the ``ctx.secrets`` for one operation invocation.
 
     Scoped to ``declared`` (the binding's ``secrets:`` keys), backed by the
     bound provider. Nothing declared → an empty ``NullSecretStore`` (no key
     readable). Keys declared but no provider bound → reads raise (fail-loud: the
     operation asked for a secret but the deployment bound no store).
+
+    ``account_id`` is the run's account. For the deployment (none, empty or
+    ``default``) nothing changes. For a tenant account the deployment's bound
+    provider is never consulted (an env-backed one would hand out the server's
+    own variables): the store holds only ``values``, what that account's own
+    connections supplied for the declared keys.
     """
     if not declared:
         return NullSecretStore()
+    from cairn.core.secrets_store import scoped_account  # noqa: PLC0415 — lazy: crypto off the import path
+
+    if scoped_account(account_id) is not None:
+        allowed = set(declared)
+        return ScopedSecretStore(
+            _AccountSecretValues({k: v for k, v in (values or {}).items() if k in allowed}), declared)
     provider = get_secret_provider()
     backend: SecretStore = provider if provider is not None else NullSecretStore()
     return ScopedSecretStore(backend, declared)

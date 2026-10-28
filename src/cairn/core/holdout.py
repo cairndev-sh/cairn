@@ -353,7 +353,7 @@ async def check_holdout(
             continue
         name, version = parsed
         try:
-            row = await store.get_dataset_version_meta(name, version)
+            row = await store.get_dataset_version_meta(name, version, workspace_id=workspace_id)
         except Exception as exc:  # noqa: BLE001 — a registry hiccup is "not checked", never a 500
             verdict.warnings.append(f"{ref}: registry lookup failed ({type(exc).__name__}: {exc})")
             continue

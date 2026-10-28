@@ -114,19 +114,25 @@ async def index_corpus(
 
     # Vector store handle for tombstoning + forced re-embed. Lazy so a no-op
     # plan needs no store/embedder init.
-    store = None
+    # The store is process-wide and shared by every collection: each store call
+    # selects `coll` under its lock (`on_collection`), one document at a time;
+    # parsing, embedding and catalog writes run outside it.
+    store = dim = None
     if p.to_index or p.to_delete:
         from cairn.services.rag.embeddings import get_embedder
-        from cairn.services.rag.stores import get_vector_store
+        from cairn.services.rag.stores import SHARED_STORE_LOCK, get_vector_store, on_collection
 
         await apply_backend_connection("rag_vector_store")  # #336: bound-connection creds → env
         store = get_vector_store()
-        await store.initialize(coll, get_embedder().dim)
+        dim = get_embedder().dim
+        async with on_collection(store, coll, dim, SHARED_STORE_LOCK):
+            pass  # the collection exists before anything is removed or indexed
 
     # Tombstone removed sources.
     for source in p.to_delete:
         try:
-            await store.delete_by_source(source)
+            async with on_collection(store, coll, dim, SHARED_STORE_LOCK):
+                await store.delete_by_source(source)
             await catalog.tombstone(document_id(cat_corpus, source))
             result.documents_deleted += 1
         except Exception as e:  # noqa: BLE001
@@ -137,8 +143,9 @@ async def index_corpus(
     for source in p.to_index:
         did = document_id(cat_corpus, source)
         try:
-            await store.delete_by_source(source)
-            outcome = await ingest_document(source, coll)
+            async with on_collection(store, coll, dim, SHARED_STORE_LOCK):
+                await store.delete_by_source(source)
+            outcome = await ingest_document(source, coll)  # takes the lock per store call
             m = _STORED_RE.search(outcome or "")
             chunks = int(m.group(1)) if m else 0
             result.chunks_indexed += chunks

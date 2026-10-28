@@ -5,7 +5,7 @@
 
 image:
   repository: ghcr.io/cairndev-sh/cairn-engine
-  tag: "0.1.3"            # PIN IT — `latest` fails --strict
+  tag: "0.3.1"            # PIN IT — `latest` fails --strict
 
 runtime: dbos
 checkpointer: postgres
@@ -36,6 +36,11 @@ env:
   backend: mock
   apiUser: admin
   requireAuth: true
+  extra:
+    # = https://<ingress.host>. The ingress terminates TLS, so the server sees
+    # http; this makes the console's sign-in cookie Secure and builds the
+    # OAuth callback from the public origin.
+    CAIRN_PUBLIC_URL: https://cairn.example.com
 
 # The dbos-postgres tier's artifact store. Point at any S3-compatible endpoint
 # (MinIO in-cluster, or S3 itself with the endpoint left empty).

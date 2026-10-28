@@ -114,6 +114,29 @@ def check_run_db() -> CheckResult:
                        f"parent {parent} is writable", category="store")
 
 
+def check_engine_store() -> Optional[CheckResult]:
+    """#229 — does the engine this CLI is configured for read the store this CLI
+    writes? ``cairn connect add`` refuses a write when it does not; this says so
+    before anyone writes. ``None`` (no row) when no engine answers."""
+    from cairn.cli.commands.remote import store_check  # noqa: PLC0415 — cli → cli, lazy like the rest
+
+    checked = store_check()
+    if checked is None or checked[1] is None:
+        return None
+    mine, ep, same = checked
+    if same is None:
+        return CheckResult("engine_store", "warn",
+                           f"the engine at {ep} does not report its store; "
+                           f"cannot compare it with {mine}", category="store")
+    if same:
+        return CheckResult("engine_store", "ok", f"{mine} — the store the engine at {ep} reads",
+                           category="store")
+    return CheckResult("engine_store", "warn",
+                       f"this CLI writes {mine}, but the engine at {ep} reads a different "
+                       "store: `cairn connect add` refuses until CAIRN_STORAGE names the "
+                       "engine's store (or --force)", category="store")
+
+
 # ─── network reachability probes ────────────────────────────────────
 
 
@@ -1102,8 +1125,14 @@ async def check_artifact_bytes() -> list[CheckResult]:
         return [CheckResult("artifact_bytes", "warn",
                             "no artifact registry configured (CAIRN_STORAGE unset) — nothing to check",
                             category="store")]
+    # The registry answers per workspace (ADR-0148); the CLI checks the process's
+    # own workspace (CAIRN_WORKSPACE, else `default`), which owns every artifact
+    # registered before workspace scoping.
+    from cairn.core.workspace import current_workspace  # noqa: PLC0415 - CLI startup latency
+
+    ws = current_workspace()
     try:
-        health = await registry_health(store)
+        health = await registry_health(store, workspace_id=ws)
     except Exception as e:  # noqa: BLE001 - a doctor probe reports, it never crashes
         return [backend, CheckResult("artifact_registry_bytes", "warn",
                                      f"could not read the artifact registry: {e}", category="store")]
@@ -1115,11 +1144,11 @@ async def check_artifact_bytes() -> list[CheckResult]:
 
     if health["dangling"]:
         names = ", ".join(f"{a['id'][:12]} ({a['uri']})" for a in health["dangling_sample"])
-        detail = (f"{health['dangling']} dangling of {health['total']} registered "
+        detail = (f"{health['dangling']} dangling of {health['total']} registered in workspace {ws!r} "
                   f"({health['durable']} durable, {health['local']} local-only) — first: {names}")
         status = "warn"
     else:
-        detail = (f"{health['total']} registered artifacts resolve "
+        detail = (f"{health['total']} registered artifacts in workspace {ws!r} resolve "
                   f"({health['durable']} durable, {health['local']} local-only)")
         status = "ok"
     return [backend, CheckResult("artifact_registry_bytes", status, detail, category="store")]
@@ -1186,6 +1215,14 @@ async def check_compute_targets() -> list[CheckResult]:
     from cairn.core.deploy_check import check_compute_ssh  # noqa: PLC0415 - cli → core
 
     out: list[CheckResult] = []
+    # ADR-0150 D1 — the execution unit is the connection's mode/image over the
+    # environment's; read the environment's half here so the row matches what
+    # the engine will run. Unreadable → None, and the row says it depends.
+    try:
+        env_mode: str | None = selected("remote_exec_mode", default="auto") or "auto"
+        env_image: str | None = selected("remote_image", default="") or ""
+    except Exception:  # noqa: BLE001 — a broken profile is reported by check_profile
+        env_mode = env_image = None
     for key in ("dataflow_target", "ml_target"):
         try:
             target = (selected(key, default="") or "").strip()
@@ -1195,7 +1232,8 @@ async def check_compute_targets() -> list[CheckResult]:
             continue
         try:
             import cairn.core.connections as _connections  # noqa: PLC0415 - cli → core
-            resolved = await _connections.resolve_connection(target)
+            # the profile's targets are the deployment's own connections
+            resolved = await _connections.resolve_connection(target, account_id=_connections.DEFAULT_ACCOUNT)
         except Exception as e:  # noqa: BLE001 — an unreachable store is a warn, not a crash
             out.append(CheckResult(
                 f"compute_target:{key}", "warn",
@@ -1206,7 +1244,8 @@ async def check_compute_targets() -> list[CheckResult]:
         cfg = dict(getattr(resolved, "config", None) or {}) if resolved is not None else None
         secrets = getattr(resolved, "secrets", None) or {} if resolved is not None else {}
         out.extend(check_compute_ssh(
-            key, target, cfg, has_key=bool(secrets.get("PRIVATE_KEY"))))
+            key, target, cfg, has_key=bool(secrets.get("PRIVATE_KEY")),
+            env_mode=env_mode, env_image=env_image))
     return out
 
 
@@ -1241,6 +1280,7 @@ async def run_checks() -> list[CheckResult]:
         check_runtime(),
         check_compute_targets(),  # ADR-0104 D1 (#2071) — the box the run lands on
         check_mcp_servers(),
+        asyncio.to_thread(check_engine_store),  # #229 — the CLI's store is the engine's
         return_exceptions=False,
     )
     for p in probes:

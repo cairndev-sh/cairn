@@ -301,8 +301,9 @@ def read_rows(uri: str, *, limit: Optional[int] = None) -> list[dict]:
 
     Supports a local path / ``file://`` (a file, or a directory of ``.jsonl``
     shards read in sorted order so a sharded export is deterministic) and
-    ``s3://`` through boto3, which is a base dependency and already how the
-    control plane fetches an export back (``cairn.core.dataflow.capture``).
+    ``s3://`` through boto3 (the ``kernel`` extra; without it the read raises
+    ``ImportError``), which is already how the control plane fetches an export
+    back (``cairn.core.dataflow.capture``).
 
     Raises on anything it cannot read. The holdout door needs the rows to make
     its promise, so "could not read" has to be an outcome the caller decides
@@ -326,7 +327,7 @@ def read_rows(uri: str, *, limit: Optional[int] = None) -> list[dict]:
 
 
 def _read_s3_rows(uri: str, *, limit: Optional[int] = None) -> list[dict]:
-    import boto3  # noqa: PLC0415 — base dep, deferred so a local-only door never builds a client
+    import boto3  # noqa: PLC0415 — the kernel extra, deferred so a local-only door never builds a client
 
     bucket, _, key = uri[len("s3://"):].partition("/")
     if not bucket or not key:

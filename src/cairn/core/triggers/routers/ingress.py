@@ -5,6 +5,8 @@ Extracted verbatim from server.py (#1191). Two factories because the
 spec-declared trigger routes (§24.2) mount BETWEEN these surfaces in
 server.py — route order is part of the committed OpenAPI contract.
 """
+import inspect
+import logging
 from typing import Annotated, Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -12,7 +14,8 @@ from pydantic import BaseModel, Field
 
 from cairn.core._time import utc_now_iso
 from cairn.core.engine.schema import ApprovalRecord, TriggerEvent
-from cairn.core.triggers.auth import _oauth2_scheme
+from cairn.core.triggers import console_support as support
+from cairn.core.triggers.auth import _oauth2_scheme, auth_enabled, decode_subject, is_env_admin, require_admin
 from cairn.core.triggers.routers.reviews import decision_actor
 
 _APPROVE = ("approve", "approved", "yes", "y")
@@ -26,6 +29,46 @@ class SagaApprovalRequest(BaseModel):
     decision: str = Field(..., description="'approve' | 'reject' (or approved/yes/y, rejected/no/n)")
     approver: str = Field("slack-user", description="accepted for old clients; under auth the caller is recorded")
     note: Optional[str] = Field(None, description="free-text note recorded on the approval")
+
+
+async def _assert_may_decide_saga(handler: Any, workflow_id: str, token: Optional[str]) -> None:
+    """A saga is decided only from the account that owns it (an internal issue).
+
+    ``writable_workspace`` checks the workspace the caller acts in, not the
+    saga's. The saga's workspace comes from the action handler
+    (``workspace_of(workflow_id)``, sync or async — the same duck-typed handler
+    surface ``resume`` is); the caller's account must own it. A handler that
+    cannot say (no ``workspace_of``, or it answers nothing or fails) leaves the
+    saga to the deployment admin, who decides any saga. Every refusal is the
+    same 404 as an unknown saga, so another account's saga ids do not leak.
+    Auth off (keyless dev) is unchanged."""
+    if not auth_enabled():
+        return
+    if is_env_admin(decode_subject(token) if token else None):
+        return
+    from cairn.core.workspace import WorkspaceForbidden, assert_workspace_allowed  # noqa: PLC0415 — routers ↔ server cycle
+
+    ws: Any = None
+    workspace_of = getattr(handler, "workspace_of", None)
+    if callable(workspace_of):
+        try:
+            ws = workspace_of(workflow_id)
+            if inspect.isawaitable(ws):
+                ws = await ws
+        except Exception:  # noqa: BLE001 — cannot attribute the saga → fail closed
+            logging.getLogger(__name__).warning("workspace_of(%s) failed; refusing the decision",
+                                                workflow_id, exc_info=True)
+            ws = None
+    # A blank id would read as "no workspace asserted", which assert_workspace_allowed
+    # permits: normalise first so a handler answering "" or "  " also fails closed.
+    ws = str(ws).strip() if ws is not None else ""
+    if ws:
+        try:
+            await assert_workspace_allowed(ws, await support.caller_account(token))
+            return
+        except WorkspaceForbidden:
+            pass
+    raise HTTPException(status_code=404, detail=f"no saga {workflow_id!r} awaiting a decision here")
 
 
 def build_ingress_router(dispatcher, environment, runner) -> APIRouter:
@@ -44,7 +87,7 @@ def build_ingress_router(dispatcher, environment, runner) -> APIRouter:
 
     r = APIRouter()
 
-    @r.post("/triggers/alert")
+    @r.post("/triggers/alert", dependencies=[Depends(support.writable_workspace)])
     async def alert_endpoint(body: AlertWebhook, request: Request) -> dict[str, Any]:
         event = TriggerEvent(
             source=body.source,
@@ -59,7 +102,7 @@ def build_ingress_router(dispatcher, environment, runner) -> APIRouter:
         )
         return await _dispatch(dispatcher, event, environment, request_id=_req_id(request))
 
-    @r.post("/triggers/pattern")
+    @r.post("/triggers/pattern", dependencies=[Depends(support.writable_workspace)])
     async def pattern_endpoint(body: PatternWebhook, request: Request) -> dict[str, Any]:
         event = TriggerEvent(
             source="pattern",
@@ -74,7 +117,7 @@ def build_ingress_router(dispatcher, environment, runner) -> APIRouter:
         )
         return await _dispatch(dispatcher, event, environment, request_id=_req_id(request))
 
-    @r.post("/triggers/manual")
+    @r.post("/triggers/manual", dependencies=[Depends(support.writable_workspace)])
     async def manual_endpoint(body: ManualWebhook, request: Request) -> dict[str, Any]:
         event = TriggerEvent(
             source="manual",
@@ -127,7 +170,7 @@ def build_ingress_router(dispatcher, environment, runner) -> APIRouter:
                        "body": {"decision": "approve | reject"}},
         }
 
-    @r.post("/triggers/approve/{workflow_id}")
+    @r.post("/triggers/approve/{workflow_id}", dependencies=[Depends(support.writable_workspace)])
     async def approve_endpoint(
         workflow_id: str,
         body: SagaApprovalRequest,
@@ -160,6 +203,7 @@ def build_ingress_router(dispatcher, environment, runner) -> APIRouter:
                     "to a durable handler so approvals can pause/resume (ADR-0024 RM3)"
                 ),
             )
+        await _assert_may_decide_saga(handler, workflow_id, token)
         try:
             outcome = await resume(workflow_id, record)
         except Exception as exc:  # noqa: BLE001
@@ -184,15 +228,40 @@ def build_inbox_router(trigger_router) -> APIRouter:
     r = APIRouter()
 
     @r.get("/triggers/inbox")
-    async def list_inbox(status: Optional[str] = None, limit: int = 100) -> dict[str, Any]:
+    async def list_inbox(
+        token: Annotated[Optional[str], Depends(_oauth2_scheme)],
+        status: Optional[str] = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
         inbox = getattr(trigger_router, "inbox", None) if trigger_router is not None else None
         if inbox is None:
             return {"durable": False, "records": []}
-        recs = await inbox.list(status=status, limit=limit)
+        from cairn.core.storage.trigger_inbox import record_workspace  # noqa: PLC0415 — as replay below
+        from cairn.core.triggers.console_support import caller_account  # noqa: PLC0415 — as replay below
+        from cairn.core.workspace import (  # noqa: PLC0415 — routers ↔ server cycle
+            WorkspaceForbidden,
+            assert_workspace_allowed,
+            current_workspace,
+        )
+
+        # #218 — the caller's workspace only; a delivery's input is that tenant's data.
+        # The middleware authorizes a NAMED workspace; with no header the resolved one
+        # (the default) is not checked there, so it is asserted here (404, as ADR-0051 §4).
+        # ``limit`` bounds the records read.
+        ws = current_workspace()
+        try:
+            await assert_workspace_allowed(ws, await caller_account(token))
+        except WorkspaceForbidden:
+            raise HTTPException(status_code=404, detail="not found") from None
+        recs = [r for r in await inbox.list(status=status, limit=limit) if record_workspace(r) == ws]
         return {"durable": True, "records": [r.model_dump(mode="json") for r in recs]}
 
     @r.post("/triggers/inbox/replay")
-    async def replay_inbox(since: str) -> dict[str, Any]:
+    async def replay_inbox(
+        since: str,
+        admin: Annotated[Optional[str], Depends(require_admin)],
+        workspace: Annotated[str, Depends(support.writable_workspace)],
+    ) -> dict[str, Any]:
         inbox = getattr(trigger_router, "inbox", None) if trigger_router is not None else None
         if inbox is None:
             raise HTTPException(
@@ -200,7 +269,14 @@ def build_inbox_router(trigger_router) -> APIRouter:
                 detail="durable trigger inbox is not enabled (set CAIRN_TRIGGER_DURABLE=1)",
             )
         from cairn.core.storage.trigger_inbox import replay_since
-        n = await replay_since(inbox, since=since)
+
+        # #218 — an owner/admin (``require_admin``) replays their own workspace; a
+        # replayed delivery runs in its workspace, so only the instance admin (the
+        # env admin, or anyone with auth off) replays across workspaces. Either
+        # way the caller may write in the workspace they act in (#221).
+        everywhere = admin is None or is_env_admin(admin)
+        ws = None if everywhere else workspace
+        n = await replay_since(inbox, since=since, workspace=ws)
         return {"replayed": n, "since": since}
 
     return r

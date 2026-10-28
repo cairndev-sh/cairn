@@ -26,6 +26,18 @@ from __future__ import annotations
 import importlib.util
 
 
+#: What the durable pipeline owner (``pipeline_workflow.PipelineWorkflow`` with
+#: ``pipeline_activities.pipeline_submit_step``) can run. The launch door reads these
+#: (#199) and refuses, before any record exists, a plan this owner would start and
+#: not finish. They change with the owner, in the same commit: ``task`` joins the leg
+#: kinds when SUBMIT routes task legs (#59; today every non-flow leg goes to
+#: ``run_template``), and finalizers turn on when the workflow runs ``finalizer:``
+#: steps after a terminal intent (ADR-0151 D10; today it schedules by ``depends_on``
+#: only, so a trailing teardown would run on success alone).
+PIPELINE_OWNER_LEG_KINDS: frozenset[str] = frozenset({"flow", "template", "gate"})
+PIPELINE_OWNER_RUNS_FINALIZERS: bool = False
+
+
 def is_available() -> bool:
     """True iff ``temporalio[langgraph]`` is importable."""
     return importlib.util.find_spec("temporalio") is not None and (
@@ -43,4 +55,6 @@ def require() -> None:
         )
 
 
-__all__ = ["is_available", "require"]
+__all__ = [
+    "PIPELINE_OWNER_LEG_KINDS", "PIPELINE_OWNER_RUNS_FINALIZERS", "is_available", "require",
+]

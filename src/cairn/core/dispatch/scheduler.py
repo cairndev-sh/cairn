@@ -129,12 +129,16 @@ async def _probe_core_watch(row: Any, watch: dict) -> Optional[dict]:
     core's one copy (``operator/watch_probe.py``), shared with ``ingest/watch``."""
     from cairn.core.operator import build_artifact_store  # noqa: PLC0415 - the storage stack, lazily
     from cairn.core.operator.watch_probe import probe_dataset  # noqa: PLC0415
+    from cairn.core.workspace import workspace_scope  # noqa: PLC0415
 
     name = str(watch.get("dataset") or "")
     state = dict(getattr(row, "watch_state", None) or {})
     store = build_artifact_store()
     try:
-        versions = await store.list_dataset_versions(name)
+        # The watched name is the schedule's workspace's dataset, the same
+        # workspace its launch starts in.
+        with workspace_scope(getattr(row, "workspace_id", "default") or "default"):
+            versions = await store.list_dataset_versions(name)
     finally:
         close = getattr(store, "close", None)
         if close is not None:

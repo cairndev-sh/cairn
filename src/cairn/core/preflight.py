@@ -76,12 +76,15 @@ async def _connection_warnings() -> list[str]:
 
     Best-effort: a store hiccup yields no warnings rather than failing the
     verdict (connection health is advisory here, never a hard blocker)."""
-    from cairn.core.connections import default_connection_store  # noqa: PLC0415 — off the hot import path
+    from cairn.core.connections import (  # noqa: PLC0415 — off the hot import path
+        lookup_account, default_connection_store, run_account,
+    )
 
     try:
+        account = lookup_account(await run_account())  # only the launching account's own
         store = default_connection_store()
         try:
-            conns = await store.list()
+            conns = await store.list(account)
         finally:
             close = getattr(store, "close", None)
             if callable(close):

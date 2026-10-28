@@ -58,6 +58,10 @@ import typer
 from cairn.cli.runs import JsonlEventSink, new_run_id, runs_root, write_meta
 
 
+class MockModeUnsupportedOperatorsError(RuntimeError):
+    """Raised when a template contains operators without a safe mock path."""
+
+
 def _load_trigger(
     path: Path,
     *,
@@ -263,8 +267,9 @@ async def _run_template_async(
     """Compile a namespaced template ref and run it against ``input_path``.
 
     Lazy imports — keeps ``cairn run --help`` cheap. When ``mock`` is set,
-    operators that declare ``supports_mock`` take their ``.mock()`` path (no
-    side effects) — the run still executes, just with fake operator output.
+    operators that declare ``supports_mock`` take their ``.mock()`` path, and
+    LLM calls receive a deterministic response. The run is refused before any
+    node executes if a reachable operator lacks mock support.
 
     ``sandbox`` (``--mode sandbox``, ADR-0101 D3 / #1975) is the NARROWER
     Playground switch, not a second one: the same ``sandbox_mode`` ContextVars
@@ -273,7 +278,6 @@ async def _run_template_async(
     on real data. ``--mock`` still wins where both are given, which is what
     ``resolve_is_mocked`` already does.
     """
-    from cairn.core.dispatch.dispatcher import is_isolated_playground_env
     from cairn.core.engine.compiler import compile_template
     from cairn.core.engine.runner import run_within_budget
     from cairn.core.engine.skill_engine import resolve_template_path
@@ -339,6 +343,14 @@ async def _run_template_async(
     from cairn.core import obs
     try:
         compiled = compile_template(template_path)
+        # A compiled template predating the field (or a test double) has none.
+        unsupported = getattr(compiled, "unsupported_mock_operators", ()) or ()
+        if mock and unsupported:
+            operators = ", ".join(unsupported)
+            raise MockModeUnsupportedOperatorsError(
+                "--mock cannot run this template because these operators do not "
+                f"declare supports_mock: {operators}. No operators or LLM calls were executed."
+            )
         template_hash = compiled.content_hash
         # §24.22 (AST3) — snapshot the compiled AST for self-contained replay.
         from cairn.core.engine.compiled import ast_dict
@@ -350,6 +362,8 @@ async def _run_template_async(
         if mock:
             mode_ctx: Any = mock_mode(True)
         elif sandbox:
+            from cairn.core.dispatch.dispatcher import is_isolated_playground_env
+
             mode_ctx = sandbox_mode(True, isolated=is_isolated_playground_env(environment))
         else:
             mode_ctx = contextlib.nullcontext()
@@ -377,6 +391,8 @@ async def _run_template_async(
     except Exception as e:  # surfaces in meta + a clear CLI line
         status = "failed"
         error = f"{type(e).__name__}: {e}"
+        if isinstance(e, MockModeUnsupportedOperatorsError):
+            print(error, file=sys.stderr)
     finally:
         sink.close()
 
@@ -749,8 +765,9 @@ def cmd(
     ),
     mock: bool = typer.Option(
         False, "--mock",
-        help="Direct-template mode: run with operators in mock mode — those "
-             "that declare supports_mock take their .mock() path (no side effects). "
+        help="Direct-template mode: stub LLM responses and run operators that "
+             "declare supports_mock through .mock(); refuse before execution if "
+             "any reachable operator lacks mock support. "
              "Runs IN-PROCESS: no pipeline record, no run row, not a governed "
              "pipeline (#2128). Cannot be combined with --series.",
     ),
@@ -814,7 +831,7 @@ def cmd(
     them, because a series groups governed runs.
 
       --interactive  HITL approve/reject at the terminal, resumed in-process
-      --mock         operators take their .mock() path — nothing real happens
+      --mock         model calls are stubbed; unsupported operators are refused
       --dry-run      the preflight verdict + the node DAG; nothing runs at all
 
     Those write a replayable JSONL trace under the runs dir (`cairn replay

@@ -29,7 +29,12 @@
 ## What an engine owns
 `DataflowEngine` protocol (`src/cairn/core/dataflow/engine.py:76`): `validate(spec)` (what
 this engine cannot run), `submit(spec, ctx) → EngineJobHandle`, `poll(handle)`,
-`cancel(handle)` (must kill compute), `result(handle) → DataflowResult`. An engine **is**
+`cancel(handle)` (must kill compute), `result(handle) → DataflowResult`. `poll` reports
+`queued`, `running`, `succeeded`, `failed` (optionally `retriable`) or `cancelled`. A job
+stopped by a cancel reports `cancelled`, never a retriable `failed`, so the leg executor
+does not relaunch it and its run settles `cancelled` (ADR-0151 D9; the builtin SSH engine
+reads the marker `remote/exec`'s cancel leaves). The remote-job `JobStatus` uses the same
+four terminal-or-running states (`operators-and-packs.md`). An engine **is**
 whatever passes the conformance suite (`src/cairn/core/dataflow/conformance.py`; ADR-0081 D3).
 An engine that runs kernels through `run_dataflow` (`src/cairn/core/dataflow/runner.py`,
 core since #2583 / ADR-0129) declares the optional
@@ -40,7 +45,7 @@ It owns execution, all rows, the per-stage loop, its own retries/resources on it
 substrate; it receives no registry or database credentials (ADR-0082 D3) and returns
 descriptors + scalar stats only.
 
-**Spend (#1441).** A stage reports its own spend under the stat `cost_usd`; the runner
+**Spend (#1441, #131).** A stage reports its own spend under the stat `cost_usd`; the runner
 (`run_dataflow`) sums it across stages and mapped items for `budget.max_cost_usd` and returns
 it as `DataflowResult.cost_usd` (`contract.py:332`, the field ADR-0081 D2 lists). The runner
 also meters the governed LLM chokepoint itself: each kernel call and each mapped item runs in
@@ -49,10 +54,62 @@ an `obs.cost_scope` without the session backstop, and a stage that made at least
 `llm_tokens_out`, `llm_usd` and `llm_unpriced_calls` (absent when it made none); its
 `cost_usd` is the kernel's own value when the kernel reported one, else `llm_usd`. They are
 added after the raw output check and ride the descriptor and findings like any stat
-(`<stage>_llm_usd`). The control plane settles the leg's reservation at `cost_usd` and writes
-it on the leg's `Run` (`llm_cost_usd` → `Run.cost`, `leg_hooks.flow_leg_record`, both owners);
-a failed leg, and a succeeded leg whose engine reported no cost (a GPU train stage today), records no
-`Run.cost` — unknown, never $0 (the payload still carries `llm_cost_usd`).
+
+(`<stage>_llm_usd`). As each stage or mapped item progresses, the runner writes the cumulative
+known positive cost to `metrics.json`, including metered calls made before a stage fails. The
+builtin local/SSH and Metaflow file paths can expose that progress; SkyPilot reads the fetched
+runner metrics at teardown. This is stage-reported cost, including metered LLM spend, not an
+engine invoice: SkyPilot's cluster/GPU charge is not included in `DataflowResult.cost_usd` or
+`Run.cost` (its launch estimate is recorded separately). Other remote status paths may be
+unable to read partial metrics, so terminal cost can be absent. The control plane settles each
+attempt's known positive spend, including failed or cancelled attempts, and adds earlier
+attempt spend to the next reservation. For checkpoint retries it subtracts frozen spend already
+settled on the earlier attempt before settling the resumed attempt. The final known total is
+written on the leg's `Run` (`llm_cost_usd` → `Run.cost.llm_usd`, `leg_hooks.flow_leg_record`, both
+owners). Unknown engine cost remains absent, never $0; a succeeded leg whose engine reports no
+cost (a GPU train stage today) still records no engine cost.
+
+Known restart limitation: the retry loop's accumulated engine spend is not persisted, so a
+new owner cannot include earlier attempts in its next reservation. On adoption of a priced
+leg, ADR-0152's netting also subtracts earlier attempts' engine spend from the combined amount;
+changing that formula requires a separate decision.
+
+A leg on a priced `compute.ssh` box (ADR-0151 D5, read per attempt by ADR-0152) also records
+its box time under `gpu_usd` → `Run.cost.gpu_usd`, on success AND on failure, timeout or cancel;
+it never folds into `llm_usd` (`src/cairn/core/dispatch/leg_hooks.py:59`). A failed leg may carry
+known partial engine cost when progressive metrics reported it; otherwise that engine cost is
+unknown, and a leg with neither figure records no
+`Run.cost` — unknown, never $0 (a succeeded leg's payload still carries `llm_cost_usd`). The rate
+is the one recorded on `PipelineRecord.admission.cost_estimate` at launch, never re-read. Each
+fresh attempt measures its own window (attempt start → end) and is accounted once, after its
+outcome is known (`_close_attempt`, `src/cairn/core/dispatch/leg_executor.py:547`): the window
+joins `Run.cost.gpu_usd`, then the attempt's own hold is settled at its cost (released when it cost
+nothing). The backoff between two fresh attempts is not billed (a known under-count). A ledger
+error is logged and appended to the leg's error, and never changes the engine outcome or the box
+time. An adopted attempt holds no reservation of its own; its window runs from the persisted
+`run.started_at` (the start of each attempt is not persisted), so it covers the run's earlier
+attempts and backoff, and `Run.cost.gpu_usd` is then an over-estimate of the box time (accepted).
+In the ledger it closes the hold the dead process left (`held_for_run`): with a window, the first
+held row settles at engine-reported cost + window − what the run's claims already settled
+(`budget_reservations.settled_usd_for_run`), floored at 0, and any further one at 0, so no attempt is
+settled twice; with no window (no readable `run.started_at`) the engine cost settles as is. If the
+ledger cannot be read the rows stay held at their estimate and the leg's error names it (ADR-0152).
+
+**Descriptors and lineage.** `DataflowResult.output_artifacts` holds one descriptor per stage,
+in order (the stage-contract re-check reads it by position). Its parent is the previous stage's
+descriptor; stage 0's parents are the declared inputs, plus `source_hash` when the stage reports
+one (else its `source` URI, #1432). A stage's `output`, `content_hash`, `kind`, `rows`, `bytes`
+and `register_as` describe that product. **Named outputs (ADR-0141):** a stage that makes several
+products (a split's train, val and test files) also returns `outputs: [<name>, …]` with flat
+`outputs.<name>.<field>` stats for the same fields plus `register_role`. Each name becomes a
+descriptor in `DataflowResult.named_outputs` with the stage's parents (the products are siblings
+of the stage's descriptor; the next stage descends from the stage). A named output without
+`output` and `content_hash` fails the flow; an `outputs` stat with no `outputs.<name>.*` key is
+the kernel's own. `named_outputs` is omitted from the JSON while empty. The control plane
+registers both lists through `register_leg_descriptors`; a descriptor carrying `register_as`
+becomes a dataset version with `register_role` as its role when set (else the dataset's default
+role). A stage may give only `training`, `validation` or `test`; any other role refuses the leg
+before anything registers.
 
 ## What cairn owns
 Admission and governance before submit, the record, the handle for re-attach
@@ -85,8 +142,14 @@ proof for Metaflow is `tests/core/test_training_core_golden_path.py::test_the_sa
 ## Local vs remote boundaries
 The control plane never reaches into a box for rows; a box never reaches the database.
 Remote execution moves **the image and the spec** (ADR-0104): the GPU trainer image is built
-by CI and pinned by tag (`RUNBOOK-gpu-finetune-ssh.md`), secrets reach the flow as a scoped
+by CI and pinned by tag, secrets reach the flow as a scoped
 set (ADR-0089 D3), tracking credentials are forwarded by the `run-train-remote` binding.
+On the builtin SSH path (ADR-0149) the job's environment is the spec, the live channel,
+`MLFLOW_*` and the deployment's `remote_env` names (credential-looking names refused). An
+engine whose job runs elsewhere declares the optional attribute `needs_durable_inputs`; the leg
+executor then resolves its `dataset:` refs to the durable copy when the workspace's
+registration has one, and the SSH engine refuses a version whose only location is a
+control-plane path before submit (`operator_dataflow/engines_ssh.py` `validate`).
 Doors that refuse before a record exists: job-channel, SkyPilot, pull-worker
 (`dispatcher.py:888-911`, `pipeline_launch.py:283`).
 

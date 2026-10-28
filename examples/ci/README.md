@@ -3,14 +3,14 @@
 `cairn gate` runs a check workflow **read-only**, prints a machine-readable JSON
 verdict, and **exits non-zero on FAIL** — so a bad dataset (or model) blocks the
 PR/merge before it ever reaches a training run. It needs no cairn server and no
-GitHub/GitLab integration: `pip install cairn && cairn gate …`. Because
+GitHub/GitLab integration: `pip install cairndev && cairn gate …`. Because
 "non-zero exit blocks the pipeline" is universal, the same verb works in GitHub
 Actions, GitLab CI, Jenkins, a pre-commit hook, or a bare shell.
 
 ## Quick start (any shell)
 
 ```bash
-pip install "cairn[pii]"
+pip install "cairndev[pii]"
 cairn gate dataset-readiness/check --set path=data/train.jsonl --json
 echo "exit: $?"   # 0 = PASS, 1 = gate FAIL, 2 = error
 ```

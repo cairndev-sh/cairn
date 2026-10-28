@@ -157,6 +157,7 @@ _SELECTION_ENV = {
     # ADR-0104 D1 (#2071) — the image is the unit of remote work.
     "remote_exec_mode": "CAIRN_REMOTE_EXEC_MODE",
     "remote_image": "CAIRN_TRAIN_IMAGE",
+    "remote_env": "CAIRN_REMOTE_ENV",
 }
 
 

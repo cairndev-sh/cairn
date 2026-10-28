@@ -1,6 +1,6 @@
 # ADR-0111 — Independent contracts, capability-only domain composition and single-capability operators
 
-- **Status:** PROPOSED — maintainer review pending; documentation is not implementation approval.
+- **Status:** ACCEPTED with conditions (maintainer, 2026-10-06; P1 amended by ADR-0137 for `cairndev` only). This line read "PROPOSED — maintainer review pending" until 2026-10-26, when it was corrected to match the decision log (`README.md`); the owner confirmed the acceptance that day. The decision text is unchanged.
 - **Date:** 2026-09-24
 - **Owner:** Cairn maintainer
 - **Related epic:** #2230, capability contract review. Related execution work: #2182 and #1488; conformance: #2238. No new issue filed by this record.

@@ -18,7 +18,7 @@ where operators are called from (compiler, bridge), engines/stages (`dataflow/`)
 `fingerprint_store()` (#2453 B: the deployment default on first use, closed by the runtime;
 an injected handle wins and is never closed), `logger`; `metrics` deprecated); the contract's lazy re-exports
 (`__init__.py` `_CONTRACT_REEXPORTS`, ADR-0120 D7 / #2453: connections, the artifact registry,
-workspace, redaction/audit/notify types, provider settings) — a pack imports only this package. `pack.toml` `[operator."x/y"]`
+workspace, redaction/audit/notify types, provider settings; the compute lifecycle, ADR-0151 D6) — a pack imports only this package. `pack.toml` `[operator."x/y"]`
 must match the class (`manifest_sync.py`; tests are vacuous unless the pack is installed —
 `cairn/operators/CLAUDE.md` §B). Governance-scoped `config_schema` fields are environment-owned; a
 run-supplied value is DROPPED (ADR-0068/0070).

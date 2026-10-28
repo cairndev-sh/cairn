@@ -173,6 +173,16 @@ def _header_get(headers: dict[str, str], name: str) -> Optional[str]:
     return None
 
 
+def _digest_equal(expected: str, provided: str) -> bool:
+    """Constant-time comparison of a computed signature with the header's value.
+
+    Compared as UTF-8 bytes: ``hmac.compare_digest`` raises ``TypeError`` on a
+    ``str`` holding a non-ASCII character, which turned a garbled header into a 500
+    instead of a refusal (#214). A non-ASCII value never equals a hex digest, so it
+    is simply unequal."""
+    return hmac.compare_digest(expected.encode("utf-8"), provided.encode("utf-8", "surrogatepass"))
+
+
 def verify_signature(spec: TriggerSpec, headers: dict[str, str], body: bytes) -> bool:
     """Scheme-aware signature verification against ``ingress.signature`` (#309).
 
@@ -202,20 +212,20 @@ def verify_signature(spec: TriggerSpec, headers: dict[str, str], body: bytes) ->
             return False
         base = b"v0:" + ts.encode("utf-8") + b":" + body
         expected = "v0=" + hmac.new(secret.encode("utf-8"), base, hashlib.sha256).hexdigest()
-        return hmac.compare_digest(expected, provided)
+        return _digest_equal(expected, provided)
 
     if scheme == "pagerduty_v1":
         # X-PagerDuty-Signature: "v1=<hex>[,v1=<hex>...]" — valid if ANY matches.
         expected = "v1=" + hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
         return any(
-            hmac.compare_digest(expected, candidate.strip())
+            _digest_equal(expected, candidate.strip())
             for candidate in provided.split(",")
         )
 
     # hmac_sha256 — accept "sha256=<hex>" (GitHub style) and bare hex.
     provided_hex = provided.split("=", 1)[1] if "=" in provided else provided
     expected_hex = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected_hex, provided_hex)
+    return _digest_equal(expected_hex, provided_hex)
 
 
 # ─── generic YAML-driven provider ────────────────────────────────────
@@ -380,10 +390,28 @@ class TriggerRouter:
         # #209 — a stored row knows the workspace it was created in; last-wins by
         # path like the specs themselves, so the workspace follows the winning spec.
         workspaces: dict[str, str] = {}
+        # #213 — rows of DIFFERENT workspaces at one ingress path would collapse to
+        # the last one loaded, so one workspace's sender would start runs in the
+        # other's. Such a path is refused: no receiver is mounted there at all.
+        contested: dict[str, set[str]] = {}
         for spec, ws in _store_trigger_rows():
             specs.append(spec)
-            workspaces[spec.ingress.path] = ws
+            if spec.ingress.transport == "bus":  # ADR-0131 D4 — not an HTTP route
+                continue
+            path = spec.ingress.path
+            if path in workspaces and workspaces[path] != ws:
+                contested.setdefault(path, {workspaces[path]}).add(ws)
+            workspaces[path] = ws
         specs = _dedupe_specs_by_path([s for s in specs if s.ingress.transport != "bus"])  # ADR-0131 D4
+        for path, claimants in sorted(contested.items()):
+            logger.error(
+                "trigger receiver %s NOT mounted: it is declared in more than one "
+                "workspace (%s). A receiver path belongs to one workspace; give each "
+                "workspace's receiver its own path under /triggers/",
+                path, ", ".join(sorted(claimants)),
+            )
+            workspaces.pop(path, None)
+        specs = [s for s in specs if s.ingress.path not in contested]
         router = cls(specs, run_template=run_template, run_environment=run_environment,
                      workspaces=workspaces)
         if getenv("CAIRN_TRIGGER_DURABLE", "").strip().lower() in ("1", "true", "yes", "on"):
@@ -402,6 +430,19 @@ class TriggerRouter:
         """The workspace that declared ``spec``'s receiver, or ``None`` for a
         pack/overlay receiver (the process default applies) — #209."""
         return self._workspace_by_path.get(spec.ingress.path) or None
+
+    async def start_queued(self, template_ref: str, input_data: dict[str, Any]) -> Any:
+        """Start a delivery the durable inbox queued, through the door this router
+        holds: the one launch door the server wires (``unattended_starter``), the
+        same call an inline delivery makes in :meth:`route`. The caller binds the
+        record's workspace. A refusal raises, so the drain retries or dead-letters
+        the record. With no door wired (a bare router), the in-process fallback,
+        as :meth:`route` does."""
+        if self._run_template is not None:
+            return await self._run_template(
+                template_ref, input_data, environment=self._run_environment,
+            )
+        return await start_template_run(template_ref, input_data)
 
     def provider_for(self, spec: TriggerSpec) -> TriggerProvider:
         """A registered vendor provider for the source, else the generic
@@ -448,7 +489,10 @@ class TriggerRouter:
             )
             if self.inbox is not None:
                 # Durable path: persist + return; the drain loop dispatches with retry.
-                rec = await self.inbox.enqueue(spec.source, spec.run.template, input_data)
+                # #212 — the record carries the receiver's workspace; the drain binds
+                # the run to it, exactly as the inline path binds it here.
+                rec = await self.inbox.enqueue(spec.source, spec.run.template, input_data,
+                                               workspace=self.workspace_for(spec))
                 res.run_id = rec.id
                 res.status = "queued"
             elif self._run_template is not None:
