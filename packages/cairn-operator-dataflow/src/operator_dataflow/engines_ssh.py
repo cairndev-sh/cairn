@@ -461,6 +461,11 @@ class BuiltinSshEngine:
         status = await remote_exec._poll(jh, inp, ctx)
         if status.state in ("running", "submitted", "queued"):
             return EngineJobStatus(state="running", metrics=dict(status.metrics or {}))
+        if status.state == "cancelled":
+            # ADR-0151 D9 — a job remote/exec's cancel killed: terminal and never
+            # retriable, so execute_leg does not relaunch it and its run settles cancelled.
+            return EngineJobStatus(state="cancelled", error=status.error or "remote dataflow cancelled",
+                                   metrics=dict(status.metrics or {}))
         if status.state != "succeeded":
             return EngineJobStatus(
                 state="failed", error=status.error or f"remote dataflow {status.state}",

@@ -114,6 +114,29 @@ def check_run_db() -> CheckResult:
                        f"parent {parent} is writable", category="store")
 
 
+def check_engine_store() -> Optional[CheckResult]:
+    """#229 — does the engine this CLI is configured for read the store this CLI
+    writes? ``cairn connect add`` refuses a write when it does not; this says so
+    before anyone writes. ``None`` (no row) when no engine answers."""
+    from cairn.cli.commands.remote import store_check  # noqa: PLC0415 — cli → cli, lazy like the rest
+
+    checked = store_check()
+    if checked is None or checked[1] is None:
+        return None
+    mine, ep, same = checked
+    if same is None:
+        return CheckResult("engine_store", "warn",
+                           f"the engine at {ep} does not report its store; "
+                           f"cannot compare it with {mine}", category="store")
+    if same:
+        return CheckResult("engine_store", "ok", f"{mine} — the store the engine at {ep} reads",
+                           category="store")
+    return CheckResult("engine_store", "warn",
+                       f"this CLI writes {mine}, but the engine at {ep} reads a different "
+                       "store: `cairn connect add` refuses until CAIRN_STORAGE names the "
+                       "engine's store (or --force)", category="store")
+
+
 # ─── network reachability probes ────────────────────────────────────
 
 
@@ -1257,6 +1280,7 @@ async def run_checks() -> list[CheckResult]:
         check_runtime(),
         check_compute_targets(),  # ADR-0104 D1 (#2071) — the box the run lands on
         check_mcp_servers(),
+        asyncio.to_thread(check_engine_store),  # #229 — the CLI's store is the engine's
         return_exceptions=False,
     )
     for p in probes:

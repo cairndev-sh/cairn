@@ -41,6 +41,12 @@ class JobFailed(RuntimeError):
     """The remote/container job reached a terminal failed state."""
 
 
+class JobCancelled(JobFailed):
+    """The job was stopped by a cancel (``JobStatus.state == "cancelled"``). A
+    :class:`JobFailed`, so a caller that handles failure still ends; distinct, so
+    one that cares can tell a cancel from a crash (ADR-0151 D9)."""
+
+
 class JobTimeout(RuntimeError):
     """The job did not reach a terminal state within ``max_polls``."""
 
@@ -61,8 +67,13 @@ class JobStatus:
     while running (e.g. ``{"eval_losses": [...]}``) for the learning gate (#144).
     ``retriable`` marks a ``failed`` that is a RECOVERABLE death (box/instance
     gone, OOM-killed — no clean exit) rather than a genuine training error, so the
-    control loop may relaunch it from a durable checkpoint (#552/ADR-0064)."""
-    state: str  # "running" | "succeeded" | "failed"
+    control loop may relaunch it from a durable checkpoint (#552/ADR-0064).
+
+    ``cancelled`` (ADR-0151 D9) means the job was stopped by a cancel. It is
+    terminal and never retriable: the control loop closes the record cancelled
+    and resumes the run as cancelled, and :func:`run_job_lifecycle` ends with
+    :class:`JobCancelled`."""
+    state: str  # "running" | "succeeded" | "failed" | "cancelled"
     output: Any = None
     error: str = ""
     metrics: dict[str, Any] = field(default_factory=dict)
@@ -401,6 +412,8 @@ async def run_job_lifecycle(
             return status.output
         if status.state == "failed":
             raise JobFailed(f"{driver.backend} job {handle.job_id!r} failed: {status.error}")
+        if status.state == "cancelled":  # ADR-0151 D9 — terminal, never re-polled
+            raise JobCancelled(f"{driver.backend} job {handle.job_id!r} cancelled: {status.error}")
         if on_running is not None:
             try:
                 out = on_running(handle, status)
@@ -509,7 +522,7 @@ class DockerJobDriver:
 
 
 __all__ = [
-    "JobFailed", "JobTimeout", "JobHandle", "JobStatus", "JobDriver",
+    "JobCancelled", "JobFailed", "JobTimeout", "JobHandle", "JobStatus", "JobDriver",
     "RemoteJobOperator", "HttpRemoteJobOperation", "is_remote_job_operator",
     "run_job_lifecycle",
     "RemoteJobDriver", "DockerJobDriver", "build_docker_run_argv",

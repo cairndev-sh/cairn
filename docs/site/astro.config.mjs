@@ -150,6 +150,7 @@ export default defineConfig({
         {
           label: 'Guides',
           items: [
+            { label: 'Fine-tune a model on a GPU box', slug: 'guides/fine-tune-a-model' },
             { label: 'Run your first pipeline', slug: 'guides/first-pipeline' },
             { label: 'Write a pipeline', slug: 'guides/write-a-pipeline' },
             { label: 'Write a flow', slug: 'guides/write-a-flow' },

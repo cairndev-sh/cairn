@@ -55,6 +55,9 @@ def _isolate(monkeypatch, tmp_path):
         return None, ProbeResult(ok=True, status=200, detail="authenticated (stub)")
 
     monkeypatch.setattr(connect_mod, "_probe_by_name", _fake_probe)
+    # #229 — the store check asks the configured engine; these tests have none.
+    import cairn.cli.commands.remote as remote_mod
+    monkeypatch.setattr(remote_mod, "engine_store_fingerprint", lambda *a, **k: None)
     yield
 
 

@@ -14,8 +14,10 @@ Budget enforcement was **check-then-submit**, which loses two ways:
    ALREADY overspent, so a $300 series happily admitted a $500 run.
 
 Both close with one primitive: **reserve the estimate atomically at admission**,
-then ``release`` on failure/cancel or ``settle`` on success (the spend becomes
-real in the ledger, so keeping the reservation would double-count it).
+then ``settle`` any attempt with known positive spend (including failure or
+cancellation), and ``release`` only when no positive spend was reported. The
+actual spend becomes real in the ledger, so keeping the reservation would
+double-count it.
 
 **#1530 — where the reservations LIVE.** The original implementation held them
 in a module-global dict behind one ``asyncio.Lock``, and said so honestly: the
@@ -443,13 +445,15 @@ async def reserve(series_id: str, *, est_usd: float, spent_usd: float,
 
 
 async def release(reservation: Optional[Reservation]) -> None:
-    """Free a reservation whose run failed or was cancelled with nothing billed —
-    no spend occurred. A flow leg on a priced box always billed its wall-clock, so
-    it settles instead, on every outcome (ADR-0151 D5).
+    """Free a reservation when the attempt reported no positive spend.
+
+    A flow leg on a priced box always bills its wall-clock, so it settles instead
+    on every outcome (ADR-0151 D5).
 
     Idempotent: terminal handling can fire more than once (the completion path
     and the reconciler both see the same run), and a double release must not
-    free budget that was never held.
+    free budget that was never held. Callers with a reported positive spend
+    must use :func:`settle` even when the attempt failed or was cancelled.
     """
     if reservation is None:
         return
@@ -458,14 +462,15 @@ async def release(reservation: Optional[Reservation]) -> None:
 
 async def settle(reservation: Optional[Reservation],
                  actual_usd: float = 0.0) -> None:
-    """Close a reservation whose run SUCCEEDED — or, for a flow leg on a priced
-    box, whose attempt ended in any state with box time to record (ADR-0151 D5).
+    """Close a reservation after an attempt completes with known spend, including
+    a priced-box attempt that ended in any state with box time to record
+    (ADR-0151 D5).
 
-    The hold stops counting: the actual cost is now recorded as spend in the
-    ledger, so holding the estimate as well would double-count it. Under the
-    Postgres backend the row is transitioned to ``settled`` with ``actual_usd``
-    recorded, so the table is a full audit trail of what each admission
-    actually cost.
+    This applies to successful, failed, or cancelled attempts. The hold stops
+    counting and the actual cost is recorded as spend, so holding the estimate
+    as well would double-count it. Under the Postgres backend the row is
+    transitioned to ``settled`` with ``actual_usd`` recorded, so the table is
+    a full audit trail of what each admission actually cost.
     """
     if reservation is None:
         return

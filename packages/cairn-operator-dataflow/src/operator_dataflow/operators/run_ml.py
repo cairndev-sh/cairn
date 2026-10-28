@@ -78,6 +78,9 @@ class MlRunOp(Operation[MlRunInput, MlRunOutput]):
         status = await engine.poll(self._engine_handle(handle))
         if status.state in ("queued", "running"):
             return JobStatus(state="running", metrics=status.metrics)
+        if status.state == "cancelled":  # ADR-0151 D9 — terminal, never retriable
+            return JobStatus(state="cancelled", error=status.error or "ml flow cancelled",
+                             metrics=status.metrics)
         if status.state != "succeeded":
             return JobStatus(state="failed", error=status.error or f"ml flow {status.state}",
                              metrics=status.metrics, retriable=status.retriable)

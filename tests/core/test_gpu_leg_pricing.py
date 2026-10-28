@@ -228,6 +228,7 @@ async def test_an_unpriced_target_reads_not_priced_never_zero(conns, rate, kind)
     assert leg_price_kwargs(rec, "train", SimpleNamespace(started_at=None)) == {"estimated_usd": 0.0}
     rec_ = flow_leg_record({}, LegOutcome(state="failed"))
     assert "cost" not in rec_ and "gpu_usd" not in rec_["result_payloads"][0]
+    assert "llm_cost_usd" not in rec_["result_payloads"][0]
 
 
 async def test_no_target_is_not_a_priced_leg():

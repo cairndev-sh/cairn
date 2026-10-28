@@ -33,6 +33,8 @@ the prod box with a real outcome). "Code exists" alone never earns SUPPORTED. Up
 | Metaflow (substrate; Kubernetes/Batch) | EXPERIMENTAL | INTEGRATION TESTED locally (conformance, bridge, the CORE flow through Metaflow); no cluster run |
 | SkyPilot (provisioning) | IN DEVELOPMENT | engine + door tests; no preemption recovery (#2192); no live run |
 | Provider task legs (`train/runpod\|vast\|modal\|kaggle`) | EXPERIMENTAL | mocked-transport tests; ssh is the proven path |
+| `compute/acquire` / `compute/release` (start and stop the EC2 box a `compute.ssh` connection names; public since 0.3.1) | EXPERIMENTAL | CI TESTED with a mocked EC2 client (`packages/cairn-operator-remote/tests`); no live start/stop on a public release yet (cairn-extensions#9) |
+| GPU leg pricing (`hourly_usd × timeout` estimate at the launch door, per-attempt settle; ADR-0151, ADR-0152; since 0.3.1) | EXPERIMENTAL | CI TESTED (`tests/core/test_gpu_leg_pricing.py`); no priced live run yet (cairn-extensions#9) |
 
 ## Trainers and training capabilities
 | Item | Status | Evidence |

@@ -1,5 +1,5 @@
 """Deployment-level registry writes need the deployment admin; a saga decision
-checks the saga's workspace (cairn-platform#223).
+checks the saga's workspace (an internal issue).
 
 1. ``POST /registry/uninstall`` and ``POST /registry/install`` act on the whole
    deployment (a pack is process-wide) but needed only a signed-in caller, so any

@@ -27,6 +27,7 @@
   <a href="https://docs.cairndev.sh/install/">Install</a> ·
   <a href="https://docs.cairndev.sh/reference/catalog/">Pipeline catalog</a> ·
   <a href="https://docs.cairndev.sh/concepts/gates/">Gates and approvals</a> ·
+  <a href="https://github.com/cairndev-sh/cairn-extensions">Extensions</a> ·
   <a href="https://cairndev.sh">Waitlist</a>
 </p>
 
@@ -47,6 +48,24 @@ lets any operator inherit the budget, policy gate, and audit for free.
 
 cairn is **open source** (Apache 2.0) and **self-hosted**: your keys, your
 GPUs, your logs — nothing leaves your perimeter.
+
+## Extensions
+
+Domain packs and the operators they use are separate wheels, released from
+[**cairn-extensions**](https://github.com/cairndev-sh/cairn-extensions). Install
+the ones you need next to `cairndev`:
+
+| Package | What it adds |
+|---|---|
+| [`cairn-pack-dataset-prep`](https://github.com/cairndev-sh/cairn-extensions/tree/main/packs/cairn-pack-dataset-prep) | Pin a dataset, audit and clean it, split it by group and register `train` / `val` / `test` versions |
+| [`cairn-pack-finetune`](https://github.com/cairndev-sh/cairn-extensions/tree/main/packs/cairn-pack-finetune) | LoRA / QLoRA fine-tuning on a GPU box over SSH, with approvals, a priced budget, base-vs-candidate evaluation and a box that starts after approval and stops on every outcome |
+| [Operator packs](https://github.com/cairndev-sh/cairn-extensions#packages) | Dataset checks, training, lm-evaluation-harness benchmarks, IFC validation, and the contract wheels they implement |
+
+```bash
+pip install cairndev cairn-pack-finetune
+```
+
+Walkthrough: [Fine-tune a model](https://docs.cairndev.sh/guides/fine-tune-a-model/).
 
 ## Why governed?
 

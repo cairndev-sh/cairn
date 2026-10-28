@@ -60,11 +60,11 @@ def flow_leg_record(step_output: Any, outcome: Any) -> dict:
     """The terminal ``result_payloads`` + ``cost`` of a flow leg's ``Run`` — ONE
     shape for both owners (#1441).
 
-    A succeeded leg's engine cost is what its engine REPORTED (``LegOutcome.cost_usd``
-    ← ``DataflowResult.cost_usd``), carried under the explicit ``llm_cost_usd`` key
-    ``_aggregate_cost`` reads; it is never scanned out of the leg's stats or
-    findings. A failed leg reports no engine cost: its partial engine spend is
-    unknown, not $0.
+    A leg's engine cost is what its engine REPORTED (``LegOutcome.cost_usd`` ←
+    ``DataflowResult.cost_usd`` or partial terminal metrics), carried under the
+    explicit ``llm_cost_usd`` key ``_aggregate_cost`` reads; it is never scanned
+    out of the leg's stats or findings. A failed leg may carry known partial
+    engine spend; when it cannot be read, that cost remains unknown, not $0.
 
     ADR-0151 D5 — a leg on a priced box also carries its box time
     (``LegOutcome.gpu_usd``: ``hourly_usd`` × each attempt's wall-clock), under
@@ -77,9 +77,9 @@ def flow_leg_record(step_output: Any, outcome: Any) -> dict:
         "metrics": dict(getattr(outcome, "metrics", None) or {}),
     }
     gpu = round(float(getattr(outcome, "gpu_usd", 0.0) or 0.0), 6)
-    llm = 0.0
-    if getattr(outcome, "ok", False):
-        llm = payload["llm_cost_usd"] = round(float(getattr(outcome, "cost_usd", 0.0) or 0.0), 6)
+    llm = round(float(getattr(outcome, "cost_usd", 0.0) or 0.0), 6)
+    if llm > 0 or getattr(outcome, "ok", False):
+        payload["llm_cost_usd"] = llm
     if gpu > 0:
         payload["gpu_usd"] = gpu
     if llm <= 0 and gpu <= 0:

@@ -18,7 +18,10 @@ Public surface:
     ``parse_dataset_ref``, ``current_workspace``, ``workspace_collection``,
     ``RedactSpan``, ``RedactionResult``, ``AuditEvent``, ``audit_emit``,
     ``NotifyEvent``, ``NotifyResult``, ``get_settings``, ``getenv``, ``selected_backend``
-    (ADR-0134 D3b) — so an operator pack imports only this package.
+    (ADR-0134 D3b), and the compute lifecycle ``compute/acquire`` / ``compute/release``
+    call (ADR-0151 D6: ``load_box``, ``ec2_client``, ``describe_state``, ``stamp_lease``,
+    ``start_instance``, ``stop_instance``, ``wait_port_open``, ``iso``, ``BILLING_STATES``,
+    ``STOPPED_STATES``) — so an operator pack imports only this package.
 
 Entry-points discovery (the ``cairn.operators`` group) lives in
 :mod:`cairn.core.operator.loader` and is owned by task OP2 (#181).
@@ -132,6 +135,19 @@ _CONTRACT_REEXPORTS: dict[str, tuple[str, str]] = {
     # ADR-0134 D3b (#2678) — the one backend-selection plane (profile → env → default) an
     # engine pack reads its configuration through, instead of importing backend_selection
     "selected_backend": ("cairn.core.backend_selection", "selected"),
+    # ADR-0151 D6 (#201) — the compute lifecycle compute/acquire and compute/release call:
+    # turning a `compute.ssh` box on and off stays ONE module (with `cairn compute sweep`),
+    # and the operator pack reaches it through this contract, never by importing it
+    "BILLING_STATES": ("cairn.core.compute_lifecycle", "BILLING_STATES"),
+    "STOPPED_STATES": ("cairn.core.compute_lifecycle", "STOPPED_STATES"),
+    "describe_state": ("cairn.core.compute_lifecycle", "describe_state"),
+    "ec2_client": ("cairn.core.compute_lifecycle", "ec2_client"),
+    "iso": ("cairn.core.compute_lifecycle", "iso"),
+    "load_box": ("cairn.core.compute_lifecycle", "load_box"),
+    "stamp_lease": ("cairn.core.compute_lifecycle", "stamp_lease"),
+    "start_instance": ("cairn.core.compute_lifecycle", "start_instance"),
+    "stop_instance": ("cairn.core.compute_lifecycle", "stop_instance"),
+    "wait_port_open": ("cairn.core.compute_lifecycle", "wait_port_open"),
 }
 
 

@@ -944,9 +944,9 @@ async def _invoke_remote_job_durable(
     resume — so we must check the store BEFORE re-submitting (submit is
     side-effecting). On the resume re-run, the terminal record returns/raises."""
     from cairn.core.operator.job_store import (
-        DONE, FAILED, PULL_BACKEND, RemoteJobRecord, get_remote_job_store,
+        CANCELLED, DONE, FAILED, PULL_BACKEND, RemoteJobRecord, get_remote_job_store,
     )
-    from cairn.core.operator.jobs import JobFailed
+    from cairn.core.operator.jobs import JobCancelled, JobFailed
 
     # #564 — the durable record id is keyed on run_id (``run_id:node``); the control
     # loop resumes by that same run_id. An empty/sentinel run_id (e.g. the compiler's
@@ -970,6 +970,9 @@ async def _invoke_remote_job_durable(
         return _apply_output_binding(op_name, binding, rec.result or {})
     if rec is not None and rec.status == FAILED:
         raise JobFailed(rec.error or f"remote job {rid} failed")
+    if rec is not None and rec.status == CANCELLED:
+        # ADR-0151 D9 — a cancelled job is terminal: end the node, never re-pause on it.
+        raise JobCancelled(rec.error or f"remote job {rid} was cancelled")
     if rec is None:
         target = (compute_target if compute_target is not None
                   else (binding.execution.compute_target if binding.execution else None))

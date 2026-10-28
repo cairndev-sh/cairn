@@ -55,8 +55,8 @@ class LegOutcome:
     metrics: dict[str, Any] = field(default_factory=dict)
     error: str = ""
     handle: Any = None
-    #: #1441 — what the engine reported the leg spent (``DataflowResult.cost_usd``,
-    #: the runner's sum of stage ``cost_usd``); 0.0 until a leg succeeds.
+    #: #1441/#131 — known spend the engine reported for this leg, including
+    #: partial cost from failed attempts and earlier attempts replaced by retry.
     cost_usd: float = 0.0
     #: ADR-0151 D5 — the box time of a leg on a priced target: ``hourly_usd`` ×
     #: each attempt's wall-clock, summed over the attempts, on ANY outcome. Kept
@@ -370,6 +370,7 @@ async def execute_leg(
     delay = max(0.0, float(policy.initial_interval_seconds or 0.0))
 
     out = LegOutcome(state="failed", error="leg never attempted")
+    known_attempt_cost_usd = 0.0
     adopting = _adopt_handle(adopt)
     #: ADR-0151 D5 — box time settled by the attempts so far; each attempt settles
     #: only its own window, and the next one's reservation counts what came before.
@@ -394,13 +395,18 @@ async def execute_leg(
                 # #1441 — the caller could not read what earlier legs spent (an
                 # adopted leg proceeds without it); a FRESH attempt is new spend
                 # and unknown spend is never "nothing spent".
-                return _with_notes(LegOutcome(state="failed", gpu_usd=round(gpu_total, 6), error=(
-                    "budget: the spend of earlier legs is unreadable; a new attempt is not admitted")),
-                    ledger_notes)
+                return _with_notes(LegOutcome(
+                    state="failed",
+                    error=("budget: the spend of earlier legs is unreadable; "
+                           "a new attempt is not admitted"),
+                    cost_usd=known_attempt_cost_usd,
+                    gpu_usd=round(gpu_total, 6),
+                ), ledger_notes)
             try:
                 reservation = await reserve(
                     series_id, est_usd=float(estimated_usd or 0.0),
-                    spent_usd=float(spent_usd or 0.0) + gpu_total,
+                    spent_usd=round(float(spent_usd or 0.0)
+                                    + known_attempt_cost_usd + gpu_total, 6),
                     budget_usd=float(budget_usd or 0.0),
                     # #1530 — stamp the run so a hold left behind by a dead
                     # process is attributable (and reapable) by run id, not just
@@ -408,11 +414,15 @@ async def execute_leg(
                     run_id=str(run_id or ""),
                 )
             except BudgetExceeded as e:
-                # an earlier attempt's box time stays on the leg's record
-                return _with_notes(LegOutcome(state="failed", error=str(e), gpu_usd=round(gpu_total, 6)),
-                                   ledger_notes)
+                # an earlier attempt's engine and box time stay on the leg's record
+                return _with_notes(LegOutcome(
+                    state="failed", error=str(e), cost_usd=known_attempt_cost_usd,
+                    gpu_usd=round(gpu_total, 6)), ledger_notes)
 
         retriable = False
+        attempt_cost_usd = 0.0
+        status = None
+        resumed_cost_usd = 0.0
         try:
             # H6c (#1248, ADR-0088) — resume selection: before EVERY attempt,
             # ask for the newest durable checkpoint of this exact spec. Fresh
@@ -431,12 +441,16 @@ async def execute_leg(
                     except Exception:  # noqa: BLE001 — announcing must not break adopting
                         logger.debug("leg %s: on_adopt emit failed", ref, exc_info=True)
             else:
+                spec.resume_from = None
                 if resume_provider is not None:
                     try:
                         from cairn.core.dataflow.checkpoints import spec_key  # noqa: PLC0415 - cycle: checkpoints → contract ← this module
                         rf = await resume_provider(spec_key(spec))
+                        spec.resume_from = rf
                         if rf is not None:
-                            spec.resume_from = rf
+                            resumed_cost_usd = _settled_resume_cost(
+                                spec, known_attempt_cost_usd,
+                            )
                             if on_resume is not None:
                                 await on_resume(rf)
                     except Exception:  # noqa: BLE001 — no-resume is always a safe fallback
@@ -449,6 +463,8 @@ async def execute_leg(
                 await record_flow_parameters(run_id=str(run_id or ""), node=ref, ref=ref,
                                              kind=flow_kind, inputs=config)
                 handle = await engine.submit(spec, None)
+                if reservation is not None and getattr(reservation, "id", None):
+                    handle.meta["_cairn_reservation_id"] = reservation.id
                 if on_submit is not None:
                     # ADR-0086 H1 (#1239) — hand the durable re-attach token to the
                     # caller the moment it exists, not in the terminal outcome: a
@@ -459,14 +475,33 @@ async def execute_leg(
                         await on_submit(handle)
                     except Exception:  # noqa: BLE001
                         logger.debug("leg %s: on_submit persistence failed", ref, exc_info=True)
-            status = await _poll_until_terminal(engine, handle, poll_budget_s, heartbeat=heartbeat)
+            def _remember_status(polled: Any) -> None:
+                nonlocal status
+                status = polled
+
+            status = await _poll_until_terminal(
+                engine, handle, poll_budget_s, heartbeat=heartbeat,
+                on_status=_remember_status,
+            )
+            attempt_cost_usd = max(
+                0.0,
+                _reported_metrics_cost(getattr(status, "metrics", {}) or {})
+                - resumed_cost_usd,
+            )
             if str(getattr(status, "state", "")) == "succeeded":
                 result = await engine.result(handle)
+                reported_attempt_cost_usd = max(
+                    _reported_metrics_cost(getattr(status, "metrics", {}) or {}),
+                    _reported_cost(result),
+                )
+                attempt_cost_usd = max(
+                    0.0, reported_attempt_cost_usd - resumed_cost_usd,
+                )
                 out = LegOutcome(
                     state="succeeded", handle=handle,
                     stats=dict(getattr(result, "stats", {}) or {}),
                     metrics=dict(getattr(status, "metrics", {}) or {}),
-                    cost_usd=_reported_cost(result),
+                    cost_usd=round(known_attempt_cost_usd + attempt_cost_usd, 6),
                 )
                 # ADR-0118 D5 — each opted-in stage's descriptor stats re-checked before the
                 # intake verdict and before anything registers; a refusal fails the leg.
@@ -500,13 +535,26 @@ async def execute_leg(
                     state=str(getattr(status, "state", "failed")), handle=handle,
                     metrics=dict(getattr(status, "metrics", {}) or {}),
                     error=str(getattr(status, "error", "") or ""),
+                    cost_usd=round(known_attempt_cost_usd + attempt_cost_usd, 6),
                 )
                 # Only the ENGINE may call a failure transient (cancellation never
                 # is); an exception below has no flag and is not retried.
                 retriable = (out.state == "failed") and bool(getattr(status, "retriable", False))
         except Exception as e:  # noqa: BLE001 — a leg failure is an outcome, not a crash
             logger.exception("leg %s failed", ref)
-            out = LegOutcome(state="failed", error=f"{type(e).__name__}: {e}")
+            attempt_cost_usd = max(
+                attempt_cost_usd,
+                max(
+                    0.0,
+                    _reported_metrics_cost(getattr(status, "metrics", {}) or {})
+                    - resumed_cost_usd,
+                ),
+            )
+            out = LegOutcome(
+                state="failed", error=f"{type(e).__name__}: {e}",
+                metrics=dict(getattr(status, "metrics", {}) or {}),
+                cost_usd=round(known_attempt_cost_usd + attempt_cost_usd, 6),
+            )
 
         # ADR-0151 D5 — the attempt is accounted ONCE, here, outside the try: its
         # window joins the leg's box time, then its hold closes. #1441 — the hold
@@ -517,12 +565,18 @@ async def execute_leg(
         gpu = _box_time_usd(hourly_usd, attempt_started)
         gpu_total += gpu
         out.gpu_usd = round(gpu_total, 6)
-        note = await _close_attempt(out, reservation, engine_usd=out.cost_usd if out.ok else 0.0,
+        note = await _close_attempt(out, reservation, engine_usd=attempt_cost_usd,
                                     box_usd=gpu,
-                                    adopted_run_id=str(run_id or "") if adopted_attempt else "")
+                                    adopted_run_id=str(run_id or "") if adopted_attempt else "",
+                                    adopted_reservation_id=(
+                                        str(((adopt or {}).get("meta") or {}).get("_cairn_reservation_id", ""))
+                                        if adopted_attempt else ""),
+                                    priced=bool(hourly_usd and hourly_usd > 0))
+        known_attempt_cost_usd = round(known_attempt_cost_usd + attempt_cost_usd, 6)
         if note:
             ledger_notes.append(note)
-        if out.ok or not retriable or attempt >= attempts:
+        if (out.ok or not retriable or attempt >= attempts
+                or note.startswith("budget ledger: adopted handle does not match")):
             return _with_notes(out, ledger_notes)
         if on_retry is not None:
             # visibility invariant: every retry is announced (run event) with
@@ -545,7 +599,8 @@ def _with_notes(out: LegOutcome, notes: list[str]) -> LegOutcome:
 
 
 async def _close_attempt(out: LegOutcome, reservation: Any, *, engine_usd: float,
-                         box_usd: float, adopted_run_id: str = "") -> str:
+                         box_usd: float, adopted_run_id: str = "",
+                         adopted_reservation_id: str = "", priced: bool = False) -> str:
     """Close one attempt's hold: ``settle`` at ``engine_usd + box_usd`` when it
     succeeded or cost something, else ``release`` (nothing billed).
 
@@ -556,9 +611,12 @@ async def _close_attempt(out: LegOutcome, reservation: Any, *, engine_usd: float
     covers the run's earlier attempts: when it has a window (``box_usd > 0``), what
     the run's claims already settled (``settled_usd_for_run``) is subtracted from
     ``engine_usd + box_usd``, floored at 0, so nothing is settled twice (ADR-0152).
-    With no window (no readable start, or an unpriced leg) nothing overlaps and the
-    engine cost settles as is. The first held row settles at that figure, any further
-    one at 0. If a read fails the rows stay held at their estimate.
+    With no window (no readable start, or an unpriced leg) the engine cost settles
+    as is. New handles carry their reservation ID, so a stale handle cannot close
+    another attempt's hold. For an unpriced legacy handle, an existing settlement
+    makes the identity ambiguous: leave the holds open rather than bill twice.
+    The first held row settles at that figure, any further one at 0. If a read fails
+    or the identified hold is absent while other holds exist, those holds stay open.
 
     Returns a note when the ledger fails — logged, never a change to the engine
     outcome or the box time already accounted; ``""`` otherwise."""
@@ -567,6 +625,15 @@ async def _close_attempt(out: LegOutcome, reservation: Any, *, engine_usd: float
     try:
         if adopted_run_id:
             held_rows = await held_for_run(adopted_run_id)
+            if adopted_reservation_id:
+                matching = [held for held in held_rows if held.id == adopted_reservation_id]
+                if not matching and held_rows:
+                    return ("budget ledger: adopted handle does not match a held reservation; "
+                            "newer holds remain open")
+                held_rows = matching
+            elif held_rows and not priced and await settled_usd_for_run(adopted_run_id) > 0:
+                return ("budget ledger: adopted handle does not match a held reservation; "
+                        "legacy handle has ambiguous settlement, holds remain open")
             if held_rows and billed and box_usd > 0:
                 already = await settled_usd_for_run(adopted_run_id)
                 actual_usd = max(0.0, round(actual_usd - already, 6))
@@ -620,9 +687,47 @@ def _reported_cost(result: Any) -> float:
     (a duck-typed result from an older engine carries no cost)."""
     try:
         value = float(getattr(result, "cost_usd", 0.0) or 0.0)
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return 0.0
     return value if 0.0 < value < float("inf") else 0.0   # NaN compares False
+
+
+def _reported_metrics_cost(metrics: Any) -> float:
+    """Known positive partial cost from an engine's progressive metrics."""
+    if not isinstance(metrics, dict):
+        return 0.0
+    raw = metrics.get("cost_usd", 0.0)
+    if isinstance(raw, bool):
+        return 0.0
+    try:
+        value = float(raw or 0.0)
+    except (OverflowError, TypeError, ValueError):
+        return 0.0
+    return value if 0.0 < value < float("inf") else 0.0
+
+
+def _settled_resume_cost(spec: DataflowSpec, settled_usd: float) -> float:
+    """Checkpoint cost already settled by an earlier attempt of this leg.
+
+    The runner restores the checkpoint stage's frozen stats, so a resumed
+    result includes that cost again. Only trust a checkpoint for this exact
+    spec, and only subtract spend already settled in this retry loop.
+    """
+    resume = spec.resume_from
+    if resume is None or settled_usd <= 0:
+        return 0.0
+    try:
+        from cairn.core.dataflow.checkpoints import spec_key  # noqa: PLC0415 - cycle: checkpoints → contract ← this module
+        if resume.spec_key != spec_key(spec):
+            return 0.0
+        frozen = {int(item.get("index", -1)): item for item in resume.completed}
+        checkpoint_cost = sum(
+            _reported_metrics_cost(frozen.get(index, {}).get("stats", {}))
+            for index in range(min(resume.stage_index + 1, len(spec.stages)))
+        )
+    except (AttributeError, TypeError, ValueError):
+        return 0.0
+    return round(min(checkpoint_cost, settled_usd), 6)
 
 
 def _adopt_handle(persisted: Optional[dict]) -> Any:
@@ -823,6 +928,7 @@ async def _resolve_uri_parents(descriptors: list, artifact_store, *,
 async def _poll_until_terminal(
     engine: Any, handle: Any, budget_s: float,
     *, heartbeat: Optional[Callable[[], Awaitable[None]]] = None,
+    on_status: Optional[Callable[[Any], None]] = None,
 ) -> Any:
     """Poll to a terminal state or the budget. The engine owns the work; if the
     control plane restarts mid-leg, a re-attach by handle resumes this loop
@@ -839,6 +945,8 @@ async def _poll_until_terminal(
     last_beat = 0.0
     while True:
         status = await engine.poll(handle)
+        if on_status is not None:
+            on_status(status)
         if heartbeat is not None and loop.time() - last_beat >= _HEARTBEAT_MIN_S:
             # ADR-0086 H1 (#1239) — "I am still watching this engine": stamped
             # AFTER a poll returned, so the beat vouches for the whole chain
