@@ -15,6 +15,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 - Failed and retried flow-leg attempts now retain known partial spend in run cost accounting and subsequent budget reservations.
+- A step whose advance is refused (its pipeline record names no workspace, or an input wire does not resolve) no longer records the approver of an approval that never applied; its review is rejected as before.
+- Sign-up never assigns the account id `default` to a new account, whether or not the store has created the deployment's own account row yet.
+- The OAuth callback creates a missing `kind = "oauth"` connection row in the account the authorization was started for (the account of the workspace in scope at `start_authorization`; `default` for an unscoped start such as `cairn connect --via oauth`), not always in `default`. A row that already exists, in any account, is left as-is.
 
 ## [0.3.1] - 2026-10-26
 

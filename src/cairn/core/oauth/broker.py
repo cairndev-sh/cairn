@@ -32,6 +32,8 @@ from typing import Any, Optional, Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
+from cairn.core.account import DEFAULT_ACCOUNT
+
 
 class OAuthBrokerError(Exception):
     """A broker call failed (transport error, or no usable token returned)."""
@@ -98,6 +100,19 @@ def get_oauth_broker(name: Optional[str] = None) -> OAuthBroker:
 
 
 # ─── Authlib (the built-in, in-process broker — no sidecar) ──────────────
+
+
+async def _initiating_account() -> str:
+    """The account an authorization is started for: the workspace in scope's (a
+    console request's). With auth on and nothing in scope — the operator's own
+    process (``cairn connect --via oauth``) — the deployment's ``default``, where
+    that command stores its connection row."""
+    from cairn.core.workspace import WorkspaceScopeRequired, workspace_account  # lazy: store stack off the import path
+
+    try:
+        return await workspace_account()
+    except WorkspaceScopeRequired:
+        return DEFAULT_ACCOUNT
 
 
 def _token_expired(rec: dict[str, Any]) -> bool:
@@ -212,7 +227,10 @@ class AuthlibBroker:
             await client.aclose()
         await self._tokens().put_pending(
             state,
-            {"provider": provider, "connection_id": connection_id, "code_verifier": code_verifier or "", "scopes": chosen},
+            {"provider": provider, "connection_id": connection_id, "code_verifier": code_verifier or "", "scopes": chosen,
+             # the account the authorization is started for: the callback (which
+             # arrives with no caller scope) creates the connection row in it
+             "account_id": await _initiating_account()},
         )
         return AuthSession(redirect_url=url, connection_id=connection_id)
 
@@ -231,15 +249,23 @@ class AuthlibBroker:
         finally:
             await client.aclose()
         await self._tokens().put_token(connection_id, provider, dict(token))
-        await self._ensure_connection_record(provider, connection_id)
+        # A pending record written before the account was recorded is the deployment's.
+        account_id = str(pending.get("account_id") or "").strip() or DEFAULT_ACCOUNT
+        await self._ensure_connection_record(provider, connection_id, account_id=account_id)
         return connection_id
 
-    async def _ensure_connection_record(self, provider: str, connection_id: str) -> None:
+    async def _ensure_connection_record(self, provider: str, connection_id: str, *,
+                                        account_id: str = DEFAULT_ACCOUNT) -> None:
         """Make the authorized token *usable* (#310): upsert a ``kind=oauth``
         Connection so ``resolve_connection(connection_id)`` hands operators a
         fresh ``ACCESS_TOKEN`` via this broker. Idempotent — an existing record
         (re-authorization) is left as-is. Best-effort: a store hiccup must not
-        fail the completed authorization (the token IS captured)."""
+        fail the completed authorization (the token IS captured).
+
+        The row is created in ``account_id``, the account the authorization was
+        started for, not in the implicit ``default``. The lookup is by id across
+        accounts (a connection id is unique in the store, and ``create`` replaces
+        by id): a row another account holds is never replaced, only reported."""
         try:
             # lazy: connections pulls the store/env stack; keep it off the import path
             from cairn.core.connections import Connection, default_connection_store
@@ -249,11 +275,15 @@ class AuthlibBroker:
                 existing = await store.get(connection_id)
                 if existing is None:
                     await store.create(Connection(
-                        name=connection_id, kind="oauth",
+                        name=connection_id, kind="oauth", account_id=account_id,
                         description=f"{provider} via OAuth (authlib)",
                         config={"broker": self.name, "provider": provider,
                                 "connection_id": connection_id},
                     ))
+                elif (existing.account_id or DEFAULT_ACCOUNT) != account_id:
+                    logging.getLogger("cairn.oauth").warning(
+                        "authorized %s for connection %r, which another account holds; "
+                        "its record is left as-is", provider, connection_id)
             finally:
                 close = getattr(store, "close", None)
                 if callable(close):

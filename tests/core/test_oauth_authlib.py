@@ -152,3 +152,90 @@ async def test_complete_authorization_creates_usable_connection(monkeypatch, tmp
         assert (await store.get("gh-conn")) is not None
     finally:
         store.close()
+
+
+# ── the connection row lands in the account that started the authorization ──
+
+
+def _state(session) -> str:
+    return parse_qs(urlparse(session.redirect_url).query)["state"][0]
+
+
+@pytest.fixture
+def _tenant_workspace(monkeypatch, tmp_path):
+    from cairn.core import workspace
+    from cairn.core.workspace import InMemoryWorkspaceStore, Workspace
+
+    monkeypatch.setenv("OBS_CONNECTIONS_DB", str(tmp_path / "conn.db"))
+    wstore = InMemoryWorkspaceStore()
+    monkeypatch.setattr(workspace, "_store", wstore)
+
+    async def _seed():
+        await wstore.put(Workspace(id="ws-a", account_id="acct-a"))
+    return _seed
+
+
+async def _stored(conn_id: str):
+    from cairn.core.connections import default_connection_store
+
+    store = default_connection_store()
+    try:
+        return await store.get(conn_id)
+    finally:
+        store.close()
+
+
+async def test_the_callback_creates_the_connection_in_the_initiating_account(monkeypatch, _tenant_workspace):
+    """The authorization starts inside a workspace (a console request); the
+    callback arrives with no caller scope. The row is the initiating account's,
+    not the implicit ``default``."""
+    from cairn.core.workspace import workspace_scope
+
+    await _tenant_workspace()
+    broker = _broker(lambda r: httpx.Response(200, json={"access_token": "AT-a", "token_type": "bearer"}),
+                     monkeypatch)
+    with workspace_scope("ws-a"):
+        session = await broker.start_authorization(provider="github", connection_id="gh-a")
+    await broker.complete_authorization(state=_state(session), code="the-code")
+    conn = await _stored("gh-a")
+    assert conn is not None and conn.kind == "oauth" and conn.account_id == "acct-a"
+
+
+async def test_an_unscoped_start_keeps_the_deployments_account(monkeypatch, _tenant_workspace):
+    """The operator's own process (``cairn connect --via oauth``), auth on and no
+    workspace in scope: the deployment's ``default``, as before."""
+    monkeypatch.setenv("CAIRN_JWT_SECRET", "test-secret")
+    broker = _broker(lambda r: httpx.Response(200, json={"access_token": "AT", "token_type": "bearer"}),
+                     monkeypatch)
+    session = await broker.start_authorization(provider="github", connection_id="gh-ops")
+    await broker.complete_authorization(state=_state(session), code="the-code")
+    assert (await _stored("gh-ops")).account_id == "default"
+
+
+async def test_the_callback_never_replaces_a_row_another_account_holds(monkeypatch, _tenant_workspace):
+    from cairn.core.connections import Connection, default_connection_store
+    from cairn.core.workspace import workspace_scope
+
+    await _tenant_workspace()
+    store = default_connection_store()
+    try:
+        await store.create(Connection(name="gh-b", kind="oauth", account_id="acct-b",
+                                      config={"broker": "authlib", "provider": "github", "connection_id": "gh-b"}))
+    finally:
+        store.close()
+    broker = _broker(lambda r: httpx.Response(200, json={"access_token": "AT", "token_type": "bearer"}),
+                     monkeypatch)
+    with workspace_scope("ws-a"):
+        session = await broker.start_authorization(provider="github", connection_id="gh-b")
+    await broker.complete_authorization(state=_state(session), code="the-code")
+    assert (await _stored("gh-b")).account_id == "acct-b"
+
+
+async def test_a_pending_record_without_an_account_lands_in_default(monkeypatch, _tenant_workspace):
+    """A pending authorization written before the account was recorded."""
+    broker = _broker(lambda r: httpx.Response(200, json={"access_token": "AT", "token_type": "bearer"}),
+                     monkeypatch)
+    await broker._tokens().put_pending("st-legacy", {"provider": "github", "connection_id": "gh-old",
+                                                    "code_verifier": "", "scopes": ["repo"]})
+    await broker.complete_authorization(state="st-legacy", code="the-code")
+    assert (await _stored("gh-old")).account_id == "default"

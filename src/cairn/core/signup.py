@@ -181,15 +181,23 @@ def _new_user(addr: str, password_hash: str, identity: Optional[Identity]) -> Us
                 identities=[identity] if identity is not None else [])
 
 
+#: Account ids sign-up never hands out, whatever the store holds.
+_RESERVED_ACCOUNT_IDS = frozenset({DEFAULT_ACCOUNT})
+
+
 async def _free_account_id(base: str, *, store: Any) -> str:
     """``base``, or ``base-2``, ``base-3``… — the first id no account holds.
 
     ``put_account`` is an upsert: two companies whose names slug alike (two
     "Acme"s, or two sign-ups with no company name from the same email domain —
     the norm for a Google sign-up, #2336) used to land on ONE account id, and
-    the second founder became an owner of the first company's tenant."""
+    the second founder became an owner of the first company's tenant.
+
+    ``default`` (the deployment's own account) is reserved by name, not only
+    because its row exists: a store that has not seeded it yet must still never
+    hand it to a sign-up."""
     candidate, n = base, 1
-    while await store.get_account(candidate) is not None:
+    while candidate in _RESERVED_ACCOUNT_IDS or await store.get_account(candidate) is not None:
         n += 1
         candidate = f"{base}-{n}"
     return candidate

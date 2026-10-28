@@ -996,8 +996,42 @@ async def test_auth_on_advance_step_on_a_record_with_no_workspace_fails_without_
     assert (await bridge.store.get(rec.pipeline_id)).status != "failed"   # nothing submitted yet
     out = await bridge.advance_step(rec.pipeline_id, "work", approver="alice")
     assert out.status == "failed"
-    assert (await bridge.store.get(rec.pipeline_id)).status == "failed"
+    stored = await bridge.store.get(rec.pipeline_id)
+    assert stored.status == "failed"
+    assert stored.step_state["work"].status == "failed"
+    assert stored.step_state["work"].verdict == "workspace_unresolved"
+    assert stored.step_state["work"].approver is None          # the approval never applied
     assert not any(e in ("approved", "advanced") for _, e in rec_.audits)
+    assert [e for _, e in rec_.audits].count("workspace_unresolved") == 1
+    assert len(rec_.notified) == 1 and calls == []
+
+
+async def test_auth_on_a_refused_approval_rejects_its_review_and_records_no_approver(world, monkeypatch):
+    """An approval-gated step on a record with no workspace: the approval that
+    would release it is refused, so its review is rejected (not approved) and the
+    failed step does not name the approver."""
+    from cairn.core.dispatch.pipeline_bridge import PipelineBridge
+    from cairn.core.engine.bundle_pipeline import PipelinePlanStep
+    from cairn.core.storage.reviews import InMemoryReviewStore, pipeline_review_id
+
+    monkeypatch.setenv("CAIRN_JWT_SECRET", "test-secret")
+    reviews = InMemoryReviewStore()
+    monkeypatch.setattr(PipelineBridge, "_review_store", lambda self: reviews)
+    rec_ = _Recorder(monkeypatch)
+    bridge, calls = _real_bridge()
+    rec = await bridge.start_pipeline(_plan(PipelinePlanStep(id="work", ref="demo/work", approval=True)),
+                                      inputs={}, workspace_id="")
+    assert (await bridge.store.get(rec.pipeline_id)).step_state["work"].status == "awaiting_approval"
+    assert (await reviews.get_review(pipeline_review_id(rec.pipeline_id, "work"))).status == "open"
+    out = await bridge.advance_step(rec.pipeline_id, "work", approver="alice")
+    assert out.status == "failed"
+    stored = await bridge.store.get(rec.pipeline_id)
+    assert stored.step_state["work"].status == "failed"
+    assert stored.step_state["work"].verdict == "workspace_unresolved"
+    assert stored.step_state["work"].approver is None
+    assert (await reviews.get_review(pipeline_review_id(rec.pipeline_id, "work"))).status == "rejected"
+    assert not any(e in ("approved", "advanced") for _, e in rec_.audits)
+    assert [e for _, e in rec_.audits].count("workspace_unresolved") == 1
     assert len(rec_.notified) == 1 and calls == []
 
 
@@ -1015,6 +1049,9 @@ async def test_auth_on_held_back_steps_on_a_record_with_no_workspace_end_failed(
     await bridge._advance_held_back(rec.pipeline_id, {"work"})
     stored = await bridge.store.get(rec.pipeline_id)
     assert stored.status == "failed"
+    assert stored.step_state["work"].status == "failed"
+    assert stored.step_state["work"].verdict == "workspace_unresolved"
+    assert [e for _, e in rec_.audits].count("workspace_unresolved") == 1
     assert len(rec_.notified) == 1 and calls == []
 
 

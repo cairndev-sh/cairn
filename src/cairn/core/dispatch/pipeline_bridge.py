@@ -2838,6 +2838,10 @@ class PipelineBridge:
                                           reviewer=approver or "",
                                           rationale=f"blocked by gate: {step.gate}")
                 return await self.store.get(pipeline_id)  # type: ignore[return-value]
+            # The leg's gate reads the stored approval (`approved_state`) inside
+            # `_submit_step`, so the approver is set before the submit — and
+            # withdrawn again below when the submit is refused.
+            prior_approver = st.approver
             if approver:
                 st.approver = approver
             if fire_key is not None:
@@ -2849,6 +2853,12 @@ class PipelineBridge:
                 await self._audit(rec, step_id, "fire_recorded", {"fired_key": fire_key})
             self._cleanup_step_triggers(pipeline_id, step_id)  # a schedule/event step is now firing
             if await self._submit_step(rec, step, outputs) is _REFUSED:
+                # The approval never applied (no `approved` audit, the review is
+                # rejected): the failed step does not name its approver.
+                refused = rec.step_state.get(step_id)
+                if approver and refused is not None and refused.approver == approver:
+                    refused.approver = prior_approver
+                    await self.store.put(rec)
                 await self._decide_review(
                     pipeline_id, step_id, "rejected", reviewer=approver or "",
                     rationale=(rec.trigger or {}).get("failure_reason") or _NO_WORKSPACE_REASON)

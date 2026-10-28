@@ -166,6 +166,22 @@ def test_email_domain_extraction():
     assert S.email_domain("nope") == ""
 
 
+async def test_the_default_account_id_is_reserved_even_when_its_row_is_absent():
+    """`default` is the deployment's own account: sign-up never hands it out,
+    whether or not the store has seeded its row yet."""
+    class _Empty:
+        async def get_account(self, _id):
+            return None
+
+    assert await S._free_account_id(A.DEFAULT_ACCOUNT, store=_Empty()) == f"{A.DEFAULT_ACCOUNT}-2"
+    assert await S._free_account_id("acme", store=_Empty()) == "acme"
+
+
+async def test_a_company_named_default_does_not_get_the_default_account():
+    acct, _, created = await S.signup("Default", "founder@acme.com", "h")
+    assert created and acct.id != A.DEFAULT_ACCOUNT
+
+
 async def test_a_missing_company_falls_back_to_the_domain():
     acct, _, _ = await S.signup("", "founder@acme.com", "h")
     assert acct.name == "acme.com"
