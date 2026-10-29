@@ -2753,6 +2753,20 @@ class PipelineBridge:
     _FINALIZER_SETTLED = ("done", "failed", "skipped")
 
     @staticmethod
+    def _finalizer_awaiting_approval(rec: PipelineRecord, step_id: str) -> bool:
+        """#218 — the one step a person may still decide once the terminal intent is
+        set: a ``finalizer:`` whose operator a profile or policy gated, parked at
+        ``awaiting_approval``. The pipeline cannot settle until it does (its status
+        waits on every finalizer), so refusing the decision stranded the pipeline
+        in ``running`` and left whatever the finalizer releases (a paid box) held.
+        Every other step stays refused (#1787): no new work starts after the
+        teardown began."""
+        step = rec.plan.step(step_id) if rec.plan else None
+        st = rec.step_state.get(step_id)
+        return bool(getattr(step, "finalizer", False)) and st is not None \
+            and st.status == "awaiting_approval"
+
+    @staticmethod
     def _finalizer_steps(rec: PipelineRecord) -> list[Any]:
         """The plan's finalizer steps, in plan order (empty for every pipeline
         authored before #1787 — the whole feature keys off this being empty)."""
@@ -2950,7 +2964,7 @@ class PipelineBridge:
             # DIRECTLY, bypassing `_advance`'s terminal-intent guard. Without
             # this, approving a gate on a cancelled pipeline would start a leg
             # after the teardown had already begun.
-            if getattr(rec, "terminal_intent", ""):
+            if getattr(rec, "terminal_intent", "") and not self._finalizer_awaiting_approval(rec, step_id):
                 raise ValueError(
                     f"pipeline {pipeline_id!r} is finalizing "
                     f"({rec.terminal_intent}) — no further step can advance")
@@ -3062,7 +3076,7 @@ class PipelineBridge:
                 raise ValueError(f"no pipeline {pipeline_id!r}")
             if rec.status in ("done", "failed", "cancelled"):
                 raise ValueError(f"pipeline {pipeline_id!r} is {rec.status}")
-            if getattr(rec, "terminal_intent", ""):
+            if getattr(rec, "terminal_intent", "") and not self._finalizer_awaiting_approval(rec, step_id):
                 raise ValueError(
                     f"pipeline {pipeline_id!r} is finalizing "
                     f"({rec.terminal_intent}) — no step can be rejected")
