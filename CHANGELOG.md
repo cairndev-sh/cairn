@@ -4,6 +4,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 ### Fixed
+- A `finalizer:` whose operator a profile or policy gates (for example `compute/release`, risk `external_write`) can be approved or rejected while the pipeline finalizes. Before, `advance_step` and `reject_step` refused every step once the terminal intent was set, so the gated finalizer waited forever, the pipeline stayed `running`, and the machine it releases kept billing until its lease ran out. Approving runs the finalizer and the pipeline settles; rejecting settles it `failed`. Every other step stays refused during teardown. (#218)
 - Cancelling a run stops a `train/lora` fine-tune: the trainer checks for the cancel between steps, batches and the save, and the operator waits for its training thread to stop before the cancel completes, so a cancelled run never returns an adapter. `train/lora` now declares `supports_cancel`. (#124)
 - `cairn pipeline explain` reports the run store as the store chooses it: an unrecognised `CAIRN_STORAGE` is "refused" (naming at most its scheme), not "falls back to CAIRN_RUN_DB / in-memory", since the store has refused it since #1855; `CAIRN_RUN_DB` alone is `sqlite (CAIRN_RUN_DB)`, not in-memory. `cairn doctor`'s `run_db` row names the scheme through the same helper as the other diagnostics. (#274)
 
