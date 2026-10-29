@@ -3,6 +3,8 @@
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+### Fixed
+- Cancelling a run stops a `train/lora` fine-tune: the trainer checks for the cancel between steps, batches and the save, and the operator waits for its training thread to stop before the cancel completes, so a cancelled run never returns an adapter. `train/lora` now declares `supports_cancel`. (#124)
 
 ## [0.3.2] - 2026-10-29
 
