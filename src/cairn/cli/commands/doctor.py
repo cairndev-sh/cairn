@@ -32,7 +32,6 @@ import os
 import sys
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlsplit
 
 import typer
 
@@ -106,12 +105,7 @@ def check_run_db() -> CheckResult:
     if url.startswith("sqlite://"):
         path, knob = _settings.sqlite_path_from_url(url) or ":memory:", "CAIRN_STORAGE"
     elif url:
-        try:  # only the scheme: the value may carry a user and password
-            scheme = urlsplit(url).scheme
-        except ValueError:
-            scheme = ""
-        if not url.lower().startswith(f"{scheme}://"):
-            scheme = ""
+        scheme = _settings.url_scheme(url)  # only the scheme: the value may carry a user and password
         named = f"has an unrecognized scheme {scheme!r}" if scheme else "is not a storage URL"
         return CheckResult("run_db", "fail",
                            f"CAIRN_STORAGE {named}; the run store refuses it "
