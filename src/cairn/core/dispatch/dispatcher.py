@@ -58,6 +58,7 @@ from cairn.core.obs.metrics import record_run
 from cairn.core.obs.telemetry import current_trace_id, span
 from cairn.core.runtime.node_events import (
     bound_node_output as _bound_node_output,  # re-exported for tests + back-compat
+    llm_cost_from_node_events,
     node_event_data,
 )
 from cairn.core.workspace import current_workspace, scoped_workspace, workspace_scope
@@ -164,22 +165,8 @@ def _aggregate_cost(payloads: list[dict]) -> dict[str, float]:
 
 
 def _llm_cost_from_node_events(events: list) -> float:
-    """#530 — sum the per-node LLM spend the WORKER recorded on ``node`` events.
-
-    Under Temporal the LLM calls run in worker activities (``run_node``), outside
-    the server's cost scope, so the server-side tally is 0. Each ``run_node``
-    measures its node's spend and rides it out on the node event as
-    ``llm_cost_usd``; this sums it back into the run cost. Takes the LAST value per
-    node so a Temporal RETRY (which re-emits a node event) can't double-count. The
-    in-process path emits no ``llm_cost_usd`` on its events → returns 0 there."""
-    last: dict[str, float] = {}
-    for e in events:
-        if getattr(e, "type", None) != "node":
-            continue
-        data = getattr(e, "data", None)
-        if isinstance(data, dict) and isinstance(data.get("llm_cost_usd"), (int, float)):
-            last[data.get("node") or ""] = float(data["llm_cost_usd"])
-    return round(sum(last.values()), 6)
+    """Sum measured LLM spend from every node attempt."""
+    return llm_cost_from_node_events(events)
 
 
 def _cost_baseline_best_effort(cost: dict[str, float]) -> Optional[float]:
@@ -1201,7 +1188,14 @@ class RunDispatcher:
                                 co.setdefault(_op, {}).setdefault("model", eval_model)
                         run_inputs = {**inputs, "config_overrides": co}
                     from cairn.core.operator.runtime import launch_scope  # noqa: PLC0415 — ADR-0120 D7 (#2455)
-                    with obs.cost_scope(f"run-{template_ref}") as cost_ctx, sandbox_ctx, \
+                    run_cap = getattr(
+                        getattr(getattr(compiled, "spec", None), "budget", None),
+                        "max_cost_usd",
+                        None,
+                    )
+                    with obs.cost_scope(
+                        f"run-{template_ref}", max_cost_usd=run_cap
+                    ) as cost_ctx, sandbox_ctx, \
                             launch_scope(self.launch_handle()):
                         try:
                             output = await run_within_budget(
@@ -1247,10 +1241,15 @@ class RunDispatcher:
                     # cost.total_usd reflects real spend instead of $0.00.
                     # run_llm_usd = server-side cost scope (works for in_process).
                     # Under Temporal the LLM calls run in the WORKER, so the spend
-                    # rides on the run's `node` events instead — sum that and take
-                    # the larger, so BOTH runtimes report real cost.
+                    # rides on the run's `node` events instead. DBOS folds its
+                    # non-enforcing node meters into this run scope; using those
+                    # events too would double-count the same calls.
                     worker_llm_usd = _llm_cost_from_node_events(await self.store.get_events(inv.id))
-                    llm_usd = max(run_llm_usd, worker_llm_usd)
+                    runtime_name = _settings.runtime()
+                    if runtime_name == "dbos":
+                        llm_usd = max(run_llm_usd, worker_llm_usd)
+                    else:
+                        llm_usd = round(run_llm_usd + worker_llm_usd, 6)
                     payloads = [{"template_name": template_ref,
                                  "output": _json_safe(output),
                                  "llm_cost_usd": llm_usd}]

@@ -12,10 +12,11 @@ This module makes the section fleet-wide **on the substrate the owner chose
 (2026-08-24): Postgres, never Temporal** — Temporal stays the optional
 durability tier for agentic bodies; requiring it for control-plane scale
 would tax every future engine (Ray/Spark/Dask) that brings its own
-orchestration. ``CAIRN_STORAGE`` is the selector, exactly as it is for the run
-store and the #1530 budget backend: ``postgres://…`` → fleet-wide advisory
-locks, anything else → the same per-key ``asyncio.Lock`` behaviour as before
-(single-process dev and the entire hermetic test suite are unchanged).
+orchestration. The pipeline section is used by both the in-process bridge and
+Temporal worker activities. ``CAIRN_STORAGE`` is the selector, exactly as it is
+for the run store and the #1530 budget backend: ``postgres://…`` → fleet-wide
+advisory locks, anything else → the same per-key ``asyncio.Lock`` behaviour as
+before (single-process dev and the entire hermetic test suite are unchanged).
 
 **Why session-scoped ``pg_advisory_lock``, unlike #1530's xact-scoped one.**
 The budget reserve is one transaction on one connection, so the
@@ -224,7 +225,9 @@ class CriticalSections:
         it. ``reset_pools()`` owns its lifecycle, exactly as for store pools.
         Clearing the reference resets the demotion sentinel too, so a bridge
         restarted after a Postgres outage retries instead of staying local
-        forever."""
+        forever. Temporal activities use their own module-level instance, and
+        both instances coordinate across processes through the same Postgres
+        advisory-lock key."""
         self._pool = None
         self._local.clear()
 

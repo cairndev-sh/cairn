@@ -4,6 +4,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 ### Fixed
+- Cancelling a run stops a `train/lora` fine-tune: the trainer checks for the cancel between steps, batches and the save, and the operator waits for its training thread to stop before the cancel completes, so a cancelled run never returns an adapter. `train/lora` now declares `supports_cancel`. (#124)
 - `cairn pipeline explain` reports the run store as the store chooses it: an unrecognised `CAIRN_STORAGE` is "refused" (naming at most its scheme), not "falls back to CAIRN_RUN_DB / in-memory", since the store has refused it since #1855; `CAIRN_RUN_DB` alone is `sqlite (CAIRN_RUN_DB)`, not in-memory. `cairn doctor`'s `run_db` row names the scheme through the same helper as the other diagnostics. (#274)
 
 ## [0.3.2] - 2026-10-29

@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import asyncio
 import math
+import threading
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -58,6 +60,73 @@ def test_the_operations_train_and_score_for_real(tiny_model, tmp_path):
         EvalLossOp, {"adapter_path": out.adapter_path, "base_model": tiny_model, "dataset": str(ROWS),
                      "max_samples": 8, "max_seq_len": 32}))
     assert _finite(score.eval_loss) and score.tokens_seen > 0
+
+
+def test_cancelling_train_lora_stops_and_drains_its_worker(tiny_model, tmp_path, monkeypatch):
+    batch_started = threading.Event()
+    release_batch = threading.Event()
+    worker_exited = threading.Event()
+    cancel_event = None
+    output_dir = tmp_path / "cancelled-adapter"
+
+    original_check = F._check_cancelled
+    original_batch = F._batch
+    original_finetune = F.finetune
+
+    def record_cancel_event(event: threading.Event | None) -> None:
+        nonlocal cancel_event
+        if event is not None:
+            cancel_event = event
+        return original_check(event)
+
+    def block_first_batch(tokenizer: Any, texts: list[str], max_seq_len: int) -> dict[str, Any]:
+        encoded = original_batch(tokenizer, texts, max_seq_len)
+        batch_started.set()
+        if not release_batch.wait(timeout=10):
+            raise TimeoutError("test did not release the blocked training batch")
+        return encoded
+
+    def track_worker_exit(**kwargs: Any) -> dict[str, Any]:
+        try:
+            return original_finetune(**kwargs)
+        finally:
+            worker_exited.set()
+
+    monkeypatch.setattr(F, "_check_cancelled", record_cancel_event)
+    monkeypatch.setattr(F, "_batch", block_first_batch)
+    monkeypatch.setattr(F, "finetune", track_worker_exit)
+
+    async def cancel_run() -> None:
+        task = asyncio.create_task(run_operator_for_test(
+            TrainLoraOp,
+            {"dataset": str(ROWS), "steps": 2, "lora_rank": 2, "max_seq_len": 32,
+             "output_dir": str(output_dir)},
+            config={"base_model": tiny_model},
+        ))
+        try:
+            assert await asyncio.to_thread(batch_started.wait, 10), "training did not reach its first batch"
+            task.cancel()
+            deadline = asyncio.get_running_loop().time() + 5
+            while cancel_event is None or not cancel_event.is_set():
+                assert asyncio.get_running_loop().time() < deadline, "operator did not signal its worker"
+                await asyncio.sleep(0.01)
+            task.cancel()  # repeated cancellation must not abandon the worker
+            release_batch.set()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=10)
+        finally:
+            release_batch.set()
+            if not task.done():
+                task.cancel()
+                try:
+                    await asyncio.wait_for(task, timeout=10)
+                except asyncio.CancelledError:
+                    pass
+
+    assert TrainLoraOp.supports_cancel is True
+    asyncio.run(cancel_run())
+    assert worker_exited.is_set(), "cancelled operator returned before its worker exited"
+    assert not output_dir.exists(), "cancelled training must not publish an adapter"
 
 
 def test_the_stage_hashes_only_the_adapter_files_it_wrote(tiny_model, tmp_path):

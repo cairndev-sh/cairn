@@ -87,7 +87,7 @@ class BudgetCallback(BaseCallbackHandler):
         obs.record_llm(self.model, in_tok, out_tok, 0.0)
         # Per-investigation ceiling (tighter than the global one).
         ctx = obs.get()
-        if self.cap and ctx is not None and ctx.cost_usd > self.cap:
+        if self.cap and ctx is not None and ctx.enforce_cap and ctx.cost_usd > self.cap:
             raise obs.BudgetExceeded(
                 f"investigation over budget.max_cost_usd: "
                 f"${ctx.cost_usd:.4f} > ${self.cap:.4f}"
