@@ -27,6 +27,7 @@ re-exports (``cairn.core.operator``, ADR-0120 D7).
 """
 from __future__ import annotations
 
+import asyncio
 import datetime as _dt
 
 from cairn.core.operator import (
@@ -40,6 +41,29 @@ from cairn.core.operator import (
 from cairn.core.operator import Operation, OperationContext, ReportSpec, register_operator
 
 from operator_remote.schemas.lifecycle import ReleaseInput, ReleaseOutput
+
+#: ADR-0159 — how long a stop waits for an instance that is still ``pending``:
+#: EC2 refuses to stop one, so a box caught mid-start is stopped once it is up.
+PENDING_WAIT_S = 180.0
+PENDING_POLL_S = 5.0
+
+
+async def stop_once_started(instance_id: str, *, region: str, client) -> tuple[str, str | None]:
+    """Stop the instance, first waiting (bounded) for it to leave ``pending``.
+
+    Returns ``(state, after)``: the state the stop decision saw, and the state EC2
+    reported after the stop — ``None`` when the instance was already stopped and no
+    stop was sent. A box still ``pending`` after :data:`PENDING_WAIT_S` gets the
+    stop anyway, so EC2's refusal surfaces as the release's error."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + PENDING_WAIT_S
+    state = await describe_state(instance_id, region=region, client=client)
+    while state == "pending" and loop.time() < deadline:
+        await asyncio.sleep(PENDING_POLL_S)
+        state = await describe_state(instance_id, region=region, client=client)
+    if state in STOPPED_STATES:
+        return state, None
+    return state, await stop_instance(instance_id, region=region, client=client)
 
 
 @register_operator(name="compute/release", version="0.1.0",
@@ -61,14 +85,13 @@ class ComputeReleaseOp(Operation[ReleaseInput, ReleaseOutput]):
         client = ec2_client(box.region)
         now = iso(_dt.datetime.now(_dt.timezone.utc))
 
-        state = await describe_state(instance_id, region=box.region, client=client)
-        if state in STOPPED_STATES:
+        state, after = await stop_once_started(instance_id, region=box.region, client=client)
+        if after is None:
             return ReleaseOutput(
                 instance_id=instance_id, state=state, stopped=False,
                 already_stopped=True, stopped_at=now,
                 note=f"already {state} — nothing to release",
             )
-        after = await stop_instance(instance_id, region=box.region, client=client)
         return ReleaseOutput(
             instance_id=instance_id, state=after or state, stopped=True,
             already_stopped=False, stopped_at=now,

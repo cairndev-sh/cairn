@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 import time
 
 os.environ.setdefault("OPENAI_API_KEY", "sk-test-dummy")
@@ -324,3 +325,105 @@ async def test_a_running_leg_on_another_target_is_left_alone(ec2, monkeypatch):
 
     assert "cancel:j-train" in ec2.calls
     assert "cancel:j-side" not in ec2.calls, ec2.calls
+
+
+# ── ADR-0159 (#219): a cancel at any point of acquire ends with the box stopped ──
+class _SlowEC2(FakeEC2):
+    """One EC2 call (``block``) waits until the test lets it go, the way a real call is
+    still in flight when a cancel lands. ``pending`` describes after a start read
+    ``pending`` (EC2 refuses to stop such an instance), then ``running``."""
+
+    def __init__(self, block: str = "", pending: int = 0) -> None:
+        super().__init__()
+        self.block, self.pending = block, pending
+        self.entered, self.go = threading.Event(), threading.Event()
+
+    def _hold(self, name: str) -> None:
+        if self.block == name:
+            self.block = ""  # one call only: the release's own calls go straight through
+            self.entered.set()
+            self.go.wait(5)
+
+    def describe_instances(self, **kw):
+        self._hold("describe")
+        if self.state == "pending":
+            if self.pending > 0:
+                self.pending -= 1
+            else:
+                self.state = "running"
+        return super().describe_instances(**kw)
+
+    def create_tags(self, **kw):
+        self._hold("tags")
+        return super().create_tags(**kw)
+
+    def start_instances(self, **kw):
+        self._hold("start")
+        resp = super().start_instances(**kw)
+        if self.pending:
+            self.state = "pending"
+        return resp
+
+    def stop_instances(self, **kw):
+        if self.state == "pending":
+            self.calls.append("stop-refused")
+            raise RuntimeError("IncorrectInstanceState: the instance is pending and cannot be stopped")
+        return super().stop_instances(**kw)
+
+
+async def _cancel_during_acquire(fake: _SlowEC2, landed):
+    """Start the box pipeline, cancel it once ``landed()`` says acquire is at the
+    point under test, let the held EC2 call go, and return the settled record."""
+    d = RunDispatcher(FakeRunner(), backend=build_storage())
+    b = PipelineBridge(d, store=InMemoryPipelineStore())
+    await b.start()
+    try:
+        rec = await b.start_pipeline(plan_pipeline(_def("ok")), inputs={"compute_connection": "gpu"})
+        deadline = asyncio.get_event_loop().time() + 5
+        while not landed():
+            assert asyncio.get_event_loop().time() < deadline, fake.calls
+            await asyncio.sleep(0.01)
+        cancel = asyncio.create_task(b.cancel_pipeline(rec.pipeline_id))
+        await asyncio.sleep(0.2)  # the cancel has reached acquire while the call is in flight
+        fake.go.set()
+        await cancel
+        return await _wait(b.store, rec.pipeline_id, lambda r: r.status in ("done", "failed", "cancelled"))
+    finally:
+        fake.go.set()
+        b.stop()
+
+
+@pytest.mark.parametrize("point", ["describe", "tags"])
+async def test_a_cancel_before_the_start_never_starts_the_box(ec2, point):
+    fake = _SEAM["ec2"] = _SlowEC2(block=point)
+    rec = await _cancel_during_acquire(fake, fake.entered.is_set)
+    await asyncio.sleep(0.1)  # the held call's thread has returned; nothing may follow it
+
+    assert rec.status == "cancelled" and rec.step_state["release"].status == "done"
+    assert rec.step_state["acquire"].verdict == "cancelled"
+    assert "start" not in fake.calls, fake.calls
+    assert fake.state == "stopped"
+
+
+async def test_a_cancel_while_the_start_is_in_flight_stops_what_it_started(ec2):
+    fake = _SEAM["ec2"] = _SlowEC2(block="start")
+    rec = await _cancel_during_acquire(fake, fake.entered.is_set)
+
+    assert rec.status == "cancelled" and rec.step_state["release"].status == "done"
+    assert fake.calls.index("start") < fake.calls.index("stop"), fake.calls
+    assert fake.state == "stopped", "the start landed after the cancel: the box must not bill"
+
+
+async def test_a_cancel_while_the_box_is_pending_stops_it_once_it_is_up(ec2, monkeypatch):
+    monkeypatch.setattr("operator_remote.operators.release.PENDING_POLL_S", 0.01)
+
+    async def _booting(host, port, *, timeout_s, interval_s=5.0):
+        await asyncio.sleep(3600)  # SSH never answers before the cancel
+
+    monkeypatch.setattr("operator_remote.operators.acquire.wait_port_open", _booting)
+    fake = _SEAM["ec2"] = _SlowEC2(pending=3)
+    rec = await _cancel_during_acquire(fake, lambda: "start" in fake.calls)
+
+    assert rec.status == "cancelled" and rec.step_state["release"].status == "done"
+    assert "stop-refused" not in fake.calls, fake.calls
+    assert fake.state == "stopped"
