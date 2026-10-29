@@ -64,6 +64,12 @@ Schema (Phase-1 §2 — profile layer extension):
     ceiling_usd      = 100
     local_hourly_usd = 0.80
 
+    [profile.approval]
+    # #256 (ADR-0034) — gate every operator of these risk classes behind a
+    # human approval, on top of each operator's own `requires_approval`.
+    mode            = "enforce"
+    default_on_risk = ["paid_compute", "production_mutation"]
+
     [profile.backends]
     llm_gateway     = "https://bifrost.internal.acme.com"
     embedder        = "bge-large-en"
@@ -109,9 +115,15 @@ _PROFILE_TOP_KEYS = {"extends", "capabilities", "bindings", "mcp_servers", "back
                      # ADR-0155 D1 — the deployment's budget default, ceiling and
                      # local-machine rate; a closed table of three optional numbers.
                      "budget",
+                     # #256 (ADR-0034) — the deployment's coarse approval switch: gate
+                     # every operator of a listed risk class. The resolver read it
+                     # since ADR-0034; the closed schema refused the key until now.
+                     "approval",
                      "pack_policies", "knowledge", "config"}
 _NOTIFY_KEYS = {"events", "channel", "webhook_env"}
 _BUDGET_KEYS = {"default_usd", "ceiling_usd", "local_hourly_usd"}
+_APPROVAL_KEYS = {"mode", "default_on_risk"}
+_APPROVAL_MODES = {"off", "enforce"}
 _MCP_SERVER_KEYS = {"transport", "url", "command", "env", "tool_allow_list_strict"}
 _MCP_TRANSPORTS = {"http", "stdio"}
 
@@ -190,6 +202,12 @@ class Profile:
     # a finite number >= 0; absent keys are absent here. Empty = no deployment
     # budget (today's behaviour, D8). `extends`: a child's key replaces its parent's.
     budget: dict[str, float] = field(default_factory=dict)
+    # #256 (ADR-0034): `[profile.approval]` — `mode` ("off" | "enforce") and
+    # `default_on_risk` (operator risk classes, pack.toml `risk`). With "enforce",
+    # every operator whose risk is listed needs a human approval; the resolver's
+    # "profile" authority (`approval/resolver.py`). Empty = no coarse switch.
+    # `extends`: a child's key replaces its parent's.
+    approval: dict[str, Any] = field(default_factory=dict)
     source: Optional[Path] = None
 
 
@@ -333,6 +351,7 @@ def _load_profile_recursive(path: Path, visited: set[Path]) -> Profile:
     own_config = _parse_config_table(profile_tbl.get("config"), path)
     own_notify = _parse_notify_table(profile_tbl.get("notify"), path)
     own_budget = _parse_budget_table(profile_tbl.get("budget"), path)
+    own_approval = _parse_approval_table(profile_tbl.get("approval"), path)
 
     merged_caps: dict[str, str] = {}
     merged_bindings: dict[str, str] = {}
@@ -376,6 +395,9 @@ def _load_profile_recursive(path: Path, visited: set[Path]) -> Profile:
     merged_budget: dict[str, float] = dict(parent.budget) if parent is not None else {}
     merged_budget.update(own_budget)
     _check_budget_order(merged_budget, path)
+    # approval (#256): shallow per-key, a child's value replaces its parent's.
+    merged_approval: dict[str, Any] = dict(parent.approval) if parent is not None else {}
+    merged_approval.update(own_approval)
 
     logger.info(
         "profile loaded path=%s capabilities=%d bindings=%d "
@@ -399,6 +421,7 @@ def _load_profile_recursive(path: Path, visited: set[Path]) -> Profile:
         config=merged_config,
         notify=merged_notify,
         budget=merged_budget,
+        approval=merged_approval,
         source=path,
     )
 
@@ -433,6 +456,42 @@ def _check_budget_order(budget: dict[str, float], path: Path) -> None:
         raise ProfileError(
             f"{path}: profile.budget.default_usd ({d:g}) is above ceiling_usd ({c:g})"
         )
+
+
+def _parse_approval_table(raw: Any, path: Path) -> dict[str, Any]:
+    """Parse ``[profile.approval]`` (#256, ADR-0034). Closed: an unknown key, a
+    missing or unknown ``mode``, or a ``default_on_risk`` entry that is not an
+    operator risk class fails at parse, so a typo never leaves a gate off."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ProfileError(f"{path}: [profile.approval] must be a table")
+    bad = sorted(set(raw.keys()) - _APPROVAL_KEYS)
+    if bad:
+        raise ProfileError(
+            f"{path}: unknown key(s) in [profile.approval]: {bad!r}. "
+            f"Allowed: {sorted(_APPROVAL_KEYS)!r}."
+        )
+    mode = raw.get("mode")
+    if mode not in _APPROVAL_MODES:
+        raise ProfileError(
+            f"{path}: profile.approval.mode must be one of {sorted(_APPROVAL_MODES)!r}, got {mode!r}"
+        )
+    from cairn.core.pack.manifest import _OPERATOR_RISK_VALUES  # noqa: PLC0415 - the one risk vocabulary
+
+    out: dict[str, Any] = {"mode": mode}
+    if "default_on_risk" in raw:  # absent keys stay absent, so `extends` keeps the parent's list
+        risks = raw["default_on_risk"]
+        if not isinstance(risks, list) or not all(isinstance(r, str) for r in risks):
+            raise ProfileError(f"{path}: profile.approval.default_on_risk must be a list of strings")
+        unknown = sorted(set(risks) - _OPERATOR_RISK_VALUES)
+        if unknown:
+            raise ProfileError(
+                f"{path}: unknown profile.approval.default_on_risk: {unknown!r}. "
+                f"Allowed: {sorted(_OPERATOR_RISK_VALUES)!r}."
+            )
+        out["default_on_risk"] = list(risks)
+    return out
 
 
 def _parse_notify_table(raw: Any, path: Path) -> dict[str, Any]:

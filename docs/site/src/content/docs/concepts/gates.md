@@ -161,6 +161,19 @@ rules:
     reason: "a write in hello-prod needs a person's approval (hello-cairn policy)"
 ```
 
+An environment can also ask for every operator of a risk class at once, in its
+`profile.toml`. Each operator's manifest declares its `risk`: `read_only`,
+`external_write`, `production_mutation` or `paid_compute`.
+
+```toml
+[profile.approval]
+mode            = "enforce"            # or "off"
+default_on_risk = ["paid_compute", "production_mutation"]
+```
+
+A typo in this table (an unknown key, mode or risk class) stops the profile
+from loading, so a misspelling never leaves the gate off.
+
 A task leg paused this way is approved with the same
 `cairn remote advance`. An approval inside an agentic flow pauses its run;
 decide it with `cairn remote approve <run_id>` or `cairn remote reject <run_id>`
