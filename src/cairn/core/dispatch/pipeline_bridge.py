@@ -2175,7 +2175,10 @@ class PipelineBridge:
                         ) from None
                 else:
                     output = await self._invoke_task_op(op_name, resolved, rec, s)
-            payloads = [{"output": output, "llm_cost_usd": round(cost_ctx.cost_usd, 6)}]
+            # the run's `cost` always carries the rollup; the payload names the LLM spend
+            # only when there was some, so a leg that spent nothing keeps its shape
+            llm_usd = round(cost_ctx.cost_usd, 6)
+            payloads = [{"output": output, **({"llm_cost_usd": llm_usd} if llm_usd else {})}]
             cost = _aggregate_cost(payloads)
             await self.dispatcher.store.update(
                 run.id, status="done", ended_at=_now(),
