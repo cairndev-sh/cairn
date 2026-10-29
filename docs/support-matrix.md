@@ -35,6 +35,7 @@ the prod box with a real outcome). "Code exists" alone never earns SUPPORTED. Up
 | Provider task legs (`train/runpod\|vast\|modal\|kaggle`) | EXPERIMENTAL | mocked-transport tests; ssh is the proven path |
 | `compute/acquire` / `compute/release` (start and stop the EC2 box a `compute.ssh` connection names; public since 0.3.1) | EXPERIMENTAL | CI TESTED with a mocked EC2 client (`packages/cairn-operator-remote/tests`); no live start/stop on a public release yet (cairn-extensions#9) |
 | GPU leg pricing (`hourly_usd × timeout` estimate at the launch door, per-attempt settle; ADR-0151, ADR-0152; since 0.3.1) | EXPERIMENTAL | CI TESTED (`tests/core/test_gpu_leg_pricing.py`); no priced live run yet (cairn-extensions#9) |
+| Deployment budget default, ceiling and local rate (`[profile.budget]`; ADR-0155; since 0.3.2) | EXPERIMENTAL | CI TESTED (`tests/core/test_deployment_budget.py`) |
 
 ## Trainers and training capabilities
 | Item | Status | Evidence |
@@ -93,3 +94,8 @@ public core (the `cairndev` and `cairn-client` wheels): SUPPORTED (CI TESTED in 
 The console, its MCP surface and `cairn-sdk` are part of cairn-platform (ADR-0135). Remote deployment
 (compose, EC2 script, Helm lint): SUPPORTED for compose (PRODUCTION PROVEN); Helm chart
 IN DEVELOPMENT (ADR-0104 D4).
+A pipeline run's governance trail (since 0.3.2): its decisions and spend in the hash-chained audit
+log, `cairn audit verify`, an attributed gate reject (`POST /pipelines/{id}/steps/{step}/reject`,
+`cairn remote reject <pipeline> <step>`) and one OpenTelemetry trace per run: EXPERIMENTAL (CI TESTED in
+`test_pipeline_audit_trail.py`, `test_audit_chain_writers.py`, `test_pipeline_reject.py`,
+`test_pipeline_trace.py`).

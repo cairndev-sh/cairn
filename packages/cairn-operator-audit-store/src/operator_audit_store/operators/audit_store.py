@@ -12,7 +12,8 @@ class is dual-purpose:
 
 Tamper-evidence by hash-chain: each row carries ``prev_hash`` + ``hash`` where
 ``hash = sha256(prev_hash + canonical(event))``. Altering any row breaks every
-later link. We reuse the ``events.jsonl`` file convention (ADR-0028: do NOT
+later link. Every append re-reads the head from the file under a file lock, so
+one log has one chain however many writers share it. We reuse the ``events.jsonl`` file convention (ADR-0028: do NOT
 build a new audit store); richer sinks (`operator-audit-otel`, `-immudb`,
 `-siem`) ship later and swap the binding.
 """
@@ -20,13 +21,15 @@ from __future__ import annotations
 from cairn.core.operator import getenv
 
 import asyncio
-import hashlib
+import contextlib
 import json
+import logging
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from cairn.core.operator import AuditEvent
+from cairn.core.operator import AuditEvent, GENESIS_HASH, chain_hash
 from cairn.core.operator import Operation, OperationContext, ReportSpec, register_operator
 
 from operator_audit_store.schemas.audit_store import (
@@ -34,16 +37,7 @@ from operator_audit_store.schemas.audit_store import (
     AuditWriteOutput,
 )
 
-_GENESIS = "0" * 64
-
-
-def _canonical(payload: dict) -> str:
-    """Stable serialization for hashing — key order + separators are fixed."""
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
-
-
-def _chain_hash(prev_hash: str, payload: dict) -> str:
-    return hashlib.sha256((prev_hash + _canonical(payload)).encode("utf-8")).hexdigest()
+logger = logging.getLogger(__name__)
 
 
 def _default_path() -> Path:
@@ -51,57 +45,124 @@ def _default_path() -> Path:
     return Path(getenv("CAIRN_AUDIT_LOG", "audit.jsonl"))
 
 
+_TAIL_CHUNK = 8192
+_LOCK_WAIT_S = 30.0
+
+try:  # POSIX
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover — Windows: fall back to a sidecar lock file
+    _fcntl = None
+
+
+@contextlib.contextmanager
+def _exclusive(f, path: Path):
+    """Hold an exclusive cross-process lock for the duration of one append.
+
+    POSIX: ``flock`` on the log's own descriptor. Elsewhere: a ``<log>.lock``
+    sidecar created with ``O_EXCL``. A file system that refuses ``flock``
+    (some network mounts) is logged and the append proceeds unlocked, as before.
+    """
+    if _fcntl is not None:
+        try:
+            _fcntl.flock(f.fileno(), _fcntl.LOCK_EX)
+        except OSError as exc:
+            logger.warning("audit log %s: file locking unavailable (%s); appends from "
+                           "several processes may not share one chain", path, exc)
+            yield
+            return
+        try:
+            yield
+        finally:
+            _fcntl.flock(f.fileno(), _fcntl.LOCK_UN)
+        return
+    lock = path.with_name(path.name + ".lock")  # pragma: no cover
+    deadline = time.monotonic() + _LOCK_WAIT_S  # pragma: no cover
+    while True:  # pragma: no cover
+        try:
+            os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            break
+        except FileExistsError:
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"audit log lock {lock} held for over {_LOCK_WAIT_S:.0f}s")
+            time.sleep(0.02)
+    try:  # pragma: no cover
+        yield
+    finally:  # pragma: no cover
+        with contextlib.suppress(OSError):
+            os.unlink(lock)
+
+
+def _tail_state(f) -> tuple[str, bool]:
+    """Read the chain head from the END of the open log without scanning it.
+
+    Returns ``(last_hash, ends_with_newline)``. Walks backwards in chunks to the
+    last parseable row; a corrupt line is skipped (the chain continues from the
+    last good row), an empty file starts at genesis.
+    """
+    size = f.seek(0, os.SEEK_END)
+    if size == 0:
+        return GENESIS_HASH, True
+    f.seek(size - 1)
+    ends_nl = f.read(1) == b"\n"
+    pos, buf = size, b""
+    while pos > 0:
+        step = min(_TAIL_CHUNK, pos)
+        pos -= step
+        f.seek(pos)
+        buf = f.read(step) + buf
+        lines = buf.split(b"\n")
+        # lines[0] may be a partial line unless we reached the start of the file
+        complete = lines if pos == 0 else lines[1:]
+        for raw in reversed(complete):
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                h = json.loads(raw).get("hash")
+            except Exception:  # noqa: BLE001 — skip a corrupt row, keep going
+                continue
+            if isinstance(h, str) and h:
+                return h, ends_nl
+    logger.warning("audit log has no readable chain head; starting a new chain")
+    return GENESIS_HASH, ends_nl
+
+
 class _HashChainLog:
     """Append-only JSONL with a sha256 hash-chain over canonicalized rows.
 
-    On construction the chain head is recovered from the last row of an
-    existing file, so the chain continues unbroken across process restarts.
-    Writes are serialized with an ``asyncio.Lock`` so concurrent seams cannot
-    interleave and corrupt the chain.
+    One chain head across writers: every append takes an exclusive file lock and
+    reads the last row's hash from the file itself, so any number of instances,
+    in any number of processes, extend the same chain. Within an instance an
+    ``asyncio.Lock`` keeps concurrent seams from queueing threads needlessly.
     """
 
     def __init__(self, path: Path) -> None:
         self._path = path
         self._lock = asyncio.Lock()
-        self._prev = self._recover_prev()
 
-    def _recover_prev(self) -> str:
-        try:
-            if not self._path.exists():
-                return _GENESIS
-            last = _GENESIS
-            with self._path.open("r") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        last = json.loads(line).get("hash", last)
-                    except Exception:  # noqa: BLE001 — skip a corrupt row, keep going
-                        continue
-            return last
-        except Exception:  # noqa: BLE001 — unreadable file → start a fresh chain
-            return _GENESIS
-
-    def _write_row(self, row: dict) -> None:
-        """Blocking file append — run via asyncio.to_thread so the audit write
+    def _append_row(self, payload: dict) -> str:
+        """Blocking locked append — run via asyncio.to_thread so the audit write
         (fired on every governed op) never stalls the event loop (#86)."""
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        with self._path.open("a") as f:
-            f.write(json.dumps(row, default=str) + "\n")
+        with self._path.open("a+b") as f:
+            with _exclusive(f, self._path):
+                prev, ends_nl = _tail_state(f)
+                h = chain_hash(prev, payload)
+                row = {**payload, "prev_hash": prev, "hash": h}
+                data = ("" if ends_nl else "\n") + json.dumps(row, default=str) + "\n"
+                f.write(data.encode("utf-8"))
+                f.flush()
+                os.fsync(f.fileno())
+        return h
 
     async def append(self, payload: dict) -> str:
         async with self._lock:
-            h = _chain_hash(self._prev, payload)
-            row = {**payload, "prev_hash": self._prev, "hash": h}
-            await asyncio.to_thread(self._write_row, row)
-            self._prev = h
-            return h
+            return await asyncio.to_thread(self._append_row, payload)
 
 
 @register_operator(
     name="audit/store",
-    version="0.1.0",
+    version="0.1.1",
     capabilities=["audit.sink"],
     implements=["contract://audit.sink/1.0.0"],  # #2242 V1-B — cairn-contracts-audit
 )
@@ -116,7 +177,7 @@ class AuditStoreOp(Operation[AuditWriteInput, AuditWriteOutput]):
     reports = ReportSpec.NONE
 
     def __init__(self) -> None:
-        # One log per instance; get_audit_sink() instantiates + caches once.
+        # The head lives in the file, not here: any number of instances share one chain.
         self._log = _HashChainLog(_default_path())
 
     # ── service path (called by obs.audit.get_audit_sink) ──────────────

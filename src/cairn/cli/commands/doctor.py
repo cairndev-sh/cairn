@@ -8,8 +8,8 @@ output is a per-category report with one of three statuses per check:
 
   ✓ ok    — set / reachable / writable
   ⚠ warn  — unset-but-optional, unreachable, defaulted in a way operators often
-            want to override (e.g. unset CAIRN_RUN_DB → in-memory store
-            that loses state on restart)
+            want to override (e.g. unset CAIRN_STORAGE and CAIRN_RUN_DB →
+            in-memory store that loses state on restart)
   ✗ fail  — required-but-missing, unwritable path, or invalid value
 
 Pairs with ``cairn validate`` (artifact validation) and ``cairn ls``
@@ -32,6 +32,7 @@ import os
 import sys
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlsplit
 
 import typer
 
@@ -49,9 +50,13 @@ _PROBE_TIMEOUT_SECONDS = 2.0
 
 
 def _mask(value: str) -> str:
-    """Mask a secret like 'xoxb-1234567' → 'xoxb-12******'."""
+    """Mask a secret like 'xoxb-1234567' → 'xoxb-12******'. A URL, or a DSN missing
+    its scheme, goes through ``redacted_url`` instead: its first characters are the
+    user and password (GHSA-gw2v-3922-g7gm)."""
     if not value:
         return ""
+    if _settings.url_scheme(value) or "@" in value:
+        return _settings.redacted_url(value)
     keep = min(8, max(2, len(value) // 4))
     return value[:keep] + "*" * max(4, len(value) - keep)
 
@@ -76,7 +81,8 @@ def check_settings() -> list[CheckResult]:
                                        "unset (optional)",
                                        category=spec.category))
             continue
-        shown = _mask(raw) if spec.secret else raw
+        # A knob not marked secret can still hold a DSN (CAIRN_BUS, CAIRN_JOB_CHANNEL)
+        shown = _mask(raw) if spec.secret else _settings.redacted_url(raw)
         if legacy and not os.environ.get(spec.env_var):  # ADR-0122 D4: read until 1.0, then ignored
             out.append(CheckResult(spec.env_var, "warn",
                                    f"set: {shown} via {legacy} — deprecated, rename it to {spec.env_var}",
@@ -90,12 +96,33 @@ def check_settings() -> list[CheckResult]:
 
 
 def check_run_db() -> CheckResult:
-    """If CAIRN_RUN_DB is set, verify the parent dir is writable."""
-    path = _settings.run_db_path()
+    """Where the run store persists, chosen as ``storage.default_store`` chooses it:
+    ``CAIRN_STORAGE`` (Postgres or a ``sqlite://`` file), else ``CAIRN_RUN_DB``, else
+    in-memory (#61). A SQLite file's parent dir must be writable."""
+    url = getenv("CAIRN_STORAGE", "").strip()
+    if url.startswith(("postgres://", "postgresql://")):
+        label = _settings.store_identity()[0]  # host:port/db, never the user or password
+        return CheckResult("run_db", "ok", f"{label} (CAIRN_STORAGE)", category="store")
+    if url.startswith("sqlite://"):
+        path, knob = _settings.sqlite_path_from_url(url) or ":memory:", "CAIRN_STORAGE"
+    elif url:
+        try:  # only the scheme: the value may carry a user and password
+            scheme = urlsplit(url).scheme
+        except ValueError:
+            scheme = ""
+        if not url.lower().startswith(f"{scheme}://"):
+            scheme = ""
+        named = f"has an unrecognized scheme {scheme!r}" if scheme else "is not a storage URL"
+        return CheckResult("run_db", "fail",
+                           f"CAIRN_STORAGE {named}; the run store refuses it "
+                           "(postgres://…, sqlite:///path.db, sqlite://:memory:)",
+                           category="store")
+    else:
+        path, knob = _settings.run_db_path(), "CAIRN_RUN_DB"
     if not path:
         return CheckResult(
             "run_db", "warn",
-            "CAIRN_RUN_DB unset → in-memory store (state lost on restart)",
+            "CAIRN_STORAGE and CAIRN_RUN_DB unset → in-memory store (state lost on restart)",
             category="store",
         )
     if path == ":memory:":
@@ -111,7 +138,7 @@ def check_run_db() -> CheckResult:
         return CheckResult("run_db", "fail",
                            f"parent dir {parent} is not writable", category="store")
     return CheckResult("run_db", "ok",
-                       f"parent {parent} is writable", category="store")
+                       f"{path} ({knob}); parent {parent} is writable", category="store")
 
 
 def check_engine_store() -> Optional[CheckResult]:
@@ -971,7 +998,7 @@ def _backend_provenance_checks() -> list[CheckResult]:
         # so a colon here would make a diagnostic row masquerade as a check.
         CheckResult(
             f"config[{r['key']}]", "ok",
-            f"{r['key']}={r['value']} (from {r['provenance']}"
+            f"{r['key']}={_settings.redacted_url(str(r['value']))} (from {r['provenance']}"
             + (f": {r['env']}" if r["provenance"] == "env" and r["env"] else "")
             + ")",
             category="profile",

@@ -29,6 +29,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 from urllib.parse import urlsplit, urlunsplit
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
@@ -446,6 +447,43 @@ def masked_dsn(dsn: str) -> str:
     userinfo, _, hostport = parts.netloc.rpartition("@")
     user, _, _ = userinfo.partition(":")
     return urlunsplit(parts._replace(netloc=f"{user}:***@{hostport}"))
+
+
+_URL_SCHEME = re.compile(r"([a-z][a-z0-9+.-]*)://")
+
+
+def url_scheme(value: str) -> str:
+    """The scheme of a ``<scheme>://…`` value, lowercased, else ``""``.
+
+    The one part of a URL a message can always name. A DSN carries its user and
+    password, and so does a value that only looks like one (``user:pass@host``, a
+    typo in the scheme), so an error about such a value names this and nothing else.
+    """
+    m = _URL_SCHEME.match((value or "").strip().lower())
+    return m.group(1) if m else ""
+
+
+def redacted_url(value: str) -> str:
+    """``value`` as a diagnostic may print it: a URL without its user, password,
+    query or fragment (``postgresql://db:5432/cairn``); ``***`` for a value with a
+    ``@`` but no scheme (a DSN missing it); anything else unchanged.
+
+    Unlike :func:`masked_dsn` it keeps neither the user nor a query (libpq takes
+    ``?password=``), and a URL it cannot take apart is just ``<scheme>://***``.
+    """
+    value = (value or "").strip()
+    scheme = url_scheme(value)
+    if not scheme:
+        return "***" if "@" in value else value
+    try:
+        parts = urlsplit(value)
+        host = parts.hostname or ""
+        port = f":{parts.port}" if parts.port else ""
+    except ValueError:
+        return f"{scheme}://***"
+    if "@" in parts.path:  # an unescaped '@' or '/' in the password spills into the path
+        return f"{scheme}://***"
+    return f"{scheme}://{host}{port}{parts.path}"
 
 
 def dbos_dsn() -> str:

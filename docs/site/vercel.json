@@ -1,4 +1,5 @@
 {
   "framework": "astro",
-  "outputDirectory": "dist"
+  "outputDirectory": "dist",
+  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- ."
 }

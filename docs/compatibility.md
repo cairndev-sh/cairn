@@ -1,6 +1,6 @@
 # Compatibility and versioning policy
 
-Cairn is pre-1.0 (`0.3.1`). The policy is strict about *what* is public and honest about
+Cairn is pre-1.0 (`0.3.2`). The policy is strict about *what* is public and honest about
 *how* it may change; independently installable packs depend on it.
 
 ## What is public

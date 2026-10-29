@@ -16,7 +16,7 @@
 
 [pack]
 name        = "hello-cairn"
-version     = "0.2.4"
+version     = "0.2.5"
 description = "Example pack: check a dataset, ask its docs, fine-tune a small model and run a nightly job, each behind gates a person or the data answers."
 tags = [
     "domain:example",

@@ -105,7 +105,8 @@ anyway. When no engine answers, the write goes ahead and the line names the stor
 | Command | What it does |
 |---|---|
 | `cairn replay <run-id>` | Replays a past run's recorded event trace as a timeline. `--json` for the raw events. |
-| `cairn lineage [subject]` | Shows provenance records from the audit log, matched on a subject such as a model name, and checks the hash chain as it reads. Omit the subject to list them all. The operator that writes lineage records is part of cairn-platform. |
+| `cairn audit verify` | Checks the audit log's hash chain without writing anything. Reads `--audit-log`, else `CAIRN_AUDIT_LOG`, else `./audit.jsonl`. Prints the row count, the first and last timestamp, the head hash and, if the chain is broken, the first broken row and why (`hash`, `prev_hash` or `corrupt line`). `--json` prints the same as `{path, rows, first_ts, last_ts, head_hash, ok, broken}`. Exit 0: verified (an empty log verifies). Exit 2: broken or a corrupt line. Exit 1: no log, or it cannot be read. |
+| `cairn lineage [subject]` | Shows provenance records from the audit log, matched on a subject such as a model name, and checks the hash chain as it reads. Omit the subject to list them all. `--expect-head <hash>` also checks that the log ends at a receipt you quoted earlier, which shows rows missing from its end. The operator that writes lineage records is part of cairn-platform. |
 
 ## A remote server
 
@@ -125,7 +126,8 @@ running on the server; log in again and re-attach with `cairn remote pipeline <i
 | `cairn remote findings <id>` | A run's findings, or every step's findings for a pipeline. |
 | `cairn remote cancel-pipeline <id>` | Cancels a pipeline and its running legs. |
 | `cairn remote ps` / `status` / `logs` | Lists runs, shows one run, prints or follows its event log. |
-| `cairn remote approve` / `reject` | Decides a run paused at an approval inside a flow. |
+| `cairn remote approve <run-id>` / `reject <run-id>` | Decides a run paused at an approval inside a flow. |
+| `cairn remote reject <id> <step> --reason TEXT` | Rejects a pipeline gate waiting on a person. `--reason` is required; `--approver` is recorded when sign-in is off, and under sign-in the server records your identity. The pipeline ends `failed` and the step's verdict is `rejected`. A single `pl_…` argument is refused: name the gate step. A 404, 403 or 409 is printed as such. |
 
 Every `remote` command takes `--endpoint` / `-e`, `--token` and `--profile`.
 

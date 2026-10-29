@@ -2,7 +2,7 @@
 # The DISTRIBUTION is `cairndev` (ADR-0121 D3, #2429); the import name `cairn` and the
 # `cairn` command do not change.
 name = "cairndev"
-version = "0.3.1"
+version = "0.3.2"
 description = "A governed control plane for AI and ML work: pipelines that fine-tune, evaluate, compress and serve models, with approval, policy, budget and lineage on every step"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -93,7 +93,8 @@ Issues = "https://github.com/cairndev-sh/cairn/issues"
 [project.scripts]
 cairn = "cairn.cli.main:app"
 # The trigger server, runnable from an installed wheel (ADR-0029). A second
-# console script, NOT an 11th CLI verb — the verb list is locked (§24.20.14).
+# console script, NOT a CLI verb — a new top-level name needs an ADR (ADR-0020 §24.20.14;
+# the list as it is: ADR-0156 D1).
 cairn-server = "cairn.core.triggers.main:main"
 # The Temporal worker (an internal issue): the durable executor that picks
 # up workflows the server submits when CAIRN_RUNTIME=temporal. Needs the

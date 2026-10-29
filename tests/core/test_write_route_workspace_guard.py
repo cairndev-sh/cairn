@@ -150,6 +150,7 @@ GUARDED = [
     ("DELETE", "/pipelines/presets", {"params": {"ref": "pipeline:nope/missing", "name": "p1"}}, 200),
     ("POST", f"/pipelines/{ACME_PIPE}/steps/s1/advance", {}, 409),
     ("POST", f"/pipelines/{ACME_PIPE}/steps/s1/approve", {"json": {}}, 409),
+    ("POST", f"/pipelines/{ACME_PIPE}/steps/s1/reject", {"json": {"reason": "no"}}, 409),
     ("POST", f"/pipelines/{ACME_PIPE}/cancel", {}, 200),
     ("POST", "/triggers/scheduled", {"json": {}}, 400),
     ("PATCH", "/triggers/scheduled/sched-x", {"json": {"enabled": False}}, 404),

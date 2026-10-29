@@ -129,6 +129,14 @@ class PipelineRecord(BaseModel):
     #: have needed a full scan of every terminal pipeline at every boot.
     #: Stored inside the record's JSON blob ⇒ no migration; older rows read "".
     terminal_intent: str = ""
+    #: #222 — the W3C trace context of the short ``cairn.pipeline`` root span opened
+    #: at launch (``{"traceparent": "00-<trace>-<span>-<flags>"}``). Every leg, gate
+    #: and flow-stage span starts as its child, in whichever request or process
+    #: starts it (a gate approved hours later, a restarted server, a Temporal
+    #: worker), so one pipeline is one trace. ``{}`` when tracing is off.
+    #: Stored inside the record's JSON blob like ``Run.trace_id`` ⇒ no migration;
+    #: older rows deserialize to ``{}`` and their legs trace as before.
+    trace_context: dict[str, str] = Field(default_factory=dict)
     created_at: str = Field(default_factory=utc_now_iso)
     updated_at: Optional[str] = None
     ended_at: Optional[str] = None

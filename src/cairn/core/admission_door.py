@@ -58,6 +58,11 @@ class AdmissionDecision:
     #: estimate_usd, basis}]}``; recorded once, read by the legs, never re-derived.
     #: Empty (and absent from the record) when no leg has a compute target.
     cost_estimate: dict[str, Any] = field(default_factory=dict)
+    #: ADR-0155 D3 — the effective budget the launch door computed:
+    #: ``{usd, source, declared_usd, default_usd, ceiling_usd}``; recorded once, read by
+    #: every reader of the cap, never re-derived. Empty (and absent from the record)
+    #: when the deployment's profile sets no ``[profile.budget]`` default or ceiling.
+    budget: dict[str, Any] = field(default_factory=dict)
 
     @property
     def refused(self) -> bool:
@@ -78,6 +83,7 @@ class AdmissionDecision:
             "workspace_id": self.workspace_id,
             "decided_at": self.decided_at,
             **({"cost_estimate": dict(self.cost_estimate)} if self.cost_estimate else {}),
+            **({"budget": dict(self.budget)} if self.budget else {}),
         }
 
 

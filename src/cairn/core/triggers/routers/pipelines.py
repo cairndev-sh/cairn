@@ -197,6 +197,7 @@ def build_pipelines_router(dispatcher, pipeline_bridge) -> APIRouter:
     # request models the inline block shared.
     from cairn.core.triggers.server import (  # noqa: PLC0415 — routers ↔ server cycle at import time
         PipelineApproveRequest,
+        PipelineRejectRequest,
     )
 
     r = APIRouter()
@@ -901,10 +902,37 @@ def build_pipelines_router(dispatcher, pipeline_bridge) -> APIRouter:
             raise HTTPException(status_code=409, detail=str(e))
         return {"pipeline_id": pipeline_id, "step_id": step_id, "status": rec.status}
 
+    @r.post("/pipelines/{pipeline_id}/steps/{step_id}/reject", dependencies=[Depends(require_auth), Depends(support.writable_workspace)])
+    async def reject_pipeline_step(
+        pipeline_id: str, step_id: str, req: PipelineRejectRequest,
+        token: Annotated[Optional[str], Depends(_oauth2_scheme)] = None,
+    ) -> dict[str, Any]:
+        """ADR-0156 D4 — refuse a gate at `awaiting_approval`, attributed and with a reason.
+        Approve's guards in approve's order; the pipeline ends `failed`, the step's verdict
+        is `rejected`. Any other wait is 409 (release or cancel it instead)."""
+        rec = await _pipeline_in_ws_or_404(pipeline_id)
+        reason = req.reason.strip()
+        if not reason:
+            raise HTTPException(status_code=422, detail="reason is required")
+        await _assert_may_decide(rec, step_id, token)  # before anything is recorded (403)
+        decider = await decision_actor(token, req.approver, fallback="console")
+        try:
+            rec = await pipeline_bridge.reject_step(
+                pipeline_id, step_id, decider=decider, reason=reason)
+        except ValueError as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        return {"pipeline_id": pipeline_id, "step_id": step_id, "status": rec.status,
+                "verdict": "rejected", "decider": decider}
+
     @r.post("/pipelines/{pipeline_id}/cancel", dependencies=[Depends(require_auth), Depends(support.writable_workspace)])
-    async def cancel_pipeline_route(pipeline_id: str) -> dict[str, Any]:
+    async def cancel_pipeline_route(
+        pipeline_id: str,
+        token: Annotated[Optional[str], Depends(_oauth2_scheme)] = None,
+    ) -> dict[str, Any]:
         await _pipeline_in_ws_or_404(pipeline_id)
-        rec = await pipeline_bridge.cancel_pipeline(pipeline_id)
+        # #233 — who stopped a (possibly paid) run: the token's identity, as approve records it
+        actor = await decision_actor(token, None, fallback="anonymous")
+        rec = await pipeline_bridge.cancel_pipeline(pipeline_id, actor=actor)
         return {"pipeline_id": pipeline_id, "status": rec.status}
 
     return r

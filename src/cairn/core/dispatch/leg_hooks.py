@@ -56,6 +56,147 @@ async def publish_pipeline_audit(pipeline_id: str, step_id: str, event: str,
         logger.debug("pipeline audit publish failed for %s/%s", pipeline_id, event)
 
 
+# ── the hash-chained audit trail of a governed pipeline run (#233) ──────────
+#
+# ONE place builds the pipeline/leg rows, so the in-process bridge (also the DBOS
+# owner) and the Temporal activities write the same rows. Every row goes through
+# the single `audit_emit` chokepoint (ADR-0028); an unbound sink drops it before any
+# store is read. Payloads carry ids, refs, states, amounts and actors only — never
+# inputs, outputs, prompts or tokens; a free-text reason is clipped.
+
+_REASON_MAX = 300
+#: capability a task leg's operator provides → the audit row it owes when the leg succeeds
+_LIFECYCLE_ROWS = {
+    "compute.acquire": "leg.compute_acquired",
+    "compute.release": "leg.compute_released",
+    "artifact.promote": "leg.promoted",
+}
+
+
+def audit_bound() -> bool:
+    """True when a deployment bound an ``audit.sink`` (an unbound one drops every row)."""
+    from cairn.core.obs.audit import NullAuditSink, get_audit_sink  # noqa: PLC0415 — keep obs off the import path
+
+    return not isinstance(get_audit_sink(), NullAuditSink)
+
+
+def _clip(value: Any) -> Any:
+    return value if not isinstance(value, str) or len(value) <= _REASON_MAX else value[:_REASON_MAX] + "…"
+
+
+async def audit_pipeline_event(action: str, *, pipeline_id: str, step_id: str = "",
+                               outcome: str = "ok", actor: Optional[str] = None,
+                               run_id: Optional[str] = None, **detail: Any) -> None:
+    """One ``pipeline.*`` / ``leg.*`` row on the audit sink. Fail-safe: auditing never
+    breaks the transition it records."""
+    try:
+        from cairn.core.obs.audit import audit_emit  # noqa: PLC0415 — keep obs off the import path
+
+        meta = {k: _clip(v) for k, v in detail.items() if v is not None and v != ""}
+        if step_id:
+            meta["step_id"] = step_id
+        await audit_emit(action, outcome=outcome, actor=actor or None,
+                         target=f"{pipeline_id}/{step_id}" if step_id else pipeline_id,
+                         run_id=run_id or None, pipeline_id=pipeline_id, **meta)
+    except Exception:  # noqa: BLE001 — audit must never break the transition
+        logger.debug("audit row %s failed for %s", action, pipeline_id, exc_info=True)
+
+
+def run_cost_fields(run: Any) -> dict:
+    """The settled spend a leg's run recorded (``Run.cost``), as audit fields."""
+    cost = getattr(run, "cost", None)
+    if not isinstance(cost, dict):
+        return {}
+    out = {"settled_usd": cost.get("total_usd"), "llm_usd": cost.get("llm_usd"), "gpu_usd": cost.get("gpu_usd")}
+    return {k: v for k, v in out.items() if v is not None}
+
+
+def leg_engine_and_target(ref: str, run: Any = None) -> tuple[str, str]:
+    """``(engine, compute target)`` of a flow leg for the audit row: the target the run
+    was stamped with, else the environment's selection. ``("", "")`` for a non-flow leg."""
+    from cairn.core.dispatch.leg_executor import flow_kind_of, leg_kind_of  # noqa: PLC0415 - cycle
+
+    if leg_kind_of(ref) != "flow":
+        return "", ""
+    try:
+        engine, target = engine_and_target_for_kind(flow_kind_of(ref))
+    except Exception:  # noqa: BLE001 — an unreadable selection is "unknown", not an error
+        engine, target = "", ""
+    return engine, str(getattr(run, "compute_target", "") or target or "")
+
+
+async def audit_leg_submitted(rec: Any, step_id: str, run: Any, ref: str) -> None:
+    """``leg.submitted`` — the leg exists as its own Run, with the estimate the launch
+    door recorded for it."""
+    if not audit_bound():
+        return
+    from cairn.core.dispatch.leg_executor import leg_kind_of  # noqa: PLC0415 - cycle
+
+    engine, target = leg_engine_and_target(ref, run)
+    price = recorded_leg_price(rec, step_id) or {}
+    est = price.get("per_attempt_usd", price.get("estimate_usd"))
+    await audit_pipeline_event(
+        "leg.submitted", pipeline_id=rec.pipeline_id, step_id=step_id, run_id=getattr(run, "id", None),
+        ref=ref, kind=leg_kind_of(ref), engine=engine, compute_target=target,
+        estimated_usd=est if est is not None else (getattr(rec, "governance", None) or {}).get("estimated_usd"),
+        status=str(getattr(run, "status", "") or ""))
+
+
+async def audit_leg_finished(pipeline_id: str, step_id: str, *, ref: str, state: str, run: Any = None,
+                             reason: str = "", attempts: Optional[int] = None, engine: str = "",
+                             target: str = "", cost: Optional[dict] = None) -> None:
+    """``leg.finished`` — the leg's terminal state (``done`` | ``failed`` | ``cancelled`` |
+    ``skipped``) with its reason and settled cost. A task leg whose operator provides
+    ``compute.acquire`` / ``compute.release`` / ``artifact.promote`` also writes the
+    lifecycle row for it when it succeeded."""
+    if not audit_bound():
+        return
+    from cairn.core.dispatch.leg_executor import leg_kind_of  # noqa: PLC0415 - cycle
+
+    eng, tgt = leg_engine_and_target(ref, run)
+    run_id = getattr(run, "id", None)
+    await audit_pipeline_event(
+        "leg.finished", pipeline_id=pipeline_id, step_id=step_id, run_id=run_id,
+        outcome={"done": "ok", "failed": "error"}.get(state, "ok"),
+        ref=ref, kind=leg_kind_of(ref), state=state, reason=reason, attempts=attempts,
+        engine=engine or eng, compute_target=target or tgt, **(cost or run_cost_fields(run)))
+    if state != "done" or leg_kind_of(ref) != "task":
+        return
+    for cap in _task_capabilities(ref):
+        row = _LIFECYCLE_ROWS.get(cap)
+        if row:
+            await audit_pipeline_event(row, pipeline_id=pipeline_id, step_id=step_id, run_id=run_id,
+                                       operator=ref[len("task:"):], capability=cap)
+
+
+def _task_capabilities(ref: str) -> list[str]:
+    """The capabilities a ``task:`` leg's operator provides (manifest, else the class)."""
+    name = ref[len("task:"):] if ref.startswith("task:") else ref
+    try:
+        from cairn.core.operator.registry import default_registry  # noqa: PLC0415 — cycle, as the bridge's lookups
+
+        md = default_registry.get_metadata(name)
+        caps = (getattr(md, "provides_capabilities", None) if md is not None
+                else getattr(default_registry.get(name), "capabilities", None)) or []
+        return [str(c) for c in caps]
+    except Exception:  # noqa: BLE001 — unknown operator: no lifecycle row
+        return []
+
+
+async def audit_flow_leg_finished(pipeline_id: str, step_id: str, *, ref: str, run: Any, outcome: Any,
+                                  status: str, engine: str = "") -> None:
+    """``leg.finished`` for a flow leg, from the engine outcome both owners hold: engine,
+    compute target, attempts used and the cost the engine and the box billed."""
+    if not audit_bound():
+        return
+    llm, gpu = float(getattr(outcome, "cost_usd", 0.0) or 0.0), float(getattr(outcome, "gpu_usd", 0.0) or 0.0)
+    await audit_leg_finished(
+        pipeline_id, step_id, ref=ref, state={"succeeded": "done"}.get(status, status), run=run,
+        reason="" if getattr(outcome, "ok", False) else str(getattr(outcome, "error", "") or ""),
+        attempts=int(getattr(outcome, "attempts", 0) or 0) or None, engine=engine,
+        cost={"settled_usd": round(llm + gpu, 6), "llm_usd": round(llm, 6), "gpu_usd": round(gpu, 6)})
+
+
 def flow_leg_record(step_output: Any, outcome: Any) -> dict:
     """The terminal ``result_payloads`` + ``cost`` of a flow leg's ``Run`` — ONE
     shape for both owners (#1441).
@@ -104,6 +245,12 @@ WORKER_TARGET_PREFIX = "worker:"
 #: (ADR-0152): any other engine's ``<kind>_target`` means something else (a legacy
 #: Metaflow metadata root, a pool, a cluster) and is never priced.
 PRICED_ENGINE = "builtin"
+#: ADR-0155 D6 — the connection name recorded for a leg priced on the engine's own
+#: machine. Not a registered connection: the rate is ``[profile.budget] local_hourly_usd``.
+LOCAL_CONNECTION = "local"
+#: Where the launch door records the effective budget: ``PipelineRecord.admission["budget"]``
+#: (ADR-0155 D3), never a column.
+BUDGET_KEY = "budget"
 
 
 class LegPriceUnreadable(RuntimeError):
@@ -148,12 +295,15 @@ def _hourly_rate(name: str, config: dict) -> float:
 
 async def price_flow_leg(target: str, timeout_s: Optional[float], *,
                          store: Any = None, multiplier: int = 1,
-                         multiplier_basis: str = "") -> Optional[dict]:
+                         multiplier_basis: str = "",
+                         local_hourly_usd: Optional[float] = None) -> Optional[dict]:
     """ADR-0151 D1 — the price of one flow leg on ``target``: ``hourly_usd ×
     timeout``, read from the target's connection config core-to-core (the way
     ``target_cap`` reads ``max_in_flight``; no secret is resolved).
 
-    ``None`` when the leg has no target. "Not priced" only for the definite cases:
+    ``None`` when the leg has no target, unless the deployment gave its own machine a
+    rate (ADR-0155 D6: ``local_hourly_usd`` from ``[profile.budget]``): the leg is then
+    priced like a remote one, on connection ``"local"``. "Not priced" only for the definite cases:
     a target that is not a ``compute.ssh`` connection (a ``worker:`` pool, another
     kind) or one that sets no ``hourly_usd`` — ``{"priced": False, "connection",
     "basis": "not priced: …"}``, never $0. A store, connection or rate that cannot
@@ -167,6 +317,9 @@ async def price_flow_leg(target: str, timeout_s: Optional[float], *,
     fields are ``None`` for a priced leg with no timeout, which the door refuses (D3)."""
     name = str(target or "").strip()
     if not name:
+        if local_hourly_usd and local_hourly_usd > 0:
+            return _priced_entry(LOCAL_CONNECTION, float(local_hourly_usd), timeout_s, multiplier,
+                                 multiplier_basis, where="the local machine (profile)")
         return None
     if name.startswith(WORKER_TARGET_PREFIX):
         return {"priced": False, "connection": name,
@@ -198,15 +351,21 @@ async def price_flow_leg(target: str, timeout_s: Optional[float], *,
     if hourly <= 0:
         return {"priced": False, "connection": name,
                 "basis": f"{NOT_PRICED}: connection {name!r} sets no hourly_usd"}
+    return _priced_entry(name, hourly, timeout_s, multiplier, multiplier_basis, where=name)
+
+
+def _priced_entry(name: str, hourly: float, timeout_s: Optional[float], multiplier: int,
+                  multiplier_basis: str, *, where: str) -> dict:
+    """One priced leg's entry: ``hourly × timeout`` per attempt, × the bounded runs."""
     runs = max(1, int(multiplier or 1))
     if not timeout_s or float(timeout_s) <= 0:
         return {"priced": True, "connection": name, "hourly_usd": hourly, "hours": None,
                 "per_attempt_usd": None, "runs": runs, "estimate_usd": None,
-                "basis": f"${hourly:g}/h on {name}, no timeout declared"}
+                "basis": f"${hourly:g}/h on {where}, no timeout declared"}
     hours = float(timeout_s) / 3600.0
     per = round(hourly * hours, 6)
     est = round(per * runs, 6)
-    basis = f"${hourly:g}/h × {hours:g}h on {name}"
+    basis = f"${hourly:g}/h × {hours:g}h on {where}"
     if runs > 1:
         basis += f" × {runs} ({multiplier_basis or 'runs'})"
     return {"priced": True, "connection": name, "hourly_usd": hourly, "hours": round(hours, 6),
@@ -236,12 +395,26 @@ def _leg_runs(plan: Any, s: Any, flow_kind: str) -> tuple[int, str]:
     return iterations * attempts, " × ".join(parts)
 
 
-async def price_plan(plan: Any, *, store: Any = None) -> dict:
+def deployment_budget() -> dict[str, float]:
+    """``[profile.budget]`` of the deployment profile (ADR-0155 D1); ``{}`` when the
+    environment names no profile or the profile sets none (D8). A profile that
+    cannot be read raises ``ProfileError`` — the launch door refuses on it."""
+    from cairn.core.pack.profile import load_profile_from_env  # noqa: PLC0415 - function-local, as the rest of dispatch reads profiles
+
+    return dict(load_profile_from_env().budget or {})
+
+
+async def price_plan(plan: Any, *, store: Any = None,
+                     local_hourly_usd: Optional[float] = None) -> dict:
     """The launch door's estimate (D2): every flow leg with a compute target,
     priced by :func:`price_flow_leg` at its bounded worst case (loop iterations ×
     attempts), in plan order. ``{}`` when no leg has a target, so a pipeline with
     no box records exactly what it recorded before. Raises
-    :class:`LegPriceUnreadable` naming the leg when a price cannot be read."""
+    :class:`LegPriceUnreadable` naming the leg when a price cannot be read.
+
+    ``local_hourly_usd`` (the profile's, read by the caller; ADR-0155 D6) prices a
+    builtin-engine leg with no target on the engine's own machine; unset, such a leg
+    is skipped as before."""
     from cairn.core.dispatch.leg_executor import flow_kind_of, leg_kind_of  # noqa: PLC0415 - cycle: executor → storage → here
 
     legs: list[dict] = []
@@ -254,7 +427,7 @@ async def price_plan(plan: Any, *, store: Any = None) -> dict:
         except Exception as e:  # noqa: BLE001 — a selection error is unknown, never "no target"
             raise LegPriceUnreadable(f"leg {s.id!r}: its engine and compute target cannot be read "
                                      f"({type(e).__name__}: {e})") from e
-        if not target:
+        if not target and (engine != PRICED_ENGINE or not local_hourly_usd):
             continue
         if engine != PRICED_ENGINE:
             # ADR-0152 — only the builtin engine dispatches to a connection; another
@@ -265,7 +438,8 @@ async def price_plan(plan: Any, *, store: Any = None) -> dict:
         runs, why = _leg_runs(plan, s, kind)
         try:
             price = await price_flow_leg(target, getattr(s, "timeout_s", None), store=store,
-                                         multiplier=runs, multiplier_basis=why)
+                                         multiplier=runs, multiplier_basis=why,
+                                         local_hourly_usd=local_hourly_usd)
         except LegPriceUnreadable as e:
             raise LegPriceUnreadable(f"leg {s.id!r}: {e}") from e
         if price is not None:
@@ -315,6 +489,25 @@ def leg_price_kwargs(rec: Any, step_id: str, run: Any) -> dict:
                 "adopted_started_at": getattr(run, "started_at", None)}
     gov = getattr(rec, "governance", None) or {}
     return {"estimated_usd": float(gov.get("estimated_usd", 0.0) or 0.0)}
+
+
+def recorded_budget(rec: Any) -> dict:
+    """The effective budget the launch door recorded on ``rec.admission`` (ADR-0155
+    D3): ``{usd, source, declared_usd, default_usd, ceiling_usd}``. ``{}`` for a record
+    admitted before the ADR or in a deployment with no ``[profile.budget]``."""
+    b = (getattr(rec, "admission", None) or {}).get(BUDGET_KEY)
+    return dict(b) if isinstance(b, dict) else {}
+
+
+def budget_cap_usd(rec: Any) -> float:
+    """The cap every reader of a pipeline's budget uses (ADR-0155 D4): the recorded
+    ``admission.budget.usd`` when present, else the pipeline's own
+    ``governance.budget.usd`` (records admitted before the ADR). 0.0 = no cap."""
+    rb = recorded_budget(rec)
+    if rb.get("usd") is not None:
+        return float(rb["usd"] or 0.0)
+    b = (getattr(rec, "governance", None) or {}).get("budget")
+    return float((b.get("usd") if isinstance(b, dict) else 0.0) or 0.0)
 
 
 def estimate_evidence(rec: Any, step_id: str) -> dict:
@@ -510,6 +703,8 @@ class FlowLegHooks:
 
     # ── H2/H6c visibility ────────────────────────────────────────────────────
     async def on_retry(self, attempt: int, cause: str) -> None:
+        await audit_pipeline_event("leg.retrying", pipeline_id=self.pipeline_id, step_id=self.step_id,
+                                   run_id=self.run_id, outcome="error", attempt=attempt, reason=cause)
         await self.emit(self.run_id, "leg_retrying", {
             "leg": self.leg_ref, "step_id": self.step_id, "attempt": attempt, "error": cause})
 
@@ -574,7 +769,8 @@ class FlowLegHooks:
         }
 
 
-__all__ = ["COST_ESTIMATE_KEY", "FlowLegHooks", "LegPriceUnreadable", "NOT_PRICED", "PRICED_ENGINE",
+__all__ = ["BUDGET_KEY", "COST_ESTIMATE_KEY", "LOCAL_CONNECTION", "budget_cap_usd", "deployment_budget",
+           "recorded_budget", "FlowLegHooks", "LegPriceUnreadable", "NOT_PRICED", "PRICED_ENGINE",
            "PRICED_TARGET_KIND", "engine_and_target_for_kind",
            "compute_target_for_kind", "estimate_evidence", "leg_price_kwargs", "price_flow_leg",
-           "price_plan", "publish_pipeline_audit", "recorded_cost_estimate", "recorded_leg_price"]
+           "price_plan", "publish_pipeline_audit", "budget_cap_usd", "recorded_budget", "recorded_cost_estimate", "recorded_leg_price"]
