@@ -124,7 +124,7 @@ Fields any step can carry:
 | `when` | An expression. False skips this leg (recorded as routed off) and the pipeline continues. |
 | `label` | A human-readable name for the run page and the graph. Display only. |
 | `environment` | Run this leg in a named environment instead of the pipeline's. |
-| `timeout` | A limit for this leg: seconds, or a number with `d`/`h`/`m`/`s`. A value that doesn't parse is a load error. |
+| `timeout` | A limit for this leg: seconds, or a number with `d`/`h`/`m`/`s`. A value that doesn't parse is a load error. On a `gate:` step the value is shown to the approver, but the gate does not expire yet: it waits until someone approves or rejects it, or the pipeline is cancelled (#259). |
 | `finalizer` | `true` runs this leg once when the pipeline ends, whether it completed, failed or was cancelled, for example to release a machine. It must be safe to run twice. |
 | `trigger` | When the leg fires once its dependencies are met: `auto` (default, at once), `manual` (waits for a person to release it), `schedule:<cron>` (waits for the next tick) or `on:<topic>` (waits for that event on the bus). |
 | `emits` | An event topic published on the bus when the leg completes, with the leg's output as the payload. `run.*` is reserved. |

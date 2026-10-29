@@ -84,9 +84,10 @@ jobs:
     - name: Locked install of the public set with the proof extras (train when the root declares it)
       run: uv sync --locked --extra dev --extra rag --extra rag-sqlite-vec --extra storage-postgres --extra runtime-sqlite
         --extra runtime-postgres --extra runtime-dbos --extra hello $(grep -q '^train = ' pyproject.toml && echo --extra train)
-    - name: Every matrix and crash cell of the feature proof (tests/e2e/hello)
-      run: env -u OBS_STORAGE -u CAIRN_STORAGE .venv/bin/pytest -q --no-header -p no:cacheprovider -rs -m e2e --junitxml=/tmp/test-results/public-e2e.xml
-        tests/e2e
+    - name: Every matrix and crash cell of the feature proof (tests/e2e/hello), four at a time
+      # each cell has its own server, port, HOME and Postgres database (tests/e2e/conftest.py)
+      run: env -u OBS_STORAGE -u CAIRN_STORAGE .venv/bin/pytest -q --no-header -p no:cacheprovider -rs -n 4 --dist load -m e2e
+        --junitxml=/tmp/test-results/public-e2e.xml tests/e2e
     - if: always()
       uses: actions/upload-artifact@v7
       with:

@@ -881,9 +881,15 @@ def _deployment() -> dict[str, str]:
     elif raw.startswith("sqlite://"):
         storage = "sqlite"
     elif raw:
-        storage = "unrecognized scheme — falls back to CAIRN_RUN_DB / in-memory"
+        # #274 — the store refuses this value (#1855); it never falls back. Name at most
+        # the scheme: the value may carry a user and password.
+        scheme = settings.url_scheme(raw)
+        storage = ("refused: CAIRN_STORAGE " + (f"is a {scheme}:// URL, " if scheme else "is ")
+                   + "not a storage URL — the run store will not start (#1855)")
+    elif settings.run_db_is_set():
+        storage = "sqlite (CAIRN_RUN_DB)"
     else:
-        storage = "in-memory (CAIRN_STORAGE unset — the record does not survive this process)"
+        storage = "in-memory (CAIRN_STORAGE and CAIRN_RUN_DB unset — the record does not survive this process)"
     from cairn.core.bus import bus_backend  # noqa: PLC0415 - the one reading of CAIRN_BUS
 
     bus = {"postgres": "postgres",

@@ -37,6 +37,8 @@ class GateContext:
     gate: str
     fields: dict[str, Any] = field(default_factory=dict)
     approvers: str = ""
+    #: The gate's declared ``timeout:``, shown as-is. Not enforced: a pipeline
+    #: gate does not expire yet (#259, ADR-0158 proposed).
     timeout: str = ""
     step_id: str = ""
 

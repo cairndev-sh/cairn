@@ -30,8 +30,9 @@ from __future__ import annotations
 
 import contextlib
 import logging
+from collections import deque
 from contextvars import ContextVar
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Iterator, Optional
 
 logger = logging.getLogger("cairn.runtime.node_stream")
 
@@ -41,6 +42,8 @@ logger = logging.getLogger("cairn.runtime.node_stream")
 NodeSink = Callable[[str, Any], Awaitable[None]]
 
 _SINK: ContextVar[Optional[NodeSink]] = ContextVar("cairn_node_sink", default=None)
+NodeCosts = dict[str, deque[float]]
+_COSTS: ContextVar[Optional[NodeCosts]] = ContextVar("cairn_node_costs", default=None)
 
 # LangGraph surfaces an approval interrupt as an updates chunk under this key.
 _INTERRUPT_KEY = "__interrupt__"
@@ -61,6 +64,31 @@ def node_sink_scope(sink: NodeSink):
 
 def current_node_sink() -> Optional[NodeSink]:
     return _SINK.get()
+
+
+@contextlib.contextmanager
+def node_cost_scope() -> Iterator[NodeCosts]:
+    """Collect completed node costs for the matching streamed node events."""
+    costs: NodeCosts = {}
+    token = _COSTS.set(costs)
+    try:
+        yield costs
+    finally:
+        _COSTS.reset(token)
+
+
+def record_node_cost(node_name: str, cost_usd: float) -> None:
+    """Queue a node's measured cost for its event emitted by adrive."""
+    costs = _COSTS.get()
+    if costs is not None:
+        costs.setdefault(node_name, deque()).append(cost_usd)
+
+
+def take_node_cost(node_name: str) -> float | None:
+    """Return the next cost for a completed node event, when one was measured."""
+    costs = _COSTS.get()
+    pending = costs.get(node_name) if costs is not None else None
+    return pending.popleft() if pending else None
 
 
 async def adrive(graph: Any, input_or_command: Any, config: Optional[dict[str, Any]]) -> Any:

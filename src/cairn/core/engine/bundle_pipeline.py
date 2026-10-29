@@ -83,9 +83,12 @@ class PipelinePlanStep(BaseModel):
     #: feature was green in tests and inert in production (#1627).
     show: list[str] = Field(default_factory=list)
     approvers: Optional[str] = None
-    #: The gate's raw approval-EXPIRY string (`timeout: 7d`). Distinct from
+    #: The gate's raw ``timeout:`` string (`timeout: 7d`). Distinct from
     #: ``timeout_s`` above, which is an execution wall-clock limit for a leg;
-    #: a gate has no execution to bound.
+    #: a gate has no execution to bound. #259 — it is SHOWN to the approver
+    #: (``gate_context_for``) but nothing expires a pipeline gate yet: the
+    #: approval reaper sweeps runs, and a gate leg has none. Expiry is
+    #: ADR-0158 (proposed).
     timeout: Optional[str] = None
     #: #1252 (ADR-0087 P0b) — the POLICY that inserted this gate at plan time,
     #: or None for author-declared steps. Un-removable by the pipeline author

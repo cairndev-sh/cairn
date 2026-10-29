@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import tempfile
+import threading
 import uuid
 from pathlib import Path
 
@@ -44,6 +45,7 @@ class TrainLoraOp(Operation[TrainLoraInput, TrainLoraOutput]):
     output_schema = TrainLoraOutput
     config_schema = TrainLoraConfig
     supports_mock = True
+    supports_cancel = True
     # It writes an adapter to disk and spends minutes of CPU: not read_only, so a restart
     # never silently re-runs it (#1105/#2026). Nothing is billed, so not paid_compute.
     risk = "external_write"
@@ -58,10 +60,28 @@ class TrainLoraOp(Operation[TrainLoraInput, TrainLoraOutput]):
         def _on_step(step: int, loss: float) -> None:
             ctx.report.series(step, loss=loss)
 
-        out = await asyncio.to_thread(
+        cancel_event = threading.Event()
+        worker = asyncio.create_task(asyncio.to_thread(
             F.finetune, dataset=inp.dataset, base_model=inp.base_model, lora_rank=inp.lora_rank,
             steps=inp.steps, max_samples=inp.max_samples, learning_rate=inp.learning_rate,
-            max_seq_len=inp.max_seq_len, output_dir=inp.output_dir or default_output_dir(ctx), on_step=_on_step)
+            max_seq_len=inp.max_seq_len, output_dir=inp.output_dir or default_output_dir(ctx),
+            on_step=_on_step, cancel_event=cancel_event))
+        try:
+            out = await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            cancel_event.set()
+            while not worker.done():
+                try:
+                    await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            if not worker.cancelled():
+                error = worker.exception()
+                if error is not None and not isinstance(error, F.TrainingCancelled):
+                    ctx.logger.warning("train/lora worker failed while cancelling: %s", error)
+            raise
         ctx.report.stage("train", percent=100.0)
         ctx.report.scalars(**{k: out[k] for k in ("train_loss", "eval_loss", "tokens_seen", "steps_run")})
         return TrainLoraOutput(**out)

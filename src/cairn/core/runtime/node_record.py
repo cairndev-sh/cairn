@@ -38,8 +38,15 @@ async def record_node_event(
     *,
     store: Optional[Any] = None,
     heartbeat: bool = True,
+    llm_cost_usd: float | None = None,
+    state: str = "done",
 ) -> None:
-    payload = node_event_data(node_name, delta)
+    payload = node_event_data(
+        node_name,
+        delta,
+        llm_cost_usd=llm_cost_usd,
+        state=state,
+    )
     try:
         if store is None:
             from cairn.core.storage import default_store  # noqa: PLC0415 — cycle: storage → dispatch → runtime
