@@ -3,6 +3,8 @@
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+### Fixed
+- `[profile.approval]` works: a `profile.toml` may now carry `mode` (`"off"` or `"enforce"`) and `default_on_risk` (operator risk classes), and with `"enforce"` every operator of a listed risk needs a human approval, as ADR-0034 describes. The approval resolver always read it, but the closed profile schema refused the key, so the switch never fired. The table is closed: an unknown key, a missing or unknown `mode`, or an unknown risk class fails at load. `extends` replaces per key. (#256)
 
 ## [0.3.2] - 2026-10-29
 
