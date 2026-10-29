@@ -183,7 +183,7 @@ COPY examples/hello-cairn ./examples/hello-cairn
 # (dbos) and runtime-sqlite (AsyncSqliteSaver/aiosqlite, for HITL pause/resume)
 # are required by the dbos-sqlite tier (#34). RAG (llama_index/qdrant) is
 # deliberately NOT installed here — it belongs in an operator pack, not the
-# engine core (see evs-cmd/packd RAG-to-operator issue).
+# engine core (an internal issue).
 # --all-packages installs every workspace-member operator pack (builtins +
 # official) so their `cairn.operators` entry-points register at runtime.
 # Without it, `uv sync` installs only the root package + extras and NO operators

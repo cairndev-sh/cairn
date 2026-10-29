@@ -15,7 +15,7 @@ says whether a control loop is still watching (`leg_executor.py:520-556` stamps 
 ## 2. Decide which shape it is
 | Evidence | Shape | Action |
 |---|---|---|
-| step `awaiting_approval`, record `paused` | a gate is waiting for a human (by design) | approve/advance: `POST /pipelines/{id}/steps/{step}/approve` — or cancel |
+| step `awaiting_approval`, record `paused` | a gate is waiting for a human (by design) | approve/advance: `POST /pipelines/{id}/steps/{step}/approve`; refuse with a reason: `POST …/reject` (`cairn remote reject <pipeline> <step> --reason TEXT`, ends the pipeline `failed`, ADR-0156) — or cancel |
 | step `queued`, run `queued`, a `compute_target` with `max_in_flight` | waiting for a slot on a capped target (ADR-0086 H5) | free a slot or raise the cap; the leg is never refused |
 | run `running`, heartbeat stale, engine job gone | orphaned leg after a control-plane restart | on restart the bridge **adopts** the persisted handle first (ADR-0086 H1); if the process table is lost (`builtin`: "unknown builtin job … process table lost"), the attempt fails and retries per the leg's `retry:`; otherwise cancel the pipeline |
 | run `running` forever under `CAIRN_RUNTIME=temporal`, workflow terminal in Temporal | a zombie run (#976) | the reconciler sweeps these on the temporal runtime (`src/cairn/core/runtime/reconciler.py`); if it is not running, restart the server (it starts in the lifespan) |

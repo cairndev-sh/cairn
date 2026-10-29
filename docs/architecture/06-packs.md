@@ -40,7 +40,7 @@ docstring; `README.md` "Architecture — engine + packs"; ADR-0020, ADR-0026, AD
 | `loader.py` | `load_all_packs`/`ensure_loaded`: entry-point group `cairn.packs` + dev dirs from `CAIRN_PACK_PATH` (installed wins collisions), engine-compat check (`[compat].cairn_engine`), legacy-layout warnings, load-failure list |
 | `registry.py` | process-global registry + aggregators `all_tools()`, `all_capability_bindings()`, `all_backends()`, `all_flow_dirs()`, `all_pipeline_dirs()`, `all_policy_dirs()`, … — the **only** way core reads pack content |
 | `composition.py` | load-time validation: who provides which capability, required capabilities satisfied, unique providers unless a profile overrides, trigger providers, profile bindings |
-| `profile.py` | `Profile` TOML loader (`extends`, `[profile.bindings]`, `[profile.backends]`, `[profile.config]`, `[profile.mcp_servers]`, `[profile.approval]`, notify) |
+| `profile.py` | `Profile` TOML loader (`extends`, `[profile.bindings]`, `[profile.backends]`, `[profile.config]`, `[profile.mcp_servers]`, `[profile.approval]`, notify, `[profile.budget]`: the deployment's budget default, ceiling and local rate, ADR-0155) |
 | `discovery.py`, `curation.py`, `visibility.py`, `drift.py`, `provisioning.py` | template listing for `GET /packs`; curation tiers; `[provides]` encapsulation; manifest drift; required-services provisioning check |
 
 ## Does not own

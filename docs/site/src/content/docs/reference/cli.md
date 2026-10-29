@@ -22,22 +22,22 @@ set them first when you run outside `cairn dev`:
 |---|---|
 | `cairn dev --engine-only` | Starts the engine on SQLite with the in-process runtime and sign-in as `dev`/`dev`. `--port` sets the port (default 8000), `--db` the SQLite file (default `~/.cairn/dev.db`), `--seed` loads demo records first. Without `--engine-only` it also starts the console's dev server, which is part of cairn-platform. |
 | `cairn demo` | Seeds a demo workspace (default `demo`; `-w` to choose). `--archive` removes the demo workspace again, keeping its runs and audit entries. |
-| `cairn doctor` | Checks the environment configuration and whether configured services are reachable. `--strict` fails on warnings. |
-| `cairn ls` | Lists the installed packs and what each contributes; `cairn ls operators` prints the operator map. |
+| `cairn doctor` | Checks the environment configuration and whether configured services are reachable. When an engine answers at the endpoint `cairn remote` uses, it also checks that the engine reads the store this CLI writes (`engine_store`). `--strict` fails on warnings. |
+| `cairn ls` | Lists the installed packs and what each contributes; `cairn ls <pack>` for one pack, `--json` for the raw shape. A pack's deployment profiles (`profiles/*.toml`) are listed with their `visibility` and absolute installed path, the value to give `CAIRN_PROFILE`. `cairn ls operators` prints the operator map. |
 
 ## Pipelines
 
 | Command | What it does |
 |---|---|
 | `cairn pipeline ls` | Lists every installed pipeline with its legs and content hash, internal ones included. |
-| `cairn pipeline show <ref>` | A pipeline's inputs, legs, gates and wiring. `--plan` shows the execution plan instead. |
-| `cairn pipeline explain <ref>` | What will happen before anything spends: each input and where its value comes from, each leg and what triggers it, the gates and the budget. `-i key=value` shows the effect of a launch input, `-e` resolves for an environment, `--json` prints the raw result. |
-| `cairn pipeline run <ref>` | Launches a pipeline and follows it to the end. `-i key=value` (repeatable; values are parsed as JSON when possible), `-e` the environment, `--detach` returns at once. |
+| `cairn pipeline show <ref>` | A pipeline's inputs, legs, gates and wiring. `--plan` shows the execution plan instead; with `--plan`, `--preset <name>` and `-i key=value` first list each input's value and the layer it comes from (`← preset 'name'`). |
+| `cairn pipeline explain <ref>` | What will happen before anything spends: each input and where its value comes from, each leg and what triggers it, the gates and the budget. `-i key=value` shows the effect of a launch input, typed as the launch types it (a `list` input takes JSON or a comma-separated string, `-i report_to=mlflow,wandb`), `-e` resolves for an environment, `--json` prints the raw result. `--preset <name>` starts from a saved or pack-shipped input set, as `cairn remote launch --preset` does: the same lookup, `-i` keys win over the preset's, and an unknown preset or a preset key the pipeline no longer declares is refused (exit 2). Saved presets are read from this CLI's store; `-w` names the workspace. |
+| `cairn pipeline run <ref>` | Launches a pipeline and follows it to the end. `-i key=value` (repeatable; values are parsed as JSON when possible, and a `list` input also takes a comma-separated string), `-e` the environment, `--detach` returns at once. |
 
 A **ref** is `<pack>/<name>`, for example `hello-cairn/profile-and-publish`.
-When a flow has the same name as a pipeline, `show` and `explain` refuse the
-bare name: write `pipeline:<pack>/<name>`. `run` accepts the bare name and
-runs the pipeline.
+When a flow has the same name as a pipeline, `show`, `explain` and `run` all
+resolve the bare name to the declared pipeline (ADR-0106 D1).
+The explicit spelling `pipeline:<pack>/<name>` works too.
 
 Only declared pipelines run. A ref that names a flow, not a pipeline, is
 refused: a flow runs as a leg of a pipeline.
@@ -49,7 +49,7 @@ refused: a flow runs as a leg of a pipeline.
 | `0` | the pipeline completed |
 | `1` | it failed or was cancelled, or the ref is unknown, ambiguous or missing required inputs |
 | `2` | the ref names a flow, not a pipeline; or `--detach` under the in-process runtime, which would leave nothing driving the pipeline |
-| `3` | refused before it started: a policy denied the launch, or admission refused it |
+| `3` | refused before it started: a policy denied the launch, admission refused it, or the runtime cannot run one of its steps (under `CAIRN_RUNTIME=temporal`, a `task:` leg or a `finalizer:` step) |
 | `130` | interrupted with Ctrl-C |
 
 ## Flows
@@ -92,17 +92,29 @@ governed pipeline.
 | `cairn connect ls` | Lists connections: names, kinds and secret keys, never values. |
 | `cairn connect rm <name>` | Deletes a connection, leaving the secret itself untouched. |
 
+`connect add` and `connect rm` write this CLI's store: the one `CAIRN_STORAGE` names,
+else the `CAIRN_CONNECTIONS_DB` file, else `~/.cairn/cairn.db`. Before writing, they ask the engine at the endpoint
+`cairn remote` uses (its `/healthz` reports a fingerprint of its store, never a path or
+DSN) whether it reads the same store. If it reads another one, nothing is written and
+the command exits 3, naming this CLI's store; set `CAIRN_STORAGE` to the value the engine
+was started with (`cairn dev --db PATH` is `sqlite:///PATH`), or pass `--force` to write
+anyway. When no engine answers, the write goes ahead and the line names the store.
+
 ## The record
 
 | Command | What it does |
 |---|---|
 | `cairn replay <run-id>` | Replays a past run's recorded event trace as a timeline. `--json` for the raw events. |
-| `cairn lineage [subject]` | Shows provenance records from the audit log, matched on a subject such as a model name, and checks the hash chain as it reads. Omit the subject to list them all. The operator that writes lineage records is part of cairn-platform. |
+| `cairn audit verify` | Checks the audit log's hash chain without writing anything. Reads `--audit-log`, else `CAIRN_AUDIT_LOG`, else `./audit.jsonl`. Prints the row count, the first and last timestamp, the head hash and, if the chain is broken, the first broken row and why (`hash`, `prev_hash` or `corrupt line`). `--json` prints the same as `{path, rows, first_ts, last_ts, head_hash, ok, broken}`. Exit 0: verified (an empty log verifies). Exit 2: broken or a corrupt line. Exit 1: no log, or it cannot be read. |
+| `cairn lineage [subject]` | Shows provenance records from the audit log, matched on a subject such as a model name, and checks the hash chain as it reads. Omit the subject to list them all. `--expect-head <hash>` also checks that the log ends at a receipt you quoted earlier, which shows rows missing from its end. The operator that writes lineage records is part of cairn-platform. |
 
 ## A remote server
 
 Drive a deployed cairn from your terminal. Log in once; the token is stored in
-your profile.
+your profile (`~/.cairn/config.toml`, written with mode 0600). The token is not renewed:
+a command that meets an expired session, `--watch` and `--follow` included, prints
+`session expired at HH:MM — run cairn remote login` and exits 77. A watched pipeline keeps
+running on the server; log in again and re-attach with `cairn remote pipeline <id>`.
 
 | Command | What it does |
 |---|---|
@@ -114,7 +126,8 @@ your profile.
 | `cairn remote findings <id>` | A run's findings, or every step's findings for a pipeline. |
 | `cairn remote cancel-pipeline <id>` | Cancels a pipeline and its running legs. |
 | `cairn remote ps` / `status` / `logs` | Lists runs, shows one run, prints or follows its event log. |
-| `cairn remote approve` / `reject` | Decides a run paused at an approval inside a flow. |
+| `cairn remote approve <run-id>` / `reject <run-id>` | Decides a run paused at an approval inside a flow. |
+| `cairn remote reject <id> <step> --reason TEXT` | Rejects a pipeline gate waiting on a person. `--reason` is required; `--approver` is recorded when sign-in is off, and under sign-in the server records your identity. The pipeline ends `failed` and the step's verdict is `rejected`. A single `pl_…` argument is refused: name the gate step. A 404, 403 or 409 is printed as such. |
 
 Every `remote` command takes `--endpoint` / `-e`, `--token` and `--profile`.
 

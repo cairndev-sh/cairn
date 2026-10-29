@@ -145,8 +145,8 @@ def test_build_task_maps_resources_envs_and_the_run_command():
 
 def test_build_task_uses_the_image_when_one_is_configured():
     task = sp.build_task(_spec(), name="c", accelerator="A100",
-                         image="ghcr.io/evs-cmd/cairn-train-gpu:1")
-    assert task["resources"]["image_id"] == "docker:ghcr.io/evs-cmd/cairn-train-gpu:1"
+                         image="ghcr.io/example/cairn-train-gpu:1")
+    assert task["resources"]["image_id"] == "docker:ghcr.io/example/cairn-train-gpu:1"
     assert "setup" not in task  # an image carries the install; a setup line would fight it
 
 
@@ -243,6 +243,20 @@ def test_a_reclaimed_spot_cluster_is_retriable():
                              meta={"cluster": "cairn-x", "run_id": "r-42", "use_spot": True})
     st = asyncio.run(eng.poll(handle))
     assert st.state == "failed" and st.retriable is True
+
+
+def test_failed_terminal_status_returns_fetched_partial_cost(tmp_path, monkeypatch):
+    monkeypatch.setattr(sp, "fetch_dir", lambda wd: tmp_path / wd.rsplit("/", 1)[-1])
+    monkeypatch.setattr(sp.results, "read_metrics", lambda workdir: {"cost_usd": 0.43})
+    eng, _fake, _fetch, handle = _submitted(
+        tmp_path, [], payload={"error": "stage failed"},
+        statuses=[{"status": "UP", "job_status": "FAILED"}],
+    )
+
+    status = asyncio.run(eng.poll(handle))
+
+    assert status.state == "failed"
+    assert status.metrics["cost_usd"] == 0.43
 
 
 # ── teardown + receipt ──────────────────────────────────────────────────────
@@ -665,13 +679,13 @@ def test_result_reads_the_fetched_json_and_rewrites_stats_to_local_copies(tmp_pa
     eng = SkyPilotEngine("gpubox", sky=FakeSky(), accelerator="A100")
     handle = EngineJobHandle(job_id="cairn-x", engine="skypilot", meta={
         "cluster": "cairn-x", "run_id": "r-42", "workdir": workdir,
-        "image": "ghcr.io/evs-cmd/cairn-train-gpu:v0.1.0",
+        "image": "ghcr.io/example/cairn-train-gpu:v0.1.0",
     })
     res = asyncio.run(eng.result(handle))
     assert res.stats["train.qlora.result_path"] == str(landed / "train_result.json")
     assert res.stats["rows"] == 7
     # provenance, the same key the SSH engine stamps
-    assert res.stats["engine.image"] == "ghcr.io/evs-cmd/cairn-train-gpu:v0.1.0"
+    assert res.stats["engine.image"] == "ghcr.io/example/cairn-train-gpu:v0.1.0"
 
 
 def test_result_refuses_loudly_when_nothing_was_fetched(tmp_path, monkeypatch):

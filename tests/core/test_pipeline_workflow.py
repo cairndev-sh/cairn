@@ -222,3 +222,52 @@ async def test_temporal_predicate_gate_leg_completes_without_submit():
     assert out["step_state"]["data-clean"]["verdict"] == "passed"
     assert not any(r.startswith("gate:") for r in _SUBMITTED_REFS), _SUBMITTED_REFS
     assert _SUBMITTED_REFS == ["p/prep", "p/train"]      # only executables submitted
+
+
+# ── ADR-0156 D5: a person rejects an approval gate (the `reject_step` signal) ──
+
+
+async def test_temporal_reject_step_signal_ends_the_workflow_failed():
+    """The twin of `approve_step`: `reject_step` ends the gate `skipped` / `rejected`, the
+    workflow ends failed, and the gated leg is never submitted."""
+    _CANNED["prep_verdict"] = "pass"
+    _SUBMITTED_REFS.clear()
+    plan = plan_bundle(BundlePipeline(name="pl", step=[
+        BundlePipelineStep(id="prep", pack="p", template="prep"),
+        BundlePipelineStep(id="train", pack="p", template="train", depends_on=["prep"],
+                           approval=True),
+    ])).model_dump()
+    runner = SandboxedWorkflowRunner(restrictions=SandboxRestrictions.default.with_passthrough_modules("cairn"))
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(env.client, task_queue="pl-tq3", workflows=[PipelineWorkflow],
+                          activities=[mock_prepare, mock_submit_recording, mock_await, mock_mirror,
+                                      mock_emit, pipeline_next_tick], workflow_runner=runner):
+            handle = await env.client.start_workflow(
+                PipelineWorkflow.run, args=[plan, {"path": "s3://ds"}, "pl_rej"],
+                id="wf-pl-rej", task_queue="pl-tq3")
+            await handle.signal(PipelineWorkflow.reject_step, "train")
+            out = await handle.result()
+    assert out["status"] == "failed"
+    assert out["step_state"]["train"]["status"] == "skipped"
+    assert out["step_state"]["train"]["verdict"] == "rejected"
+    assert _SUBMITTED_REFS == ["p/prep"]                 # the rejected leg never ran
+
+
+async def test_reject_signal_bookkeeping_needs_no_server():
+    """The offline half of the twin test above: the signal records the gate, and the DAG
+    path's `_rejected_at_gate` ends the step `skipped` / `rejected`, stops launching and
+    mirrors `failed` — a reject wins over an approve that raced it."""
+    wf = PipelineWorkflow()
+    mirrored: list = []
+
+    async def act(name, *args, **kw):
+        mirrored.append((name, args[2]))
+
+    state = {"train": {"status": "awaiting_approval", "run_id": None, "verdict": None}}
+    assert await wf._rejected_at_gate("train", state, "pl_x", act) is False    # nothing yet
+    wf.approve_step("train")
+    wf.reject_step("train")
+    assert await wf._rejected_at_gate("train", state, "pl_x", act) is True
+    assert (state["train"]["status"], state["train"]["verdict"]) == ("skipped", "rejected")
+    assert wf._failed and wf._abort
+    assert mirrored == [("cairn.pipeline_mirror_state", "failed")]

@@ -62,8 +62,8 @@ def build_registry_router() -> APIRouter:
         provisional (see #1545). Packs reach production through the image:
         ``cairn pack add`` → CI → rebuild → redeploy.
         """
-        # cairn-platform#223 — a pack is process-wide, so the door is the deployment
-        # admin's alone: with auth on, anyone else gets 403 before any install
+        # A pack is process-wide, so the door is the deployment admin's alone (an
+        # internal issue): with auth on, anyone else gets 403 before any install
         # record is written. (A comment, not the docstring: that is the OpenAPI text.)
         support.require_deployment_admin(admin)
         # lazy: keep the installer + catalog off the import path

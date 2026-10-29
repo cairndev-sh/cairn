@@ -37,7 +37,8 @@ async def test_succeeded_marks_done_and_resumes():
         resumed.append((rec.run_id, status.output))
 
     tally = await drive_once(store, poll, resume)
-    assert tally == {"done": 1, "failed": 0, "aborted": 0, "relaunched": 0, "running": 0, "claimed": 1}
+    assert tally == {"done": 1, "failed": 0, "cancelled": 0, "aborted": 0, "relaunched": 0,
+                     "running": 0, "claimed": 1}
     assert resumed == [("r1", {"adapter_uri": "s3://b/a"})]
     rec = await store.get("r1:train")
     assert rec.status == DONE and rec.result == {"adapter_uri": "s3://b/a"}
@@ -222,6 +223,84 @@ async def test_durable_path_idempotent_submit_then_returns_on_resume(monkeypatch
     assert submits == [1] and isinstance(out, dict)  # idempotent — not re-dispatched
 
 
+# ── the job's workspace is the one in scope ───────────────────────────────
+
+
+def _durable_world(monkeypatch):
+    from cairn.core.operator import job_store as JS
+
+    shared = InMemoryRemoteJobStore()
+    monkeypatch.setattr(JS, "get_remote_job_store", lambda: shared)
+    submits: list = []
+    pins: list = []
+
+    class StubOp:
+        name = "stub/gpu"
+        input_schema = _Inp
+        output_schema = _Out
+
+        async def submit(self, inp, ctx):
+            submits.append(1)
+            return JobHandle(job_id="j1", backend="remote_job")
+
+    async def _pins(*a, **kw):
+        pins.append(1)
+
+    import langgraph.types as LT
+
+    class _Pause(Exception):
+        pass
+
+    def _interrupt(payload):
+        raise _Pause()
+
+    monkeypatch.setattr(LT, "interrupt", _interrupt)
+    monkeypatch.setattr("cairn.core.operator.pins.record_train_pins", _pins)
+    return shared, StubOp(), submits, pins, _Pause
+
+
+@pytest.mark.parametrize("target", ["worker:gpu", "rp"])
+async def test_durable_job_with_auth_on_and_no_workspace_in_scope_is_refused(monkeypatch, target):
+    """A pull-lane (``worker:<pool>``) or pushed job registered from an operation
+    node outside any workspace scope, with auth on, is refused before anything is
+    registered or dispatched, instead of being stamped with the process default."""
+    from cairn.core.operator import runtime as RT
+    from cairn.core.operator.binding import ExecutionField, OperationBinding
+    from cairn.core.operator.protocol import OperationContext
+    from cairn.core.workspace import WorkspaceScopeRequired
+
+    monkeypatch.setenv("CAIRN_JWT_SECRET", "test-secret")
+    monkeypatch.setenv("CAIRN_WORKSPACE", "default")
+    shared, op, submits, pins, _ = _durable_world(monkeypatch)
+    binding = OperationBinding(operator="stub/gpu", input={}, output={},
+                               execution=ExecutionField(compute_target=target))
+    with pytest.raises(WorkspaceScopeRequired):
+        await RT._invoke_remote_job_durable(op, _Inp(), OperationContext(pipeline_id="r1", node_name="train"),
+                                            binding, "stub/gpu", run_id="r1", node_name="train",
+                                            resolved_input={"x": 1})
+    assert await shared.get("r1:train") is None
+    assert submits == [] and pins == []
+
+
+@pytest.mark.parametrize("target", ["worker:gpu", "rp"])
+async def test_durable_job_is_stamped_with_the_workspace_in_scope(monkeypatch, target):
+    from cairn.core.operator import runtime as RT
+    from cairn.core.operator.binding import ExecutionField, OperationBinding
+    from cairn.core.operator.protocol import OperationContext
+    from cairn.core.workspace import workspace_scope
+
+    monkeypatch.setenv("CAIRN_JWT_SECRET", "test-secret")
+    shared, op, submits, pins, _Pause = _durable_world(monkeypatch)
+    binding = OperationBinding(operator="stub/gpu", input={}, output={},
+                               execution=ExecutionField(compute_target=target))
+    with workspace_scope("ws-a"), pytest.raises(_Pause):
+        await RT._invoke_remote_job_durable(op, _Inp(), OperationContext(pipeline_id="r1", node_name="train"),
+                                            binding, "stub/gpu", run_id="r1", node_name="train",
+                                            resolved_input={"x": 1})
+    rec = await shared.get("r1:train")
+    assert rec is not None and rec.workspace_id == "ws-a"
+
+
 # ── #552 — relaunch-from-checkpoint on a resumable death ──────────────────
 
 
@@ -339,3 +418,47 @@ async def test_log_tail_persisted_from_poll():
     await drive_once(store, poll, resume)
     rec = await store.get("r1:train")
     assert rec.last_log_tail == "step 5 loss 1.2"
+
+
+# ── ADR-0151 D9: `cancelled` is a terminal JobStatus state ────────────────────
+async def test_cancelled_closes_the_record_and_resumes_as_cancelled():
+    """A job stopped by a cancel (remote/exec's marker) is closed cancelled and
+    resumed as such — never counted running, never fed to the learning gate."""
+    from cairn.core.operator.job_store import CANCELLED
+
+    store = InMemoryRemoteJobStore()
+    await _seed(store, "r1")
+    resumed, cancels = [], []
+
+    async def poll(rec):
+        return JobStatus(state="cancelled", error="remote job cancelled",
+                         metrics={"eval_losses": [3.0, 3.1, 3.2]})
+
+    async def resume(rec, status):
+        resumed.append((rec.run_id, status.state))
+
+    async def cancel(rec):
+        cancels.append(rec.run_id)
+
+    from cairn.core.operator.learning import LearningConfig
+
+    tally = await drive_once(store, poll, resume, cancel=cancel,
+                             learning=LearningConfig(patience=1, warmup=0))
+    assert tally["running"] == 0 and tally["aborted"] == 0, tally
+    assert cancels == [], "the learning gate must not run on a cancelled job"
+    assert tally["cancelled"] == 1
+    assert resumed == [("r1", "cancelled")]
+    assert (await store.get("r1:train")).status == CANCELLED
+    assert await store.claim_active() == []
+
+
+async def test_default_resume_keeps_cancelled_distinct_from_failed():
+    seen: list[tuple[str, dict]] = []
+
+    class _D:
+        async def resume_run(self, run_id, decision):
+            seen.append((run_id, decision))
+
+    resume = build_default_resume(_D())
+    await resume(_rec("r1"), JobStatus(state="cancelled", error="remote job cancelled"))
+    assert seen == [("r1", {"status": "cancelled", "error": "remote job cancelled"})]

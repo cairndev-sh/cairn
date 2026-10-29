@@ -150,6 +150,7 @@ GUARDED = [
     ("DELETE", "/pipelines/presets", {"params": {"ref": "pipeline:nope/missing", "name": "p1"}}, 200),
     ("POST", f"/pipelines/{ACME_PIPE}/steps/s1/advance", {}, 409),
     ("POST", f"/pipelines/{ACME_PIPE}/steps/s1/approve", {"json": {}}, 409),
+    ("POST", f"/pipelines/{ACME_PIPE}/steps/s1/reject", {"json": {"reason": "no"}}, 409),
     ("POST", f"/pipelines/{ACME_PIPE}/cancel", {}, 200),
     ("POST", "/triggers/scheduled", {"json": {}}, 400),
     ("PATCH", "/triggers/scheduled/sched-x", {"json": {"enabled": False}}, 404),
@@ -280,7 +281,7 @@ EXEMPT: dict[tuple[str, str], str] = {
         "account-level: archives/restores one; needs an admin of the owning account (#157)",
     # The pull lane is not a workspace route: these routes act in no workspace and
     # `claim_next` takes any account's queued job, so there is no workspace to
-    # assert. Who may call them is a credential rule instead (cairn-platform#224,
+    # assert. Who may call them is a credential rule instead (an internal issue;
     # tests/core/test_jobs_claim_worker_credential.py): only a worker credential
     # (the deployment admin or a worker-pool token) claims or heartbeats; a
     # run-scoped token heartbeats only its own run's job; a user's token gets 403.
@@ -289,9 +290,9 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("POST", "/jobs/claim"):
         "pull lane, no workspace: only a worker credential (deployment admin or worker-pool token)",
     ("POST", "/registry/install"):
-        "deployment-level, the deployment admin only (cairn-platform#223); refused by posture (501, #1545 D2)",
+        "deployment-level, the deployment admin only (an internal issue); refused by posture (501, #1545 D2)",
     ("POST", "/registry/uninstall"):
-        "deployment-level, the deployment admin only (cairn-platform#223): a pack is process-wide",
+        "deployment-level, the deployment admin only (an internal issue): a pack is process-wide",
     ("POST", "/pipelines/preview"): "side-effect free: nothing is submitted or recorded",
     ("POST", "/pipelines/preview-config"): "side-effect free: composes the config surface",
     ("POST", "/triggers/scheduled/preview"): "side-effect free: computes the next fire times",

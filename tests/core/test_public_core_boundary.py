@@ -85,14 +85,17 @@ PRIVATE_OPERATOR_MODULES: frozenset[str] = frozenset({
     "operator_postmortem", "operator_redteam", "operator_report", "operator_s3", "operator_serving",
     "operator_training"})
 PRIVATE_REF_PREFIXES: frozenset[str] = frozenset({
-    "blast-radius", "clickstack", "compress", "compute", "cost", "dataset", "dataset-readiness",
+    "blast-radius", "clickstack", "compress", "cost", "dataset", "dataset-readiness",
     "dataset_readiness", "eval", "git", "incident", "infer", "ingest", "lineage", "llm", "logs", "model",
     "notify", "postmortem", "redteam", "report", "s3", "security-kb", "security-triage", "security_kb",
     "security_triage", "serve", "serving", "traces", "training"})
 #: Official operators under a prefix a builtin shares (``data/profile`` and ``rag/search`` are builtins).
 #: `train/` is shared since the public train-local builtin (`train/lora`, `train/eval-loss`, ADR-0127 D4),
-#: so the platform training pack's `train/*` operators are named one by one.
+#: so the platform training pack's `train/*` operators are named one by one. `compute/` is shared since
+#: `compute/acquire` and `compute/release` moved into the public remote builtin (ADR-0151 D6, owner
+#: decision D-D 2026-10-24): exactly those two are public, the platform's other three stay private.
 PRIVATE_SHARED_PREFIX_REFS: frozenset[str] = frozenset({
+    "compute/actual", "compute/estimate", "compute/quote",
     "data/expectations", "rag/eval",
     "train/kaggle", "train/local", "train/modal", "train/proxy-trial", "train/runpod",
     "train/stage-dataset", "train/stub", "train/teardown", "train/vast"})
@@ -248,6 +251,12 @@ def test_nonpublic_ref_debt_only_shrinks():
     ('S = "data/expectations"\n', True),                # official op under a builtin prefix
     ('OP = "train/kaggle"\n', True),                    # official op under a prefix shared with train-local
     ('OP = "train/lora"\n', False),                     # builtin train-local (ADR-0127 D4)
+    ('OP = "compute/estimate"\n', True),               # official op under a prefix shared with remote (ADR-0151 D6)
+    ('OP = "compute/actual"\n', True),
+    ('OP = "compute/quote"\n', True),
+    ('OP = "cost/gate"\n', True),                      # `cost` stays a private prefix
+    ('OP = "compute/acquire"\n', False),               # builtin remote (ADR-0151 D6)
+    ('OP = "compute/release"\n', False),
     ('OP = "mcp/call"\n', False),                        # builtin
     ('OP = "data/profile"\n', False),                    # builtin under a shared prefix
     ('OP = "secrets/infisical"\n', False),               # builtin (ADR-0127 D3); `secrets` is builtin-only
@@ -257,6 +266,25 @@ def test_nonpublic_ref_debt_only_shrinks():
 def test_nonpublic_ref_rule_can_fail(src, flagged):
     new, _ = _check(_nonpublic_ref_hits(_literals_of_source(src, "cairn/core/new.py")), NONPUBLIC_REFS)
     assert bool(new) is flagged, src
+
+
+def test_a_shared_prefix_is_shared_with_a_builtin():
+    """An exact private ref is recorded only under a prefix a builtin really uses; otherwise the
+    prefix itself belongs in ``PRIVATE_REF_PREFIXES`` and the move to exact refs dropped a name."""
+    builtin_prefixes = {r.split("/")[0] for r in _manifest_refs("builtins")}
+    assert {r.split("/")[0] for r in PRIVATE_SHARED_PREFIX_REFS} <= builtin_prefixes
+
+
+def test_exactly_two_compute_refs_are_public():
+    """ADR-0151 D6 (owner decision D-D, 2026-10-24): the `compute` prefix is public for
+    `compute/acquire` and `compute/release` only; the platform's cost operators stay private."""
+    assert {r for r in _manifest_refs("builtins") if r.startswith("compute/")} == {
+        "compute/acquire", "compute/release"}
+    assert "compute" not in PRIVATE_REF_PREFIXES and "operator_compute" in PRIVATE_OPERATOR_MODULES
+    new, _ = _check(_nonpublic_ref_hits(_literals_of_source(
+        'A = "compute/acquire"\nR = "compute/release"\nE = "compute/estimate"\n', "cairn/core/new.py")),
+        NONPUBLIC_REFS)
+    assert [v for _, _, v in new] == ["compute/estimate"]
 
 
 @pytest.mark.skipif(not _layout.PRIVATE_TREES, reason="the platform's packs are not in this tree")

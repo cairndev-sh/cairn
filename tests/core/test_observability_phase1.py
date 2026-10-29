@@ -104,6 +104,29 @@ def test_init_tracing_is_noop_without_endpoint(monkeypatch):
     assert telemetry._tracer is None
 
 
+def test_init_tracing_without_otlp_exporter_warns_and_returns(monkeypatch, caplog):
+    # base install: SDK present, `cairndev[telemetry]` (OTLP exporter) absent (#248)
+    import logging
+
+    from cairn.core.provider_settings import get_settings
+
+    monkeypatch.setattr(telemetry, "_tracer", None)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
+    monkeypatch.setitem(
+        sys.modules, "opentelemetry.exporter.otlp.proto.http.trace_exporter", None
+    )
+    get_settings.cache_clear()
+    try:
+        with caplog.at_level(logging.WARNING, logger=telemetry.logger.name):
+            telemetry.init_tracing()  # must not raise
+    finally:
+        monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+        get_settings.cache_clear()
+    assert telemetry._tracer is None
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1 and "cairndev[telemetry]" in warnings[0]
+
+
 # ── app metrics (#242 Phase 2) ───────────────────────────────────────
 
 from cairn.core.obs import metrics  # noqa: E402
@@ -150,6 +173,7 @@ def test_init_metrics_is_noop_without_endpoint(monkeypatch):
 
 # ── LLM GenAI-semconv span content (#242 Phase 3 → Langfuse) ─────────
 
+import sys
 import cairn.core.llm.client as llm_client  # noqa: E402
 
 

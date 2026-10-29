@@ -41,6 +41,12 @@ class JobFailed(RuntimeError):
     """The remote/container job reached a terminal failed state."""
 
 
+class JobCancelled(JobFailed):
+    """The job was stopped by a cancel (``JobStatus.state == "cancelled"``). A
+    :class:`JobFailed`, so a caller that handles failure still ends; distinct, so
+    one that cares can tell a cancel from a crash (ADR-0151 D9)."""
+
+
 class JobTimeout(RuntimeError):
     """The job did not reach a terminal state within ``max_polls``."""
 
@@ -61,8 +67,13 @@ class JobStatus:
     while running (e.g. ``{"eval_losses": [...]}``) for the learning gate (#144).
     ``retriable`` marks a ``failed`` that is a RECOVERABLE death (box/instance
     gone, OOM-killed — no clean exit) rather than a genuine training error, so the
-    control loop may relaunch it from a durable checkpoint (#552/ADR-0064)."""
-    state: str  # "running" | "succeeded" | "failed"
+    control loop may relaunch it from a durable checkpoint (#552/ADR-0064).
+
+    ``cancelled`` (ADR-0151 D9) means the job was stopped by a cancel. It is
+    terminal and never retriable: the control loop closes the record cancelled
+    and resumes the run as cancelled, and :func:`run_job_lifecycle` ends with
+    :class:`JobCancelled`."""
+    state: str  # "running" | "succeeded" | "failed" | "cancelled"
     output: Any = None
     error: str = ""
     metrics: dict[str, Any] = field(default_factory=dict)
@@ -115,6 +126,11 @@ def live_channel_env_for(run_id: str, node: str = "") -> dict[str, str]:
     if not run_id or run_id in ("p?", "None"):
         return {}
     env = {"CAIRN_RUN_ID": run_id, "CAIRN_NODE": node}
+    # #222 — the W3C trace context of the leg submitting this job, so the job's own
+    # spans can join the pipeline trace. Absent (not empty) when tracing is off.
+    from cairn.core.obs.telemetry import current_traceparent  # noqa: PLC0415 — keeps the telemetry import off this module's load path
+    if (traceparent := current_traceparent()):
+        env["TRACEPARENT"] = traceparent
     chan = getenv("CAIRN_JOB_CHANNEL", "").strip()
     if chan.startswith("nats://"):
         # The box wire carries both names (#2429): live.py reads CAIRN_ first; the OBS_
@@ -401,6 +417,8 @@ async def run_job_lifecycle(
             return status.output
         if status.state == "failed":
             raise JobFailed(f"{driver.backend} job {handle.job_id!r} failed: {status.error}")
+        if status.state == "cancelled":  # ADR-0151 D9 — terminal, never re-polled
+            raise JobCancelled(f"{driver.backend} job {handle.job_id!r} cancelled: {status.error}")
         if on_running is not None:
             try:
                 out = on_running(handle, status)
@@ -509,7 +527,7 @@ class DockerJobDriver:
 
 
 __all__ = [
-    "JobFailed", "JobTimeout", "JobHandle", "JobStatus", "JobDriver",
+    "JobCancelled", "JobFailed", "JobTimeout", "JobHandle", "JobStatus", "JobDriver",
     "RemoteJobOperator", "HttpRemoteJobOperation", "is_remote_job_operator",
     "run_job_lifecycle",
     "RemoteJobDriver", "DockerJobDriver", "build_docker_run_argv",

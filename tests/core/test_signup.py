@@ -226,3 +226,53 @@ async def test_the_claim_survives_the_store_round_trip():
     await S.set_account_domain("acme", "@acme.io", claimed_by="boss")
     got = await A.get_account_store().get_account("acme")
     assert (got.domain, got.domain_claimed_by) == ("acme.io", "boss")
+
+
+# ── the deployment admin's name ─────────────────────────────────────────────
+
+@pytest.mark.parametrize("given", ["ops@acme.com", "  OPS@Acme.com ", "Ops@ACME.COM"])
+async def test_signup_never_creates_a_user_under_the_env_admin_name(given, monkeypatch):
+    """Login tries the store before the env admin, so a self-served user under
+    the admin's name would stand in front of the deployment admin's sign-in.
+    The name reads as registered, whatever the case or surrounding space, and
+    even on an empty deployment (the first-run bootstrap does not apply)."""
+    monkeypatch.setenv("CAIRN_API_USER", "ops@acme.com")
+    monkeypatch.setenv("OBS_SIGNUP", "open")
+    with pytest.raises(S.SignupError) as e:
+        await S.signup("Acme", given, "h")
+    assert e.value.reason == "already_registered"
+    assert await A.get_account_store().list_users() == []
+    assert await S.is_first_run(), "nothing was created"
+
+
+async def test_signup_admin_name_check_reads_the_configured_name(monkeypatch):
+    """Only the configured name is held: another address still signs up."""
+    monkeypatch.setenv("CAIRN_API_USER", "ops@acme.com")
+    acct, user, created = await S.signup("Acme", "founder@acme.com", "h")
+    assert created and user.username == "founder@acme.com"
+
+
+def test_signup_endpoint_refuses_the_env_admin_name(tmp_path, monkeypatch):
+    """The HTTP door: 400 with the same reason, and no account appears."""
+    import types
+
+    from fastapi.testclient import TestClient
+
+    from cairn.core import workspace as _ws
+    from cairn.core.triggers.server import build_app
+
+    monkeypatch.setenv("OBS_RUN_DB", str(tmp_path / "r.db"))
+    monkeypatch.setattr(_ws, "_store", _ws.SqliteWorkspaceStore(path=str(tmp_path / "w.db")))
+    monkeypatch.setenv("CAIRN_API_USER", "ops@acme.com")
+
+    class FakeRunner:
+        default_environment = "production"
+        skill_engine = types.SimpleNamespace(list_skills=lambda: [])
+
+        async def run(self, *a, **k):
+            return {}
+
+    c = TestClient(build_app(FakeRunner(), enable_scheduler=False))
+    r = c.post("/auth/signup", json={"company": "Acme", "email": " OPS@acme.com", "password": "pw12345"})
+    assert (r.status_code, r.json().get("detail")) == (400, "already_registered")
+    assert c.get("/auth/signup").json()["first_run"] is True

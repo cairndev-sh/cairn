@@ -81,9 +81,9 @@ from the account's own connections, and they back that invocation's
 `ctx.secrets` alone; the deployment's bound SecretStore is not consulted. A
 declared key matches a tenant connection's secret when the logical key is the
 declared name, or when the provider catalog entry the connection is named after
-maps that key to it (`kaggle`: `KEY` → `KAGGLE_KEY`). An operator that reads a
-credential from `os.environ` instead of `ctx.secrets` receives nothing for a
-tenant run.
+maps that key to it (`kaggle`: `KEY` → `KAGGLE_KEY`). A tenant account's run
+does not receive its account's credentials in the process environment; read them
+from `ctx.secrets`.
 
 Connection names are still unique across the whole deployment (the `connections`
 table's `name` column and the id derived from it), so two accounts cannot use the

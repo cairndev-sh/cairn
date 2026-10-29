@@ -8,8 +8,8 @@ output is a per-category report with one of three statuses per check:
 
   ✓ ok    — set / reachable / writable
   ⚠ warn  — unset-but-optional, unreachable, defaulted in a way operators often
-            want to override (e.g. unset CAIRN_RUN_DB → in-memory store
-            that loses state on restart)
+            want to override (e.g. unset CAIRN_STORAGE and CAIRN_RUN_DB →
+            in-memory store that loses state on restart)
   ✗ fail  — required-but-missing, unwritable path, or invalid value
 
 Pairs with ``cairn validate`` (artifact validation) and ``cairn ls``
@@ -32,6 +32,7 @@ import os
 import sys
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlsplit
 
 import typer
 
@@ -49,9 +50,13 @@ _PROBE_TIMEOUT_SECONDS = 2.0
 
 
 def _mask(value: str) -> str:
-    """Mask a secret like 'xoxb-1234567' → 'xoxb-12******'."""
+    """Mask a secret like 'xoxb-1234567' → 'xoxb-12******'. A URL, or a DSN missing
+    its scheme, goes through ``redacted_url`` instead: its first characters are the
+    user and password (GHSA-gw2v-3922-g7gm)."""
     if not value:
         return ""
+    if _settings.url_scheme(value) or "@" in value:
+        return _settings.redacted_url(value)
     keep = min(8, max(2, len(value) // 4))
     return value[:keep] + "*" * max(4, len(value) - keep)
 
@@ -76,7 +81,8 @@ def check_settings() -> list[CheckResult]:
                                        "unset (optional)",
                                        category=spec.category))
             continue
-        shown = _mask(raw) if spec.secret else raw
+        # A knob not marked secret can still hold a DSN (CAIRN_BUS, CAIRN_JOB_CHANNEL)
+        shown = _mask(raw) if spec.secret else _settings.redacted_url(raw)
         if legacy and not os.environ.get(spec.env_var):  # ADR-0122 D4: read until 1.0, then ignored
             out.append(CheckResult(spec.env_var, "warn",
                                    f"set: {shown} via {legacy} — deprecated, rename it to {spec.env_var}",
@@ -90,12 +96,33 @@ def check_settings() -> list[CheckResult]:
 
 
 def check_run_db() -> CheckResult:
-    """If CAIRN_RUN_DB is set, verify the parent dir is writable."""
-    path = _settings.run_db_path()
+    """Where the run store persists, chosen as ``storage.default_store`` chooses it:
+    ``CAIRN_STORAGE`` (Postgres or a ``sqlite://`` file), else ``CAIRN_RUN_DB``, else
+    in-memory (#61). A SQLite file's parent dir must be writable."""
+    url = getenv("CAIRN_STORAGE", "").strip()
+    if url.startswith(("postgres://", "postgresql://")):
+        label = _settings.store_identity()[0]  # host:port/db, never the user or password
+        return CheckResult("run_db", "ok", f"{label} (CAIRN_STORAGE)", category="store")
+    if url.startswith("sqlite://"):
+        path, knob = _settings.sqlite_path_from_url(url) or ":memory:", "CAIRN_STORAGE"
+    elif url:
+        try:  # only the scheme: the value may carry a user and password
+            scheme = urlsplit(url).scheme
+        except ValueError:
+            scheme = ""
+        if not url.lower().startswith(f"{scheme}://"):
+            scheme = ""
+        named = f"has an unrecognized scheme {scheme!r}" if scheme else "is not a storage URL"
+        return CheckResult("run_db", "fail",
+                           f"CAIRN_STORAGE {named}; the run store refuses it "
+                           "(postgres://…, sqlite:///path.db, sqlite://:memory:)",
+                           category="store")
+    else:
+        path, knob = _settings.run_db_path(), "CAIRN_RUN_DB"
     if not path:
         return CheckResult(
             "run_db", "warn",
-            "CAIRN_RUN_DB unset → in-memory store (state lost on restart)",
+            "CAIRN_STORAGE and CAIRN_RUN_DB unset → in-memory store (state lost on restart)",
             category="store",
         )
     if path == ":memory:":
@@ -111,7 +138,30 @@ def check_run_db() -> CheckResult:
         return CheckResult("run_db", "fail",
                            f"parent dir {parent} is not writable", category="store")
     return CheckResult("run_db", "ok",
-                       f"parent {parent} is writable", category="store")
+                       f"{path} ({knob}); parent {parent} is writable", category="store")
+
+
+def check_engine_store() -> Optional[CheckResult]:
+    """#229 — does the engine this CLI is configured for read the store this CLI
+    writes? ``cairn connect add`` refuses a write when it does not; this says so
+    before anyone writes. ``None`` (no row) when no engine answers."""
+    from cairn.cli.commands.remote import store_check  # noqa: PLC0415 — cli → cli, lazy like the rest
+
+    checked = store_check()
+    if checked is None or checked[1] is None:
+        return None
+    mine, ep, same = checked
+    if same is None:
+        return CheckResult("engine_store", "warn",
+                           f"the engine at {ep} does not report its store; "
+                           f"cannot compare it with {mine}", category="store")
+    if same:
+        return CheckResult("engine_store", "ok", f"{mine} — the store the engine at {ep} reads",
+                           category="store")
+    return CheckResult("engine_store", "warn",
+                       f"this CLI writes {mine}, but the engine at {ep} reads a different "
+                       "store: `cairn connect add` refuses until CAIRN_STORAGE names the "
+                       "engine's store (or --force)", category="store")
 
 
 # ─── network reachability probes ────────────────────────────────────
@@ -948,7 +998,7 @@ def _backend_provenance_checks() -> list[CheckResult]:
         # so a colon here would make a diagnostic row masquerade as a check.
         CheckResult(
             f"config[{r['key']}]", "ok",
-            f"{r['key']}={r['value']} (from {r['provenance']}"
+            f"{r['key']}={_settings.redacted_url(str(r['value']))} (from {r['provenance']}"
             + (f": {r['env']}" if r["provenance"] == "env" and r["env"] else "")
             + ")",
             category="profile",
@@ -1102,8 +1152,14 @@ async def check_artifact_bytes() -> list[CheckResult]:
         return [CheckResult("artifact_bytes", "warn",
                             "no artifact registry configured (CAIRN_STORAGE unset) — nothing to check",
                             category="store")]
+    # The registry answers per workspace (ADR-0148); the CLI checks the process's
+    # own workspace (CAIRN_WORKSPACE, else `default`), which owns every artifact
+    # registered before workspace scoping.
+    from cairn.core.workspace import current_workspace  # noqa: PLC0415 - CLI startup latency
+
+    ws = current_workspace()
     try:
-        health = await registry_health(store)
+        health = await registry_health(store, workspace_id=ws)
     except Exception as e:  # noqa: BLE001 - a doctor probe reports, it never crashes
         return [backend, CheckResult("artifact_registry_bytes", "warn",
                                      f"could not read the artifact registry: {e}", category="store")]
@@ -1115,11 +1171,11 @@ async def check_artifact_bytes() -> list[CheckResult]:
 
     if health["dangling"]:
         names = ", ".join(f"{a['id'][:12]} ({a['uri']})" for a in health["dangling_sample"])
-        detail = (f"{health['dangling']} dangling of {health['total']} registered "
+        detail = (f"{health['dangling']} dangling of {health['total']} registered in workspace {ws!r} "
                   f"({health['durable']} durable, {health['local']} local-only) — first: {names}")
         status = "warn"
     else:
-        detail = (f"{health['total']} registered artifacts resolve "
+        detail = (f"{health['total']} registered artifacts in workspace {ws!r} resolve "
                   f"({health['durable']} durable, {health['local']} local-only)")
         status = "ok"
     return [backend, CheckResult("artifact_registry_bytes", status, detail, category="store")]
@@ -1186,6 +1242,14 @@ async def check_compute_targets() -> list[CheckResult]:
     from cairn.core.deploy_check import check_compute_ssh  # noqa: PLC0415 - cli → core
 
     out: list[CheckResult] = []
+    # ADR-0150 D1 — the execution unit is the connection's mode/image over the
+    # environment's; read the environment's half here so the row matches what
+    # the engine will run. Unreadable → None, and the row says it depends.
+    try:
+        env_mode: str | None = selected("remote_exec_mode", default="auto") or "auto"
+        env_image: str | None = selected("remote_image", default="") or ""
+    except Exception:  # noqa: BLE001 — a broken profile is reported by check_profile
+        env_mode = env_image = None
     for key in ("dataflow_target", "ml_target"):
         try:
             target = (selected(key, default="") or "").strip()
@@ -1207,7 +1271,8 @@ async def check_compute_targets() -> list[CheckResult]:
         cfg = dict(getattr(resolved, "config", None) or {}) if resolved is not None else None
         secrets = getattr(resolved, "secrets", None) or {} if resolved is not None else {}
         out.extend(check_compute_ssh(
-            key, target, cfg, has_key=bool(secrets.get("PRIVATE_KEY"))))
+            key, target, cfg, has_key=bool(secrets.get("PRIVATE_KEY")),
+            env_mode=env_mode, env_image=env_image))
     return out
 
 
@@ -1242,6 +1307,7 @@ async def run_checks() -> list[CheckResult]:
         check_runtime(),
         check_compute_targets(),  # ADR-0104 D1 (#2071) — the box the run lands on
         check_mcp_servers(),
+        asyncio.to_thread(check_engine_store),  # #229 — the CLI's store is the engine's
         return_exceptions=False,
     )
     for p in probes:

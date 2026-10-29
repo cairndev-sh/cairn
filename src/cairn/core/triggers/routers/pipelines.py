@@ -47,6 +47,33 @@ async def _off_loop(fn: Callable[..., _T], *args: Any) -> _T:
     return await asyncio.to_thread(locked)
 
 
+#: What a job's env value reads as once it leaves the control plane (ADR-0149).
+HIDDEN = "[hidden]"
+
+
+def public_handle(handle: Optional[dict]) -> Optional[dict]:
+    """A step's engine job handle as the API serves it: every ``env`` mapping in
+    its ``meta`` keeps its NAMES with each value replaced by :data:`HIDDEN`.
+
+    Handles written before ADR-0149 still hold ``meta.exec_input.env`` (the job-channel
+    token, ``MLFLOW_TRACKING_PASSWORD``, forwarded settings); newer ones hold no values,
+    so they read unchanged. Storage is not rewritten: adopt and cancel read the stored
+    handle, which needs no env either. The one place a step handle leaves the control
+    plane is :func:`build_pipelines_router`'s record read."""
+    if not isinstance(handle, dict):
+        return handle
+
+    def mask(v: Any) -> Any:
+        if isinstance(v, dict):
+            return {k: ({n: HIDDEN for n in x} if k == "env" and isinstance(x, dict) else mask(x))
+                    for k, x in v.items()}
+        if isinstance(v, list):
+            return [mask(x) for x in v]
+        return v
+
+    return {**handle, "meta": mask(handle.get("meta") or {})} if "meta" in handle else handle
+
+
 def _valid_preset_name(name: str) -> bool:
     return bool(_PRESET_NAME.match(name or ""))
 
@@ -170,6 +197,7 @@ def build_pipelines_router(dispatcher, pipeline_bridge) -> APIRouter:
     # request models the inline block shared.
     from cairn.core.triggers.server import (  # noqa: PLC0415 — routers ↔ server cycle at import time
         PipelineApproveRequest,
+        PipelineRejectRequest,
     )
 
     r = APIRouter()
@@ -716,6 +744,11 @@ def build_pipelines_router(dispatcher, pipeline_bridge) -> APIRouter:
     async def get_pipeline(pipeline_id: str) -> dict[str, Any]:
         rec = await _pipeline_in_ws_or_404(pipeline_id)
         out = rec.model_dump(mode="json")
+        # ADR-0149 — a job's env values never leave the control plane, whatever an
+        # older handle recorded.
+        for st in (out.get("step_state") or {}).values():
+            if isinstance(st, dict) and st.get("handle"):
+                st["handle"] = public_handle(st["handle"])
         # #930 — enrich each step with a summary of its governed run (cost, failure
         # reason, final verdict) so the detail view shows real per-step info, not just
         # a status dot. Best-effort: a missing/pruned run just omits the summary; the
@@ -869,10 +902,37 @@ def build_pipelines_router(dispatcher, pipeline_bridge) -> APIRouter:
             raise HTTPException(status_code=409, detail=str(e))
         return {"pipeline_id": pipeline_id, "step_id": step_id, "status": rec.status}
 
+    @r.post("/pipelines/{pipeline_id}/steps/{step_id}/reject", dependencies=[Depends(require_auth), Depends(support.writable_workspace)])
+    async def reject_pipeline_step(
+        pipeline_id: str, step_id: str, req: PipelineRejectRequest,
+        token: Annotated[Optional[str], Depends(_oauth2_scheme)] = None,
+    ) -> dict[str, Any]:
+        """ADR-0156 D4 — refuse a gate at `awaiting_approval`, attributed and with a reason.
+        Approve's guards in approve's order; the pipeline ends `failed`, the step's verdict
+        is `rejected`. Any other wait is 409 (release or cancel it instead)."""
+        rec = await _pipeline_in_ws_or_404(pipeline_id)
+        reason = req.reason.strip()
+        if not reason:
+            raise HTTPException(status_code=422, detail="reason is required")
+        await _assert_may_decide(rec, step_id, token)  # before anything is recorded (403)
+        decider = await decision_actor(token, req.approver, fallback="console")
+        try:
+            rec = await pipeline_bridge.reject_step(
+                pipeline_id, step_id, decider=decider, reason=reason)
+        except ValueError as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        return {"pipeline_id": pipeline_id, "step_id": step_id, "status": rec.status,
+                "verdict": "rejected", "decider": decider}
+
     @r.post("/pipelines/{pipeline_id}/cancel", dependencies=[Depends(require_auth), Depends(support.writable_workspace)])
-    async def cancel_pipeline_route(pipeline_id: str) -> dict[str, Any]:
+    async def cancel_pipeline_route(
+        pipeline_id: str,
+        token: Annotated[Optional[str], Depends(_oauth2_scheme)] = None,
+    ) -> dict[str, Any]:
         await _pipeline_in_ws_or_404(pipeline_id)
-        rec = await pipeline_bridge.cancel_pipeline(pipeline_id)
+        # #233 — who stopped a (possibly paid) run: the token's identity, as approve records it
+        actor = await decision_actor(token, None, fallback="anonymous")
+        rec = await pipeline_bridge.cancel_pipeline(pipeline_id, actor=actor)
         return {"pipeline_id": pipeline_id, "status": rec.status}
 
     return r

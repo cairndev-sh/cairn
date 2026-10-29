@@ -1,4 +1,4 @@
-"""Only a worker credential claims pull-lane work (cairn-platform#224).
+"""Only a worker credential claims pull-lane work (an internal issue).
 
 ``POST /jobs/claim`` hands out ANY queued job with its input, plus a run-scoped
 token for the job's run. It refused only per-run worker tokens, so every other

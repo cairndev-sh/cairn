@@ -24,9 +24,10 @@
 <p align="center">
   <a href="https://docs.cairndev.sh">Docs</a> ·
   <a href="https://demo.cairndev.sh">Live demo</a> ·
-  <a href="https://docs.cairndev.sh/installation/">Install</a> ·
-  <a href="https://docs.cairndev.sh/modelops/">ModelOps lifecycle</a> ·
-  <a href="https://docs.cairndev.sh/governance/">Governance</a> ·
+  <a href="https://docs.cairndev.sh/install/">Install</a> ·
+  <a href="https://docs.cairndev.sh/reference/catalog/">Pipeline catalog</a> ·
+  <a href="https://docs.cairndev.sh/concepts/gates/">Gates and approvals</a> ·
+  <a href="https://github.com/cairndev-sh/cairn-extensions">Extensions</a> ·
   <a href="https://cairndev.sh">Waitlist</a>
 </p>
 
@@ -45,10 +46,26 @@ never imports a pack — that one-way dependency is what lets the same machinery
 run fine-tuning, dataset checks, model evaluation, or incident response, and
 lets any operator inherit the budget, policy gate, and audit for free.
 
-cairn is **open source** (Apache 2.0) and **self-hosted by default**: your
-keys, your GPUs, your logs — nothing leaves your perimeter. A **managed
-cloud** is in private beta for teams who would rather not run it themselves;
-the engine is the same either way.
+cairn is **open source** (Apache 2.0) and **self-hosted**: your keys, your
+GPUs, your logs — nothing leaves your perimeter.
+
+## Extensions
+
+Domain packs and the operators they use are separate wheels, released from
+[**cairn-extensions**](https://github.com/cairndev-sh/cairn-extensions). Install
+the ones you need next to `cairndev`:
+
+| Package | What it adds |
+|---|---|
+| [`cairn-pack-dataset-prep`](https://github.com/cairndev-sh/cairn-extensions/tree/main/packs/cairn-pack-dataset-prep) | Pin a dataset, audit and clean it, split it by group and register `train` / `val` / `test` versions |
+| [`cairn-pack-finetune`](https://github.com/cairndev-sh/cairn-extensions/tree/main/packs/cairn-pack-finetune) | LoRA / QLoRA fine-tuning on a GPU box over SSH, with approvals, a priced budget, base-vs-candidate evaluation and a box that starts after approval and stops on every outcome |
+| [Operator packs](https://github.com/cairndev-sh/cairn-extensions#packages) | Dataset checks, training, lm-evaluation-harness benchmarks, IFC validation, and the contract wheels they implement |
+
+```bash
+pip install cairndev cairn-pack-finetune
+```
+
+Walkthrough: [Fine-tune a model](https://docs.cairndev.sh/guides/fine-tune-a-model/).
 
 ## Why governed?
 
@@ -77,6 +94,17 @@ carries the builtin operator packs (14) and the core contracts (13); their sourc
 the optional Metaflow and SkyPilot engines, and the example pack `cairn-pack-hello`.
 
 ```bash
+curl -LsSf https://docs.cairndev.sh/install.sh | sh     # or: pip install cairndev
+cairn --version && cairn doctor
+```
+
+Or try it without installing: the live demo at https://demo.cairndev.sh (a shared
+sandbox, so don't enter real credentials). The
+[Quickstart](https://docs.cairndev.sh/quickstart/) runs a pipeline on a local engine.
+
+From source:
+
+```bash
 git clone https://github.com/cairndev-sh/cairn && cd cairn
 uv sync --extra dev
 uv run cairn --help
@@ -93,14 +121,14 @@ CAIRN_PACK_PATH=examples/hello-cairn uv run cairn pipeline explain hello-cairn/p
 Those are the commands the public CI job runs on every change. The container image is
 built from `Dockerfile.engine`, the Helm chart lives under `deploy/helm/cairn`, and the
 optional extras are `auth`, `dataflow-engine`, `dev`, `hello`, `infisical`, `kernel`, `metaflow`, `nats`, `oauth`, `optuna`, `pii`, `rag`, `rag-pgvector`, `rag-pinecone`, `rag-qdrant`, `rag-sqlite-vec`, `rerank-cohere`, `rerank-cross-encoder`, `runtime-dbos`, `runtime-postgres`, `runtime-sqlite`, `runtime-temporal`, `skypilot`, `ssh`, `storage-postgres`, `telemetry`, `train`.
-Full setup: [Installation](https://docs.cairndev.sh/installation/) ·
+Full setup: [Install and deploy](https://docs.cairndev.sh/install/) ·
 [CLI reference](https://docs.cairndev.sh/reference/cli/).
 
 ## The ModelOps lifecycle
 
 Each stage is a normal governed run; chained together they form one auditable
 spine — as a template's subgraphs, or as an explicit
-[pipeline](https://docs.cairndev.sh/pipelines/).
+[pipeline](https://docs.cairndev.sh/concepts/pipelines/).
 
 ```mermaid
 flowchart LR
@@ -113,8 +141,8 @@ flowchart LR
 ```
 
 Deterministic gates decide pass/fail; LLM judges are advisory and off by
-default. Promotion pauses for a human. Read the walkthrough in the
-[ModelOps docs](https://docs.cairndev.sh/modelops/).
+default. Promotion pauses for a human. The shipped pipelines are listed in the
+[pipeline catalog](https://docs.cairndev.sh/reference/catalog/).
 
 ## One engine, many surfaces
 
@@ -123,18 +151,18 @@ The same governed core is driven from two places in this repository:
 - **CLI** — the full control surface: run, preflight, replay, approve, deploy.
   → [CLI reference](https://docs.cairndev.sh/reference/cli/)
 - **HTTP + SSE API** — every control-plane action is an endpoint, including live
-  run streaming. → [HTTP API](https://docs.cairndev.sh/reference/http-api/)
+  run streaming.
 
 ## Documentation
 
 | | |
 |---|---|
 | [Overview](https://docs.cairndev.sh/) | What cairn is and the governance thesis |
-| [Architecture](https://docs.cairndev.sh/architecture/) | Engine, packs, profiles, request lifecycle |
-| [Packs](https://docs.cairndev.sh/concepts/packs/) · [Operators](https://docs.cairndev.sh/concepts/operators/) | The pack contract and the operator contract |
-| [Governance](https://docs.cairndev.sh/governance/) | Policies, HITL gates, budget, audit |
-| [Pipelines](https://docs.cairndev.sh/pipelines/) | Chain governed workflows with gates and events |
-| [Deployment](https://docs.cairndev.sh/deployment/) | The compose stack: one `.env`, profile toggles |
+| [Architecture](./docs/architecture/00-overview.md) | Engine, packs, profiles, request lifecycle |
+| [Write a pipeline](https://docs.cairndev.sh/guides/write-a-pipeline/) · [Capabilities and operators](https://docs.cairndev.sh/concepts/capabilities/) | Packs, and how operators pick up a provider |
+| [Gates and approvals](https://docs.cairndev.sh/concepts/gates/) · [Cost and budgets](https://docs.cairndev.sh/concepts/cost/) | Policies, HITL gates, budget, audit |
+| [Pipelines](https://docs.cairndev.sh/concepts/pipelines/) | Chain governed workflows with gates and events |
+| [Install and deploy](https://docs.cairndev.sh/install/) | Install, Docker Compose, Helm, sign-in |
 | [Operators catalog](https://docs.cairndev.sh/reference/operators/) | Every shipped operator, by domain |
 
 ## Status & license
@@ -144,5 +172,5 @@ surface may still change between releases; see [`CHANGELOG.md`](./CHANGELOG.md).
 
 Licensed under the **Apache License 2.0** — see [`LICENSE`](./LICENSE).
 Contributions are welcome: read [`CONTRIBUTING.md`](./CONTRIBUTING.md) first.
-Interested in the managed cloud or a say in what ships next?
+Want a say in what ships next?
 **[Join the waitlist](https://cairndev.sh).**

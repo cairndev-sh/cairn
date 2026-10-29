@@ -48,6 +48,7 @@ from cairn.core.account import (
     User,
     add_member,
     get_account_store,
+    is_env_admin_username,
 )
 
 #: The three doors. See the module docstring for what each is for.
@@ -137,7 +138,9 @@ async def signup(
         raise SignupError("bad_email")
     if not password_hash and identity is None:
         raise SignupError("password_required")
-    if await store.get_user_by_username(addr) is not None:
+    # The deployment admin's name is held by the env admin, so it reads as
+    # registered (an OAuth landing arrives here too).
+    if is_env_admin_username(addr) or await store.get_user_by_username(addr) is not None:
         raise SignupError("already_registered")
 
     mode = signup_mode()

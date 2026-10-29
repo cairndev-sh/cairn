@@ -32,7 +32,7 @@ class SagaApprovalRequest(BaseModel):
 
 
 async def _assert_may_decide_saga(handler: Any, workflow_id: str, token: Optional[str]) -> None:
-    """cairn-platform#223 — a saga is decided only from the account that owns it.
+    """A saga is decided only from the account that owns it (an internal issue).
 
     ``writable_workspace`` checks the workspace the caller acts in, not the
     saga's. The saga's workspace comes from the action handler

@@ -20,9 +20,10 @@ and the docs all follow. Every capability keeps a zero-config safe default
 (sqlite / inprocess / off), so a fresh checkout runs with an empty profile.
 """
 from __future__ import annotations
-from cairn.core.settings import getenv
+from cairn.core.settings import getenv, url_scheme
 
 import os
+import re
 from typing import Any, Literal, Mapping, Optional
 
 from pydantic import BaseModel, Field
@@ -60,7 +61,7 @@ class BackendField(BaseModel):
     description: str = ""
     options: list[BackendOption] = Field(default_factory=list)
     env: Optional[str] = None               # env var this falls back to (None = profile-only)
-    env_is_url_kind: bool = False           # env holds a URL; derive the backend *kind* (storage)
+    env_is_url_kind: bool = False           # env holds a URL; derive the backend *kind* (storage, bus)
     needs_connection: bool = False          # non-default choice binds a stored connection (§3 / #305)
     optional_on: Optional[str] = None       # only meaningful when this toggle key is on (UI reveal)
 
@@ -136,14 +137,19 @@ BACKENDS: list[BackendField] = [
     # to move the SSH path onto the CI-built image.
     BackendField(
         key="remote_exec_mode", label="Remote execution mode", group="Data plane", control="select",
-        options=_opts(("auto", "Auto (image when one is named)"), ("image", "Container image"), ("venv", "Legacy box virtualenv")),
+        options=_opts(("auto", "Auto (image when one is named)"), ("image", "Container image"), ("venv", "Box virtualenv")),
         default="auto", env="CAIRN_REMOTE_EXEC_MODE",
-        description="How the builtin SSH engine runs a flow on a compute.ssh box (ADR-0104 D1): 'image' runs the pinned cairn-train-gpu image via docker run --gpus all with the workdir bind-mounted and the live-channel env forwarded; 'venv' is the legacy hand-installed box virtualenv; 'auto' picks image when remote_image or the connection names one, else venv. A compute.ssh connection's own 'mode' key overrides this per box.",
+        description="How the builtin SSH engine runs a flow on a compute.ssh box (ADR-0104 D1): 'image' runs the named image via docker run --gpus all with the workdir bind-mounted and the live-channel env forwarded; 'venv' is the box's virtualenv; 'auto' picks image when remote_image or the connection names one, else venv. A compute.ssh connection's own 'mode' and 'image' override this per box. Image mode with no image named anywhere is refused at submit.",
     ),
     BackendField(
         key="remote_image", label="Remote execution image", group="Data plane", control="text",
         default="", env="CAIRN_TRAIN_IMAGE",
-        description="The container image the SSH engine runs on the box. Empty = the engine's pinned default (operator_dataflow.engines_ssh.DEFAULT_TRAIN_IMAGE). PIN A TAG, never :latest — the run record has to name the exact build that produced the artifacts; prod should pin the immutable ghcr.io/evs-cmd/cairn-train-gpu:<sha> tag the image workflow pushes. A compute.ssh connection's own 'image' key overrides this per box.",
+        description="The container image the SSH engine runs on the box. There is no default: with no image named here or on the connection, 'auto' runs the box's virtualenv and image mode is refused at submit. PIN A TAG, never :latest — the run record has to name the exact build that produced the artifacts; pin an immutable tag such as the image's :<sha>. A compute.ssh connection's own 'image' key overrides this per box.",
+    ),
+    BackendField(
+        key="remote_env", label="Env forwarded to the remote job", group="Data plane", control="text",
+        default="", env="CAIRN_REMOTE_ENV",
+        description="Comma- or space-separated NAMES of control-plane environment variables the builtin SSH engine passes to the job on the compute.ssh box (e.g. CAIRN_CHECKPOINT_BUCKET, CAIRN_CHECKPOINT_PREFIX, AWS_DEFAULT_REGION), in addition to the spec, the live channel and MLFLOW_*. Set ones only; values go in the job's owner-only runner.sh (or docker run -e NAME), never on a command line. A name that looks like a credential (KEY, SECRET, TOKEN, PASSWORD) or that the engine sets itself is refused and the flow does not start: credentials stay on the box (an instance role).",
     ),
     # ── Metaflow substrate (ADR-0089, #1345) — identity/compute split. Before
     # this block, `<kind>_target` was OVERLOADED as the Metaflow metadata root,
@@ -265,7 +271,7 @@ BACKENDS: list[BackendField] = [
         key="event_bus", label="Notification bus", group="Eventing", control="select",
         # ADR-0127 D5 — the redis option is gone: CAIRN_BUS=redis://… is refused.
         options=_opts(("inprocess", "In-process"), ("postgres", "Postgres (needs a DSN in CAIRN_BUS)")),
-        default="inprocess", env="CAIRN_BUS",
+        default="inprocess", env="CAIRN_BUS", env_is_url_kind=True,
         description="Outbound notification/replay bus. In-process is the default. The Postgres bus (LISTEN/NOTIFY + replay, #477) is selected by a postgres:// DSN in CAIRN_BUS; this field carries no DSN, so choosing Postgres here without one runs in-process.",
     ),
     BackendField(
@@ -323,15 +329,22 @@ def backends_schema_grouped() -> list[dict[str, Any]]:
 def _kind_from_url(raw: str) -> str:
     """Derive a backend *kind* from a URL-style env value (e.g. CAIRN_STORAGE).
     ``postgres://…`` / ``postgresql://…`` → ``postgres``; ``sqlite…`` → ``sqlite``;
-    ``nats://…`` → ``nats``; otherwise the scheme, else the raw value."""
+    ``nats://…`` → ``nats``; otherwise the scheme, else a bare kind word (``memory``,
+    ``http``) as it is. Any other value (a DSN missing its scheme, ``user:pass@host``)
+    is ``unrecognized``, never the value: it can carry a password, and the kind is
+    what ``cairn doctor`` and ``pipeline explain`` print (GHSA-gw2v-3922-g7gm)."""
     low = raw.strip().lower()
     if low.startswith(("postgres://", "postgresql://")):
         return "postgres"
     if low.startswith("sqlite"):
         return "sqlite"
-    if "://" in low:
-        return low.split("://", 1)[0]
-    return low
+    scheme = url_scheme(low)
+    if scheme:
+        return scheme
+    return low if _KIND_WORD.fullmatch(low) else "unrecognized"
+
+
+_KIND_WORD = re.compile(r"[a-z0-9_-]+")
 
 
 def effective_backends(

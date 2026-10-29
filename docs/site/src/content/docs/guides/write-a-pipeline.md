@@ -126,7 +126,14 @@ steps:
 Piece by piece:
 
 - **`inputs`** are what the person launching the pipeline provides. An input
-  with no `default` is required.
+  with no `default` is required. A `-i key=value` value is typed against the
+  input's declared `type`: an `int`, `float` or `bool` is parsed, a `dict` is
+  JSON, and a `list` is JSON (`-i 'report_to=["mlflow"]'`) or a comma-separated
+  string (`-i report_to=mlflow,wandb` gives `["mlflow", "wandb"]`; items are
+  trimmed and empty items dropped). A list of numbers or maps, and an empty
+  list (`[]`), still need JSON; `-i report_to=` with no items is refused.
+  The launch door does this typing for the CLI, the console and schedules, and
+  `cairn pipeline explain -i` shows the typed value.
 - **`governance`** sets the pipeline's budget and names who may decide its
   person gates.
 - **`profile`** is a task leg: it calls one operator, `data/profile`, which

@@ -237,9 +237,9 @@ def token_run_scope(claims: dict[str, Any]) -> Optional[str]:
     return claimed or from_sub
 
 
-#: cairn-platform#224 — a **worker-pool token** (``scope=worker-pool``,
-#: ``sub=worker-pool:<name>``, minted by :func:`mint_worker_pool_token` /
-#: ``cairn remote worker-token``) is what a pull worker claims with. It reaches
+#: A **worker-pool token** (``scope=worker-pool``, ``sub=worker-pool:<name>``,
+#: minted by :func:`mint_worker_pool_token` / ``cairn remote worker-token``) is
+#: what a pull worker claims with (an internal issue). It reaches
 #: the pull lane and nothing else: it is a credential for taking work off the
 #: queue, not a user of any account. A token that is also run-scoped is held to
 #: its run (:func:`token_run_scope` wins).

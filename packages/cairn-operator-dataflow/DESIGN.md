@@ -149,6 +149,10 @@ of inventing a second approval mechanism.
 | `metaflow_*` | backend fields | deployment | see schema | read by the Metaflow engine's own wheel, `cairn-operator-dataflow-metaflow` (its DESIGN.md; ADR-0134 D2) |
 | `skypilot_*`, `CAIRN_SKYPILOT_*` | backend fields / env | deployment | see schema | read by the SkyPilot engine's own wheel, `cairn-operator-dataflow-skypilot` (its DESIGN.md; ADR-0134 D3a) |
 | `CAIRN_DATAFLOW_REMOTE_CMD` | env | deployment | `cairn-dataflow-run` | on-box entrypoint for boxes whose venv bin is not on the non-interactive SSH PATH (#1075) |
+| `remote_env` / `CAIRN_REMOTE_ENV` | backend field | deployment | empty (nothing extra) | comma- or space-separated NAMES of control-plane env variables the SSH engine passes to the job on the box (see "Running on a compute.ssh box") |
+| `remote_exec_mode` / `CAIRN_REMOTE_EXEC_MODE` | backend field | deployment | `auto` | how the SSH engine runs a flow on the box (ADR-0104 D1): `venv` runs the box's virtualenv; `image` runs the named container image; `auto` is `image` when an image is named, else `venv`. A `compute.ssh` connection's own `mode` overrides it per box. Image mode with no image named anywhere is refused at submit |
+| `remote_image` / `CAIRN_TRAIN_IMAGE` | backend field | deployment | `` (none) | the container image image mode runs; a connection's own `image` overrides it per box. There is no built-in image (#202, ADR-0150): with none named, `auto` runs the virtualenv and `image` is refused at submit. Pin a tag, never `:latest` |
+| `CAIRN_DATAFLOW_IMAGE_CMD`, `CAIRN_DATAFLOW_IMAGE_GPUS` | env | deployment | `cairn-dataflow-run`, `all` | the entrypoint inside the image, and the `--gpus` value (empty disables the flag) |
 | `stages`, `dataflow_ref`/`flow_ref`, `input_artifacts`, `config` | `input_schema` | run | — | per-run bounds: what to run over what |
 | `budget.max_cost_usd`, `budget.max_rows`, `budget.max_seconds` | `input_schema` | run | — | per-run ceilings the ENGINE self-enforces; `max_cost_usd` is what the SkyPilot cost door compares its estimate against |
 
@@ -171,6 +175,60 @@ engine additionally delivers only the connections `metaflow_secrets` declares;
 under strict isolation nothing else of the control plane's environment reaches a
 task. Optional extras: `[engine]` (polars/duckdb/pyarrow — what a job machine
 installs), `[ssh]`. Metaflow and SkyPilot are `cairndev[metaflow]` / `cairndev[skypilot]` (their own wheels, ADR-0134 D2/D3).
+
+**Running on a compute.ssh box** (`<kind>_target` names the connection; the
+control plane is elsewhere). What the deployment provides on each side:
+
+- **Control plane:** `cairndev[ssh]` (asyncssh; without it the engine names the
+  extra), the `compute.ssh` connection with its `PRIVATE_KEY` secret, and the
+  same contract and kernel wheels the box has: `validate` reads the LOCAL
+  registry, so a stage or contract version the box lacks is only found on the box.
+- **Box:** `cairn-dataflow-run` (from `cairndev`) plus the kernel wheels, at the
+  same versions. `runner.sh` is run by plain `sh` over a non-interactive SSH
+  session, which reads no login profile: the console script must be on that
+  PATH, or the deployment sets `CAIRN_DATAFLOW_REMOTE_CMD` to its full path
+  (exit 127 otherwise). Image mode (`remote_exec_mode`) needs none of this,
+  only a container runtime.
+- **Environment the job gets:** the spec, the parent run, the live channel,
+  `MLFLOW_*` when set, and the names the deployment lists in `remote_env`
+  (profile record, else `CAIRN_REMOTE_ENV`), each forwarded when set on the
+  control plane: e.g. `CAIRN_CHECKPOINT_BUCKET, CAIRN_CHECKPOINT_PREFIX,
+  AWS_DEFAULT_REGION` for a trainer that mirrors checkpoints and publishes to
+  S3. Nothing else of the control plane's environment crosses. A flow or a
+  tenant cannot extend the list. A name containing `KEY`, `SECRET`, `TOKEN` or
+  `PASSWORD`, a malformed entry, or a name the engine sets itself (the spec,
+  lineage and live-channel names) refuses the leg before submit, naming the
+  variable (a malformed entry only by its position)
+  and never its value: credentials stay on the box (an instance role,
+  the box's own environment). Values reach the box only in the job's
+  `runner.sh`, which is created exclusively with mode 0600 (a stale copy is
+  removed first; one that survives fails the submit),
+  or as `docker run -e NAME` with no value in image mode; never on a command
+  line. The job handle, which is persisted on the pipeline step and returned by
+  `GET /pipelines/{id}`, records the exec input without its environment and the
+  forwarded NAMES (`env_names`) only.
+  `MLFLOW_TRACKING_PASSWORD` is the one credential the engine forwards itself
+  (with the other `MLFLOW_*`, #1235), never through `remote_env`; it too lands
+  only in the 0600 runner file (ADR-0149 D2).
+- **Dataset versions:** the engine declares `needs_durable_inputs`, so the leg
+  executor resolves its `dataset:` refs to the version's durable copy
+  (`durable_uri`, the object store) when the workspace's registration has one
+  (ADR-0149 D3); a co-located leg keeps the registered location unless that file
+  is gone. A version whose only location is a
+  control-plane path (an absolute path or any `file:` URI, then `#sha256=…`),
+  anywhere in the spec's or a stage's config, refuses the leg in
+  `validate`, before submit, saying how to give it a durable copy
+  (`CAIRN_ARTIFACT_STORE=s3` + `CAIRN_ARTIFACT_S3_BUCKET` on the control plane,
+  then register the bytes again or re-run the step that produced them). A plain
+  local path with no pin, an upstream leg's hand-off, is still uploaded (#1180).
+- **Cancel and checkpoint pull-back** reconnect with the `PRIVATE_KEY` of the
+  connection the job was submitted with: `remote/exec` records its name, its
+  account and the workspace in the job handle, and resolves it with that
+  account, so no workspace needs to be in scope (ADR-0149 D4). The engine's
+  current target is used only for a handle saved before that. When the box
+  cannot be reached they log a warning naming the host, workdir, connection and
+  error type (no secret material); cancel then raises `EngineError`, so the
+  caller reports it as not cancelled.
 
 ## 5. Governance
 
@@ -219,7 +277,11 @@ leg is judged by `dataflow_target` rather than `ml_target`.
 | SSH target set but the `[ssh]` extra absent (#2417) | `CAIRN_DATAFLOW_TARGET` routes to the SSH engine, whose dispatch lives in `cairn-operator-remote` (a builtin importing an official pack — debt #2419 retires) | `EngineError` naming the `[ssh]` extra at submit/poll/cancel; a missing module the extra does not provide still propagates as itself | yes |
 | A builtin job kept running after its server died (#2614) | the runner is in its own session (so cancel can kill the group, #603), so a SIGKILLed server left it running; the restarted server re-attached the handle, found no process table and failed the leg while the job kept writing | the runner's owner watchdog kills its process group within 0.5 s of being re-parented; the leg still fails "process table lost" (ADR-0125 D4), now with nothing left behind | yes |
 | `engine 'X' is selected but not installed` (#568) | environment names an engine no installed pack registers | `EngineError` at submit, listing what IS installed | yes — never falls back to builtin |
+| Image mode with no image named (#202) | the leg's mode resolves to `image` (the connection's own `mode = image`, or `remote_exec_mode = image` when the connection sets no `mode`) and neither the connection's `image` nor `remote_image` / `CAIRN_TRAIN_IMAGE` names one; there is no built-in image | `EngineError` at submit, where the connection and the environment are both known, before anything reaches the box. The message names the fix for the trigger: for the environment, set `remote_image` / `CAIRN_TRAIN_IMAGE` or use `auto` / `venv`; for a connection's `mode = image`, set the connection's `image` or change its `mode` (the environment does not override it). A connection's `image` or `mode = venv` still works under an environment `remote_exec_mode = image`. `cairn doctor` fails the target's `:mode` row for the same case, with the same precedence (ADR-0150) | yes |
 | Remote leg exits 127 (#1075) | `cairn-dataflow-run` not on the box's non-interactive SSH PATH | engine failure with the exit code | yes — `CAIRN_DATAFLOW_REMOTE_CMD` is the fix |
+| Trainer on the box finds `CAIRN_CHECKPOINT_BUCKET` unset | the SSH engine forwarded only the spec, the live channel and `MLFLOW_*` | publish to S3 failed and checkpoint mirroring was a silent no-op | no — fixed: the deployment lists the names in `remote_env`; credential-looking names refuse the leg |
+| Box FileNotFounds on a pinned dataset version (`file:///tmp/…#sha256=…`) | the ref resolved to the registered control-plane location, ignoring the durable copy; pinned paths were not uploaded | failed on the box after the leg started | yes — a remote engine's refs resolve to the durable copy (ADR-0149); a version with only a control-plane location is refused in `validate` with the remedy |
+| Cancel left a job running on the box | cancel and checkpoint pull-back reconnected with `SSH_PRIVATE_KEY` from the control plane's env while submit used the connection's `PRIVATE_KEY`; the failure was swallowed | the run showed cancelled; the job kept running | yes — both use the connection's key and log a warning when the box cannot be reached |
 | Box FileNotFounds on a control-plane path (#1180 bug 10) | an upstream leg handed this leg a path that exists only on the control plane | was a hard failure; now local file inputs are uploaded and the config rewritten | yes |
 | Budget/`input_artifacts`/`parent_run` silently dropped on the Metaflow path (#1243) | the bridge passed a hand-picked subset of the spec | fields vanished with no error | no — fixed: the FULL contract is serialized |
 | Every cairn-namespaced control-plane value reached a remote task (#1344) | `CAIRN_` was a blanket prefix inside the essential-env allowlist | a wildcard hole in an allowlist | yes — names are enumerated now |
@@ -286,3 +348,5 @@ manifest-sync and drift gates measure nothing until the pack is installed.
 | 2026-10-16 | The Prefect engine, its bridge, entry point and `[prefect]` extra removed (ADR-0134 D4) | #2678 |
 | 2026-10-16 | The Metaflow engine, its two bridges, entry point and `[metaflow]` extra leave for their own optional wheel, `cairn-operator-dataflow-metaflow` behind `cairndev[metaflow]` (ADR-0134 D2) | #2678 |
 | 2026-10-16 | The SkyPilot engine, its entry point and `[skypilot]` extra leave for their own optional wheel, `cairn-operator-dataflow-skypilot` behind `cairndev[skypilot]` (ADR-0134 D3a) | #2678 |
+| 2026-10-23 | SSH path for a remote training box (ADR-0149): `remote_env` forwarding, durable dataset copies and refusal of control-plane-only versions, cancel and checkpoint pull-back on the connection's key, owner-only `runner.sh` | #193 |
+| 2026-10-24 | The SSH engine has no built-in image: image mode needs the connection's `image` or `remote_image` / `CAIRN_TRAIN_IMAGE`, else the leg is refused at submit; `auto` without an image runs the virtualenv | #202 |

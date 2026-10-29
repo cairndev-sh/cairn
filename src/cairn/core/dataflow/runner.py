@@ -87,7 +87,8 @@ def _peak_stat(stats: dict, key: str) -> float:
 _LLM_STATS = ("llm_calls", "llm_tokens_in", "llm_tokens_out", "llm_usd", "llm_unpriced_calls")
 
 
-def _metered(call: Callable[[], Optional[dict]]) -> tuple[dict, dict]:
+def _metered(call: Callable[[], Optional[dict]], *,
+             on_cost: Optional[Callable[[float], None]] = None) -> tuple[dict, dict]:
     """Run one kernel call inside an ``obs.cost_scope`` and return ``(raw stats,
     metered llm stats)`` — ``{}`` for the latter when no LLM call was made.
 
@@ -101,21 +102,29 @@ def _metered(call: Callable[[], Optional[dict]]) -> tuple[dict, dict]:
     from cairn.core import obs  # noqa: PLC0415 — lazy: the metering scope only (#1441)
 
     outer = obs.get()
+    llm: dict = {}
     with obs.cost_scope("dataflow-stage", enforce_cap=False) as ctx:
-        stats = call() or {}
-    calls = list(ctx.llm_calls)
-    if not calls:
-        return stats, {}
-    if outer is not None:
-        outer.llm_calls.extend(calls)
-        outer.cost_usd = round(outer.cost_usd + ctx.cost_usd, 6)
-    return stats, {
-        "llm_calls": len(calls),
-        "llm_tokens_in": sum(int(c.get("in") or 0) for c in calls),
-        "llm_tokens_out": sum(int(c.get("out") or 0) for c in calls),
-        "llm_usd": round(sum(float(c.get("usd") or 0.0) for c in calls), 6),
-        "llm_unpriced_calls": sum(1 for c in calls if c.get("priced") is False),
-    }
+        try:
+            stats = call() or {}
+        finally:
+            calls = list(ctx.llm_calls)
+            if calls:
+                if outer is not None:
+                    outer.llm_calls.extend(calls)
+                    outer.cost_usd = round(outer.cost_usd + ctx.cost_usd, 6)
+                llm = {
+                    "llm_calls": len(calls),
+                    "llm_tokens_in": sum(int(c.get("in") or 0) for c in calls),
+                    "llm_tokens_out": sum(int(c.get("out") or 0) for c in calls),
+                    "llm_usd": round(sum(float(c.get("usd") or 0.0) for c in calls), 6),
+                    "llm_unpriced_calls": sum(1 for c in calls if c.get("priced") is False),
+                }
+            if on_cost is not None and ctx.cost_usd > 0:
+                try:
+                    on_cost(round(ctx.cost_usd, 6))
+                except Exception:  # noqa: BLE001 — progress must not replace a kernel failure
+                    _log.debug("writing partial dataflow cost failed", exc_info=True)
+    return stats, llm
 
 
 def _with_llm(stats: dict, llm: dict) -> dict:
@@ -177,6 +186,13 @@ def _check_budget(spec: DataflowSpec, started: float, *, where: str,
 def _write_metrics(workdir: Path, payload: dict) -> None:
     # small atomic-ish write: a torn read by a poller just means "not yet"
     (workdir / "metrics.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _include_known_cost(payload: dict, cost_usd: float) -> dict:
+    """Add cumulative cost only when a finite positive amount is known."""
+    if 0 < cost_usd < float("inf"):
+        payload["cost_usd"] = round(cost_usd, 6)
+    return payload
 
 
 def _marker(workdir: Path, i: int, stage: str) -> Path:
@@ -268,8 +284,19 @@ def _map_item(task: tuple) -> dict:
     from cairn.core.dataflow.stage_loader import load_stages  # noqa: PLC0415 — child-process re-resolve
     wd = Path(item_dir)
     wd.mkdir(parents=True, exist_ok=True)
-    stats, llm = _metered(lambda: load_stages()[stage](wd, dict(config), list(inputs)))
-    return _with_llm(stats, llm)
+    def _write_cost(cost_usd: float) -> None:
+        _write_metrics(wd, _include_known_cost({}, cost_usd))
+
+    stats, llm = _metered(
+        lambda: load_stages()[stage](wd, dict(config), list(inputs)),
+        on_cost=_write_cost,
+    )
+    stats = _with_llm(stats, llm)
+    try:
+        _write_metrics(wd, dict(stats))
+    except OSError:  # noqa: BLE001 — item progress is best-effort
+        _log.warning("writing mapped item metrics failed for %s", wd, exc_info=True)
+    return stats
 
 
 def _plan_map_items(ref, workdir: Path) -> list:
@@ -348,12 +375,28 @@ def _run_mapped_stage(registry: dict, ref, index: int, workdir: Path,
             pending.append(j)
 
     def _emit() -> None:
+        cost_usd = prior_cost + sum(
+            _sum_stat(s, _COST_STAT) for s in item_stats.values()
+        )
+        for j in range(total):
+            if j in item_stats:
+                continue
+            try:
+                item_metrics = json.loads(
+                    (workdir / f"map-{index:02d}" / f"item-{j:03d}" / "metrics.json")
+                    .read_text(encoding="utf-8")
+                )
+            except (OSError, ValueError):
+                continue
+            if isinstance(item_metrics, dict):
+                cost_usd += _sum_stat(item_metrics, _COST_STAT)
         payload = {"stage": ref.stage, "stages_done": index,
                    "stages_total": len(spec.stages),
                    # additive keys (D8a stays compatible) — the poller sees
                    # item progress without a schema change
                    "items_done": len(item_stats), "items_total": total,
                    "elapsed_s": round(time.monotonic() - started, 2)}
+        _include_known_cost(payload, cost_usd)
         _write_metrics(workdir, payload)
         if on_progress:
             on_progress(payload)
@@ -380,7 +423,14 @@ def _run_mapped_stage(registry: dict, ref, index: int, workdir: Path,
             tasks.append((ref.stage,
                           str(workdir / f"map-{index:02d}" / f"item-{j:03d}"),
                           cfg, list(spec.input_artifacts)))
-        results = map_shards_local(_map_item, tasks, requested_workers=m.max_parallel)
+        try:
+            results = map_shards_local(_map_item, tasks, requested_workers=m.max_parallel)
+        except Exception:
+            try:
+                _emit()
+            except Exception:  # noqa: BLE001 — progress must not replace a kernel failure
+                _log.debug("writing partial mapped metrics failed", exc_info=True)
+            raise
         for j, res in zip(wave, results):
             _item_marker(workdir, index, ref.stage, j).write_text(
                 json.dumps(res or {}), encoding="utf-8")
@@ -432,6 +482,50 @@ def _check_frozen(spec: DataflowSpec, ref, frozen: dict) -> None:
     _conform(spec, ref, ref.contract.output, frozen, "output")
 
 
+def _descriptor_uri(out: str) -> str:
+    return out if out.startswith(("s3://", "file://", "gs://", "https://", "hf://", "stub://")) else f"file://{out}"
+
+
+#: The fields a named output may carry (``outputs.<name>.<field>``).
+_OUTPUT_FIELDS = ("output", "content_hash", "kind", "rows", "bytes", "register_as", "register_role")
+
+
+def _named_outputs(stage: str, st: dict, workdir: Path, parents: list[str]) -> list[ArtifactDescriptor]:
+    """ADR-0141 D1 — a stage that makes several products names them (a split's train, val and
+    test files): ``outputs: [<name>, …]`` and, per name, flat ``outputs.<name>.<field>`` stats
+    (stats cross the boundary as scalars, ADR-0081 D3). Each becomes a descriptor in the result's
+    ``named_outputs`` with the stage's parents — the products are siblings of the stage's own
+    descriptor, so none descends from another and the next stage still descends from the stage —
+    and its own stats, which is where the control plane reads ``register_as`` / ``register_role``.
+    A named output without ``output`` and ``content_hash`` is a kernel bug and fails the flow.
+    An ``outputs`` stat with no ``outputs.<name>.*`` key is some kernel's own stat, left alone."""
+    names = st.get("outputs")
+    if not names or not any(str(k).startswith("outputs.") for k in st):
+        return []
+    if (not isinstance(names, list) or not all(isinstance(n, str) and n for n in names)
+            or len(set(names)) != len(names)):
+        raise ValueError(f"stage {stage!r}: `outputs` must be a list of distinct names, got {names!r}")
+    found: list[ArtifactDescriptor] = []
+    for name in names:
+        fields = {f: st[f"outputs.{name}.{f}"] for f in _OUTPUT_FIELDS if f"outputs.{name}.{f}" in st}
+        out, digest = str(fields.get("output") or ""), str(fields.get("content_hash") or "")
+        if not out or not digest:
+            raise ValueError(f"stage {stage!r}: output {name!r} needs outputs.{name}.output "
+                             f"and outputs.{name}.content_hash")
+        kind = fields.get("kind") if fields.get("kind") in ("dataset", "model", "report", "index") else "dataset"
+        rows, size = fields.get("rows"), fields.get("bytes")
+        found.append(ArtifactDescriptor(
+            uri=_descriptor_uri(out if ("://" in out or out.startswith("/")) else str(workdir / out)),
+            kind=kind,
+            content_hash=digest,
+            rows=int(rows) if isinstance(rows, int) and rows >= 0 else None,
+            size_bytes=int(size) if isinstance(size, int) else None,
+            parents=list(parents),
+            stats={"output_name": name, "stage": stage, **fields},
+        ))
+    return found
+
+
 def run_dataflow(
     spec: DataflowSpec,
     workdir: Path,
@@ -465,6 +559,8 @@ def run_dataflow(
     started = time.monotonic()
     stats: dict = {"stages_total": len(spec.stages), "stages_done": 0}
     descriptors: list[ArtifactDescriptor] = []
+    #: ADR-0141 — the products stages name (:func:`_named_outputs`); never a stage's parent.
+    named: list[ArtifactDescriptor] = []
     # Checkpoint identity: the CARRIED control-plane key when present (#1314 —
     # engines may rewrite the spec at submit, e.g. SSH input localization, so
     # hashing what we received can diverge from the control plane's lookup
@@ -505,6 +601,20 @@ def run_dataflow(
                 workdir, i, ref.stage,
                 ref.resources.model_dump() if getattr(ref, "resources", None) else None)
             _llm: dict = {}   # a mapped stage's items carry their own metered keys
+
+            def _write_stage_cost(stage_cost_usd: float) -> None:
+                progress = {
+                    "stage": ref.stage,
+                    "stages_done": i,
+                    "stages_total": len(spec.stages),
+                    "elapsed_s": round(time.monotonic() - started, 2),
+                }
+                _include_known_cost(
+                    progress, _sum_stat(stats, _COST_STAT) + stage_cost_usd)
+                _write_metrics(workdir, progress)
+                if on_progress:
+                    on_progress(progress)
+
             try:
                 if getattr(ref, "map", None) is not None:
                     # #1290/ADR-0090 — fan this stage out over a runtime list,
@@ -515,7 +625,8 @@ def run_dataflow(
                         prior_cost=_sum_stat(stats, _COST_STAT))
                 else:
                     stage_stats, _llm = _metered(lambda: registry[ref.stage](
-                        workdir, dict(ref.config), list(spec.input_artifacts)))
+                        workdir, dict(ref.config), list(spec.input_artifacts)),
+                        on_cost=_write_stage_cost)
             finally:
                 _sys = _sampler.stop() if _sampler is not None else {}
             if contract is not None:
@@ -552,6 +663,7 @@ def run_dataflow(
         stats["stages_done"] = i + 1
         progress = {"stage": ref.stage, "stages_done": i + 1,
                     "stages_total": len(spec.stages), "elapsed_s": round(time.monotonic() - started, 2)}
+        _include_known_cost(progress, _sum_stat(stats, _COST_STAT))
         _write_metrics(workdir, progress)
         if on_progress:
             on_progress(progress)
@@ -588,8 +700,7 @@ def run_dataflow(
         # packaged candidate); anything else stays the dataset default.
         kind = st.get("kind") if st.get("kind") in ("dataset", "model", "report", "index") else "dataset"
         descriptors.append(ArtifactDescriptor(
-            uri=(out if out.startswith(("s3://", "file://", "gs://", "https://", "hf://", "stub://")) else f"file://{out}")
-                if is_uri else f"file://{workdir}/stage-{i:02d}",
+            uri=_descriptor_uri(out) if is_uri else f"file://{workdir}/stage-{i:02d}",
             kind=kind,
             content_hash=str(st.get("content_hash") or f"{spec_key}-{i:02d}"),
             rows=int(rows) if isinstance(rows, int) and rows >= 0 else None,
@@ -597,6 +708,7 @@ def run_dataflow(
             parents=parents,
             stats={k: v for k, v in st.items()},
         ))
+        named.extend(_named_outputs(ref.stage, st, workdir, parents))
 
     # The per-stage check runs BEFORE each stage, so it can stop the next one
     # from starting but never sees the last one's spend. Without this final
@@ -616,6 +728,7 @@ def run_dataflow(
 
     return DataflowResult(
         output_artifacts=descriptors,
+        named_outputs=named,
         stats=stats,
         # #1441 Z3 — the field ADR-0081 D2 always had; the same sum the ceiling binds on.
         cost_usd=max(0.0, round(_sum_stat(stats, _COST_STAT), 6)),

@@ -78,10 +78,14 @@ async def _last_activity(store: RunStore, run: Run) -> Optional[datetime]:
     return _parse_iso(run.started_at) or _parse_iso(run.created_at)
 
 
-async def expire_run(store: RunStore, run: Run, *, now: datetime, reason: str) -> bool:
+async def expire_run(store: RunStore, run: Run, *, now: datetime, reason: str,
+                     actor: Optional[str] = None) -> bool:
     """Transition ONE ``awaiting_approval`` run → ``expired`` + append an audit event.
     Returns True iff it actually expired (False when the run wasn't awaiting approval
-    — the fail-closed guard that keeps a bulk-dismiss from touching a resolved run)."""
+    — the fail-closed guard that keeps a bulk-dismiss from touching a resolved run).
+
+    #233 — the outcome also reaches the hash-chained audit sink: ``approval.dismissed``
+    when a person (``actor``) dismissed it, ``approval.expired`` when the TTL sweep did."""
     if run.status != "awaiting_approval":
         return False
     await store.update(run.id, status="expired", ended_at=now.isoformat(), error=reason)
@@ -104,6 +108,13 @@ async def expire_run(store: RunStore, run: Run, *, now: datetime, reason: str) -
         )
     except Exception:  # noqa: BLE001 — the status transition is the contract; the audit event is best-effort
         logger.warning("approval reaper: audit event failed for %s", run.id)
+    from cairn.core.obs.audit import audit_emit  # noqa: PLC0415 — keep obs off the import path
+
+    await audit_emit(
+        "approval.dismissed" if actor else "approval.expired", actor=actor or None,
+        target=run.id, run_id=run.id, pipeline_id=getattr(run, "bundle_pipeline_id", None) or None,
+        step_id=getattr(run, "step_id", None) or None, template_ref=getattr(run, "template_ref", "") or None,
+        reason=reason[:300])
     return True
 
 
@@ -113,6 +124,7 @@ async def expire_stale_approvals(
     ttl_hours: float,
     now: Optional[datetime] = None,
     workspace_id: Optional[str] = None,
+    actor: Optional[str] = None,
 ) -> list[str]:
     """Sweep: expire every ``awaiting_approval`` (non-sandbox) run whose last activity
     is older than ``ttl_hours``. Returns the expired run ids. No-op when
@@ -130,7 +142,7 @@ async def expire_stale_approvals(
         last = await _last_activity(store, run)
         if last is not None and last > cutoff:
             continue  # still within its TTL
-        if await expire_run(store, run, now=now, reason=reason):
+        if await expire_run(store, run, now=now, reason=reason, actor=actor):
             expired.append(run.id)
     if expired:
         logger.info("approval reaper expired %d stale gate(s): %s", len(expired), expired)
@@ -155,7 +167,7 @@ async def dismiss_runs(
     skipped: list[str] = []
     for rid in run_ids:
         run = await store.get(rid, workspace_id=workspace_id)
-        if run is not None and await expire_run(store, run, now=now, reason=reason):
+        if run is not None and await expire_run(store, run, now=now, reason=reason, actor=actor):
             expired.append(rid)
         else:
             skipped.append(rid)

@@ -25,9 +25,11 @@ is logged and the event is dropped, exactly like `obs.events.write`.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from dataclasses import asdict, dataclass, field
-from typing import Any, Optional, Protocol, runtime_checkable
+from typing import Any, Iterable, Optional, Protocol, runtime_checkable
 
 from cairn.core._time import utc_now_iso
 
@@ -165,3 +167,85 @@ async def audit_emit(
         await sink.record(event)
     except Exception as e:  # noqa: BLE001 — telemetry must never break a request
         logger.warning("audit sink dropped %r event (%s)", action, e)
+
+
+# ─── the hash-chain rule (ADR-0156 D3) ───────────────────────────────
+#
+# ONE definition of how an audit row is canonicalised and chained. The `audit/store`
+# writer, `cairn lineage` and `cairn audit verify` all use it; no reader keeps a copy.
+
+#: The ``prev_hash`` of the first row of a log: 64 zeros.
+GENESIS_HASH = "0" * 64
+
+_CHAIN_FIELDS = ("prev_hash", "hash")
+
+
+def canonical(row: dict) -> str:
+    """Stable serialization for hashing: key order and separators are fixed."""
+    return json.dumps(row, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def chain_hash(prev: str, row: dict) -> str:
+    """``sha256(prev_hash + canonical(row))``. ``row`` is the event payload, without the
+    ``prev_hash`` / ``hash`` fields the writer adds."""
+    return hashlib.sha256((prev + canonical(row)).encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class ChainBreak:
+    """One broken link: ``row`` is the 1-based position among the non-blank lines;
+    ``reason`` is ``hash``, ``prev_hash`` or ``corrupt line``."""
+    row: int
+    reason: str
+
+
+@dataclass(frozen=True)
+class ChainReport:
+    """The result of :func:`verify_chain`."""
+    rows: int = 0
+    first_ts: Optional[str] = None
+    last_ts: Optional[str] = None
+    head_hash: str = GENESIS_HASH
+    broken: tuple[ChainBreak, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        return not self.broken
+
+
+def verify_chain(lines: Iterable[str]) -> ChainReport:
+    """Recompute every row's hash from the previous one (genesis = 64 zeros).
+
+    A row's ``prev_hash`` must equal the previous row's ``hash`` and its ``hash`` must equal
+    :func:`chain_hash` of the row without those two fields. Blank lines are skipped; a line
+    that is not a JSON object is a ``corrupt line`` break. Every break is collected, so the
+    first is ``report.broken[0]``. Read-only: it only computes."""
+    prev = GENESIS_HASH
+    n = 0
+    first_ts: Optional[str] = None
+    last_ts: Optional[str] = None
+    broken: list[ChainBreak] = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        n += 1
+        try:
+            row = json.loads(line)
+            if not isinstance(row, dict):
+                raise ValueError("not an object")
+        except Exception:  # noqa: BLE001 — a corrupt line is itself a break
+            broken.append(ChainBreak(n, "corrupt line"))
+            continue
+        payload = {k: v for k, v in row.items() if k not in _CHAIN_FIELDS}
+        if row.get("prev_hash") != prev:
+            broken.append(ChainBreak(n, "prev_hash"))
+        elif row.get("hash") != chain_hash(prev, payload):
+            broken.append(ChainBreak(n, "hash"))
+        ts = row.get("ts")
+        if ts:
+            first_ts = first_ts or str(ts)
+            last_ts = str(ts)
+        prev = row.get("hash") or prev
+    return ChainReport(rows=n, first_ts=first_ts, last_ts=last_ts, head_hash=prev,
+                       broken=tuple(broken))

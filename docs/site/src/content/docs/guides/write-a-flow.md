@@ -147,6 +147,14 @@ any flow. A dev pack on `CAIRN_PACK_PATH` cannot register a stage: entry points
 come only from installed packages. The built-in engine, Metaflow and SkyPilot
 all run the same registered functions.
 
+Since 0.2.1 a stage may register several products, each with a role (ADR-0141),
+for example a split's train, validation and test files. It returns
+`outputs: [<name>, …]` and, for each name, flat keys:
+`outputs.<name>.output` and `outputs.<name>.content_hash` (both required), and
+optionally `.kind`, `.rows`, `.bytes`, `.register_as` (the dataset name to
+register the product as) and `.register_role` (`training`, `validation` or
+`test`).
+
 ## ML flows and agentic flows
 
 An **ML flow** has the same shape with `kind: ml`, and runs on the ML engine

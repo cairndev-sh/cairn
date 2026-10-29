@@ -56,6 +56,14 @@ Schema (Phase-1 §2 — profile layer extension):
     channel     = "#cairn-approvals"
     webhook_env = "SLACK_WEBHOOK_URL"
 
+    [profile.budget]
+    # ADR-0155 — the deployment's budget: the cap of a pipeline that declares
+    # none, the most any launch is capped at, and the rate of the engine's own
+    # machine. All optional; omit the table for no deployment budget.
+    default_usd      = 20
+    ceiling_usd      = 100
+    local_hourly_usd = 0.80
+
     [profile.backends]
     llm_gateway     = "https://bifrost.internal.acme.com"
     embedder        = "bge-large-en"
@@ -70,6 +78,7 @@ from __future__ import annotations
 from cairn.core.settings import getenv
 
 import logging
+import math
 import os
 import tomllib
 from dataclasses import dataclass, field
@@ -97,8 +106,12 @@ _PROFILE_TOP_KEYS = {"extends", "capabilities", "bindings", "mcp_servers", "back
                      # rest: a typo'd event name fails at parse rather than
                      # silently muting the gate nobody was told about.
                      "notify",
+                     # ADR-0155 D1 — the deployment's budget default, ceiling and
+                     # local-machine rate; a closed table of three optional numbers.
+                     "budget",
                      "pack_policies", "knowledge", "config"}
 _NOTIFY_KEYS = {"events", "channel", "webhook_env"}
+_BUDGET_KEYS = {"default_usd", "ceiling_usd", "local_hourly_usd"}
 _MCP_SERVER_KEYS = {"transport", "url", "command", "env", "tool_allow_list_strict"}
 _MCP_TRANSPORTS = {"http", "stdio"}
 
@@ -171,6 +184,12 @@ class Profile:
     # `webhook_env` — the NAME of the env var holding the webhook, never the
     # secret itself (the secrets rule: a profile is committed, a secret is not).
     notify: dict[str, Any] = field(default_factory=dict)
+    # ADR-0155 D1: `[profile.budget]` — `default_usd` (the cap of a pipeline that
+    # declares none), `ceiling_usd` (the most any launch is capped at) and
+    # `local_hourly_usd` (the rate of the engine's own machine). Each key optional,
+    # a finite number >= 0; absent keys are absent here. Empty = no deployment
+    # budget (today's behaviour, D8). `extends`: a child's key replaces its parent's.
+    budget: dict[str, float] = field(default_factory=dict)
     source: Optional[Path] = None
 
 
@@ -313,6 +332,7 @@ def _load_profile_recursive(path: Path, visited: set[Path]) -> Profile:
     )
     own_config = _parse_config_table(profile_tbl.get("config"), path)
     own_notify = _parse_notify_table(profile_tbl.get("notify"), path)
+    own_budget = _parse_budget_table(profile_tbl.get("budget"), path)
 
     merged_caps: dict[str, str] = {}
     merged_bindings: dict[str, str] = {}
@@ -352,6 +372,10 @@ def _load_profile_recursive(path: Path, visited: set[Path]) -> Profile:
     # channel keeps the parent's event list.
     merged_notify: dict[str, Any] = dict(parent.notify) if parent is not None else {}
     merged_notify.update(own_notify)
+    # budget (ADR-0155 D1): shallow per-key, a child's value replaces its parent's.
+    merged_budget: dict[str, float] = dict(parent.budget) if parent is not None else {}
+    merged_budget.update(own_budget)
+    _check_budget_order(merged_budget, path)
 
     logger.info(
         "profile loaded path=%s capabilities=%d bindings=%d "
@@ -374,8 +398,41 @@ def _load_profile_recursive(path: Path, visited: set[Path]) -> Profile:
         knowledge=merged_knowledge,
         config=merged_config,
         notify=merged_notify,
+        budget=merged_budget,
         source=path,
     )
+
+
+def _parse_budget_table(raw: Any, path: Path) -> dict[str, float]:
+    """Parse ``[profile.budget]`` (ADR-0155 D1). Closed: an unknown key, a
+    non-number, a negative or a non-finite value fails at parse."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ProfileError(f"{path}: [profile.budget] must be a table")
+    bad = sorted(set(raw.keys()) - _BUDGET_KEYS)
+    if bad:
+        raise ProfileError(
+            f"{path}: unknown key(s) in [profile.budget]: {bad!r}. "
+            f"Allowed: {sorted(_BUDGET_KEYS)!r}."
+        )
+    out: dict[str, float] = {}
+    for key, v in raw.items():
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0:
+            raise ProfileError(f"{path}: profile.budget.{key} must be a finite number >= 0")
+        out[key] = float(v)
+    _check_budget_order(out, path)
+    return out
+
+
+def _check_budget_order(budget: dict[str, float], path: Path) -> None:
+    """``default_usd`` above ``ceiling_usd`` would name a cap the ceiling then
+    overrides — refused at parse (ADR-0155 D1), after ``extends`` is applied too."""
+    d, c = budget.get("default_usd"), budget.get("ceiling_usd")
+    if d is not None and c is not None and d > c:
+        raise ProfileError(
+            f"{path}: profile.budget.default_usd ({d:g}) is above ceiling_usd ({c:g})"
+        )
 
 
 def _parse_notify_table(raw: Any, path: Path) -> dict[str, Any]:

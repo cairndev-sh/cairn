@@ -44,8 +44,13 @@ audit_emit(action, ...)            # cairn/core/obs/audit.py — the seam
   active workspace and fills `ts` when blank (#1233 — node-authored rows landed
   with an empty timestamp and the console rendered "—").
 
-State lives entirely in the file at `CAIRN_AUDIT_LOG`. One `_HashChainLog`
-instance per process, created when `get_audit_sink()` first resolves.
+State lives entirely in the file at `CAIRN_AUDIT_LOG`, including the chain head:
+every append takes an exclusive file lock (`flock`; a `.lock` sidecar where there is
+no `fcntl`), reads the last row's hash from the end of the file, appends and
+`fsync`s. Any number of instances in any number of processes (the cached service
+sink, the per-call instance of a `task: audit/store` leg, a CLI run beside the
+server) therefore extend one chain. A file system that refuses `flock` is logged
+and the append proceeds unlocked.
 
 ## 3. Operators
 
@@ -102,8 +107,8 @@ before that field existed reads as `default`.
 | No audit rows at all, no error | `audit.sink` unbound in the active profile | n/a — `audit_emit` no-ops on `NullAuditSink` | No, by design (ADR-0028) |
 | No audit rows, "audit binding 'audit/store' unresolved" in the log | The binding resolved **before the operator packs were loaded**, so the registry was empty and the null sink was cached for the process lifetime | n/a | No — fixed 2026-09-03 (#1970): the resolver now loads the packs once and retries before caching |
 | Rows exist but vanish after a deploy | `CAIRN_AUDIT_LOG` unset, chain written inside the container | n/a | No — set the path (§4) |
-| A row's hash does not verify | The file was edited, truncated or concatenated | n/a — verification is the reader's | The chain is tamper-**evident**, not tamper-proof |
-| A corrupt line mid-file | Partial write, or a hand edit | Skipped at head recovery; the chain continues from the last parseable row | No, deliberately: one bad line must not stop auditing |
+| A row's hash does not verify | The file was edited or concatenated | n/a — verification is the reader's | The chain is tamper-**evident**, not tamper-proof. Rows removed from the END leave a chain that still verifies; quote a row's `hash` (the receipt) and pass it to `cairn lineage --expect-head` to see them |
+| A corrupt line mid-file | Partial write, or a hand edit | Skipped when the head is read; the chain continues from the last parseable row | No, deliberately: one bad line must not stop auditing |
 | An emitting seam raises | Any sink error | Logged and dropped by `audit_emit` | No — auditing never breaks the operation being audited |
 
 The last row is the design's sharpest edge: auditing is **fail-safe, not

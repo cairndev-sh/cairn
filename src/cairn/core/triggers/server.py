@@ -335,6 +335,12 @@ class PipelineApproveRequest(BaseModel):
     rationale: Optional[str] = Field(None, description="Why — recorded on the decision's review record (#1468).")
 
 
+class PipelineRejectRequest(BaseModel):
+    """Payload for POST /pipelines/{id}/steps/{step}/reject (ADR-0156 D4)."""
+    reason: str = Field(..., min_length=1, description="Why the gate is rejected — required; recorded on the step, the review and the lifecycle event.")
+    approver: Optional[str] = Field(None, description="Who rejected (recorded when auth is off; under auth the token's identity is recorded and this is ignored).")
+
+
 class WorkspaceUpdate(BaseModel):
     """Payload for PATCH /workspaces/{id} (#258) — lifecycle status change."""
     status: str = Field(..., description="'active' (restore) or 'archived'")
@@ -1034,8 +1040,15 @@ def build_app(
 
     @app.get("/healthz")
     async def healthz() -> dict[str, Any]:
+        # #229 — a fingerprint of the connection store this engine reads (never its
+        # path or DSN), so a CLI about to write a connection can tell it is writing
+        # another one.
+        from cairn.core.settings import connection_store_identity  # noqa: PLC0415 — healthz only
+
+        ident = connection_store_identity()
         return {
             "ok": True,
+            "store_fingerprint": ident[1] if ident else None,
             "skills_loaded": len(runner.skill_engine.list_skills()),
             "environment": environment or runner.default_environment,
             "scheduler_enabled": scheduler is not None,

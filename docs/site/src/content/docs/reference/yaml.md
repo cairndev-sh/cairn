@@ -58,7 +58,7 @@ steps:
 | `visibility` | `public` · `internal` · `deprecated` | Default `public`. Curation for catalogs; `cairn pipeline ls` lists every installed pipeline. |
 | `inputs` | map | The launch inputs: `{name: {type, default, description}}`. See below. |
 | `outputs` | map | Names this pipeline's results: `{name: <step>.<field>}`. |
-| `governance` | map | `budget: {usd: N}`, the spending cap for the series; `series`, the series name the budget belongs to; `estimated_usd`, what each flow leg reserves before it starts; `approvers`, who may decide person gates that don't name their own. See [Cost and budgets](/concepts/cost/). |
+| `governance` | map | `budget: {usd: N}`, the spending cap for the series; `series`, the series name the budget belongs to; `estimated_usd`, what each flow leg reserves before it starts; `approvers`, who may decide person gates that don't name their own. The deployment's profile can set a default and a ceiling for `budget.usd`; a pipeline can only lower it. See [Cost and budgets](/concepts/cost/). |
 | `triggers` | list | How the pipeline starts without you. See [Triggers](#triggers). |
 | `outcome` | string | What a person achieves with it, in their words. The catalog groups on it. |
 | `suite` | string | The catalog bucket the outcome belongs to (for example `model`, `data`, `operate`). |
@@ -77,6 +77,27 @@ inputs:
   $inherit: run          # adopt the inputs of the leg with id `run`
   $hide: [mock_metrics]  # and drop these
 ```
+
+An input may take a registered dataset version as `dataset:<name>@<N>`,
+`dataset:<name>@latest` or `dataset:<name>` (the same as `@latest`). It
+resolves within the run's workspace only: another workspace's version reads as
+not found, and `@latest` is this workspace's newest version.
+
+Since 0.2.1 an input may also declare the role of the dataset version it takes,
+and require an intake verdict (ADR-0146):
+
+```yaml
+inputs:
+  train_version: {type: str, role: training, verdict: required}
+  val_version:   {type: str, role: validation}
+```
+
+`role:` is one of `training`, `validation`, `test` or `golden`; `verdict:` takes
+only `required`. Any other value fails when the pipeline loads. At launch, for
+each such input with a value, the launch door refuses a value that is not a
+registered `dataset:` ref, a version with another role, or (with
+`verdict: required`) a version with no intake verdict, before any record exists.
+Each check is recorded under `admission.expectations` on the pipeline record.
 
 ### Steps
 

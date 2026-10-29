@@ -26,8 +26,10 @@ lookup that does it, and every module reads a cairn variable through it.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
+import re
 from urllib.parse import urlsplit, urlunsplit
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
@@ -186,6 +188,43 @@ def default_sqlite_db() -> str:
     # registry stores use (it previously stripped a slash more than they did).
     return sqlite_path_from_url(getenv("CAIRN_STORAGE", "")) or str(
         Path.home() / ".cairn" / "cairn.db")
+
+
+def store_identity(sqlite_path: Optional[str] = None) -> Optional[tuple[str, str]]:
+    """``(label, fingerprint)`` naming the store this process's config-family stores
+    use, or ``None`` for an in-memory one (#229).
+
+    ``CAIRN_STORAGE`` selects it as the stores do: a Postgres DSN is labelled
+    ``postgres <host>:<port>/<db>`` (never the user or password), anything else is the
+    SQLite file, ``sqlite_path`` when the caller's store has its own path, else
+    :func:`default_sqlite_db`, labelled by its resolved path. The fingerprint, a
+    short sha256 of the label, is what ``/healthz`` advertises, so the CLI can tell
+    whether it writes the store a running engine reads without either side showing
+    the other a path.
+    """
+    url = getenv("CAIRN_STORAGE", "").strip()
+    if url.startswith(("postgres://", "postgresql://")):
+        parts = urlsplit(url)
+        try:
+            port = parts.port or 5432
+        except ValueError:
+            port = 5432
+        label = f"postgres {parts.hostname or 'localhost'}:{port}/{parts.path.lstrip('/')}"
+    else:
+        path = sqlite_path or default_sqlite_db()
+        if not path or path == ":memory:":
+            return None
+        label = f"sqlite {os.path.realpath(path)}"  # as sqlite3 opens it: no `~` expansion
+    return label, hashlib.sha256(label.encode()).hexdigest()[:16]
+
+
+def connection_store_identity() -> Optional[tuple[str, str]]:
+    """:func:`store_identity` of the connection store, chosen as
+    ``connections.default_connection_store`` chooses it: ``CAIRN_STORAGE`` first, then
+    the ``CAIRN_CONNECTIONS_DB`` SQLite path. The engine's ``/healthz`` and the CLI's
+    store check both call this, so a ``CAIRN_CONNECTIONS_DB`` set on either side is
+    compared, not silently ignored on one of them (#229)."""
+    return store_identity(getenv("CAIRN_CONNECTIONS_DB", "").strip() or None)
 
 
 # ─── Run store ───────────────────────────────────────────────────────
@@ -408,6 +447,43 @@ def masked_dsn(dsn: str) -> str:
     userinfo, _, hostport = parts.netloc.rpartition("@")
     user, _, _ = userinfo.partition(":")
     return urlunsplit(parts._replace(netloc=f"{user}:***@{hostport}"))
+
+
+_URL_SCHEME = re.compile(r"([a-z][a-z0-9+.-]*)://")
+
+
+def url_scheme(value: str) -> str:
+    """The scheme of a ``<scheme>://…`` value, lowercased, else ``""``.
+
+    The one part of a URL a message can always name. A DSN carries its user and
+    password, and so does a value that only looks like one (``user:pass@host``, a
+    typo in the scheme), so an error about such a value names this and nothing else.
+    """
+    m = _URL_SCHEME.match((value or "").strip().lower())
+    return m.group(1) if m else ""
+
+
+def redacted_url(value: str) -> str:
+    """``value`` as a diagnostic may print it: a URL without its user, password,
+    query or fragment (``postgresql://db:5432/cairn``); ``***`` for a value with a
+    ``@`` but no scheme (a DSN missing it); anything else unchanged.
+
+    Unlike :func:`masked_dsn` it keeps neither the user nor a query (libpq takes
+    ``?password=``), and a URL it cannot take apart is just ``<scheme>://***``.
+    """
+    value = (value or "").strip()
+    scheme = url_scheme(value)
+    if not scheme:
+        return "***" if "@" in value else value
+    try:
+        parts = urlsplit(value)
+        host = parts.hostname or ""
+        port = f":{parts.port}" if parts.port else ""
+    except ValueError:
+        return f"{scheme}://***"
+    if "@" in parts.path:  # an unescaped '@' or '/' in the password spills into the path
+        return f"{scheme}://***"
+    return f"{scheme}://{host}{port}{parts.path}"
 
 
 def dbos_dsn() -> str:
@@ -999,6 +1075,11 @@ INVENTORY: list[SettingSpec] = [
     SettingSpec(
         "remote_exec_mode", "CAIRN_REMOTE_EXEC_MODE", "auto", "dataflow",
         "How the SSH engine runs a flow on a box: auto | image | venv (ADR-0104 D1).",
+    ),
+    SettingSpec(
+        "remote_env", "CAIRN_REMOTE_ENV", None, "dataflow",
+        "Names of control-plane env variables the SSH engine forwards to the job on the box; "
+        "credential-looking names are refused (profile key remote_env).",
     ),
     SettingSpec(
         "dataflow_remote_cmd", "CAIRN_DATAFLOW_REMOTE_CMD", "cairn-dataflow-run", "dataflow",

@@ -114,8 +114,6 @@ PACK_CORE_INVENTORY: dict[Edge, str] = {
     # (B) a context injection (what the runtime hands the operator)
     # (C) a private dependency the pack must stop using, or that moves private with it
     ("cairn/operators/official/dataset_checks/src/operator_dataset_checks/dataflow_stages.py", "cairn.core.backend_selection", "lazy"): "C",
-    ("cairn/operators/official/compute/src/operator_compute/operators/acquire.py", "cairn.core.compute_lifecycle", "top"): "C",
-    ("cairn/operators/official/compute/src/operator_compute/operators/release.py", "cairn.core.compute_lifecycle", "top"): "C",
     ("cairn/operators/official/ingest/src/operator_ingest/_api.py", "cairn.core.connection_probe", "lazy"): "C",
     ("cairn/operators/official/eval/src/operator_eval/operators/gate.py", "cairn.core.judge_agreement", "top"): "C",
     ("cairn/operators/official/serving/src/operator_serving/operators/serve_lifecycle.py", "cairn.core.ssh_exec", "top"): "C",

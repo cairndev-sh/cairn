@@ -17,7 +17,6 @@ from __future__ import annotations
 from cairn.core.settings import getenv
 
 import argparse
-import hashlib
 import json as _json
 import os
 import sys
@@ -61,38 +60,30 @@ def _audit_path(override: Optional[str]) -> Path:
     return Path(override or getenv("CAIRN_AUDIT_LOG", "audit.jsonl"))
 
 
-def _canonical(payload: dict) -> str:
-    """Stable serialization for hashing — MUST match audit/store's _canonical."""
-    return _json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
-
-
 def _read_chain(path: Path) -> tuple[list[dict], list[int]]:
     """Read every row + verify the hash-chain. Returns (rows, broken_indices).
 
-    A row's ``hash`` must equal ``sha256(prev_hash + canonical(payload))`` where
-    ``payload`` is the row minus its ``prev_hash``/``hash`` fields and ``prev_hash``
-    is the previous row's hash (genesis = 64 zeros). Any mismatch is a broken link.
+    The rule lives in ONE place, ``cairn.core.obs.audit`` (ADR-0156 D3): this reader
+    parses the rows for display and asks ``verify_chain`` which links are broken
+    (0-based indices into ``rows``; a corrupt line is a break and a placeholder row).
     """
+    from cairn.core.obs.audit import verify_chain  # noqa: PLC0415 — keep obs off the CLI import path
+
+    text = path.read_text(encoding="utf-8")
     rows: list[dict] = []
-    broken: list[int] = []
-    prev = "0" * 64
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in text.splitlines():
         line = line.strip()
         if not line:
             continue
         try:
             row = _json.loads(line)
-        except Exception:  # noqa: BLE001 — a corrupt line is itself a break
-            broken.append(len(rows))
-            rows.append({"_corrupt": line})
-            continue
-        payload = {k: v for k, v in row.items() if k not in ("prev_hash", "hash")}
-        recomputed = hashlib.sha256((prev + _canonical(payload)).encode("utf-8")).hexdigest()
-        if row.get("prev_hash") != prev or row.get("hash") != recomputed:
-            broken.append(len(rows))
-        prev = row.get("hash", prev)
+            if not isinstance(row, dict):
+                raise ValueError("not an object")
+        except Exception:  # noqa: BLE001
+            row = {"_corrupt": line}
         rows.append(row)
-    return rows, broken
+    report = verify_chain(text.splitlines())
+    return rows, [b.row - 1 for b in report.broken]
 
 
 def _subject_of(row: dict) -> str:
@@ -157,7 +148,19 @@ def _render_line(row: dict) -> str:
     return f"{_subject_of(row):24}  {run_id:28}  {receipt}…"
 
 
-def _run(subject: Optional[str], *, json: bool, audit_log: Optional[str]) -> int:
+def _head_mismatch(rows: list[dict], expect_head: Optional[str]) -> bool:
+    """True when ``expect_head`` (a full hash or a prefix of one, as quoted from an
+    earlier receipt) is not the hash of the log's last row. This is how a log that
+    lost rows from its tail is told apart from one that did not: the chain alone
+    verifies the same either way."""
+    if not expect_head:
+        return False
+    last = str(rows[-1].get("hash") or "") if rows else ""
+    return not (last and last.startswith(expect_head.strip()))
+
+
+def _run(subject: Optional[str], *, json: bool, audit_log: Optional[str],
+         expect_head: Optional[str] = None) -> int:
     path = _audit_path(audit_log)
     if not path.exists() and not _writer_installed():
         print("\n".join(_no_writer_lines()), file=sys.stderr)
@@ -170,11 +173,12 @@ def _run(subject: Optional[str], *, json: bool, audit_log: Optional[str]) -> int
 
     rows, broken = _read_chain(path)
     matches = [r for r in rows if _matches(r, subject)]
+    head_mismatch = _head_mismatch(rows, expect_head)
 
     if json:
         print(_json.dumps(
             {"records": [r.get("metadata") or r for r in matches],
-             "chain_ok": not broken},
+             "chain_ok": not broken and not head_mismatch},
             indent=2, default=str,
         ))
     elif not matches:
@@ -182,7 +186,8 @@ def _run(subject: Optional[str], *, json: bool, audit_log: Optional[str]) -> int
         print(f"no lineage records{where} in {path}")
         if not _writer_installed():
             print("\n".join(_no_writer_lines()), file=sys.stderr)
-        return 1
+        if not broken and not head_mismatch:
+            return 1
     elif subject:
         for i, r in enumerate(matches):
             if i:
@@ -195,8 +200,13 @@ def _run(subject: Optional[str], *, json: bool, audit_log: Optional[str]) -> int
             print(f"  {_render_line(r)}")
 
     if broken:
-        print(f"\n⚠ audit chain broken at row(s) {broken} — the log was altered "
-              f"or truncated; provenance is NOT trustworthy.", file=sys.stderr)
+        print(f"\n⚠ audit chain broken at row(s) {broken} — the log was altered; "
+              f"provenance is NOT trustworthy.", file=sys.stderr)
+        return 2
+    if head_mismatch:
+        print(f"\n⚠ the log's last row is not the expected head {expect_head!r} — rows "
+              f"are missing from its end or it is a different log; provenance is NOT trustworthy.",
+              file=sys.stderr)
         return 2
     return 0
 
@@ -214,9 +224,14 @@ def cmd(
     audit_log: Optional[str] = typer.Option(
         None, "--audit-log", help="Audit log path (default: $CAIRN_AUDIT_LOG or ./audit.jsonl)."
     ),
+    expect_head: Optional[str] = typer.Option(
+        None, "--expect-head",
+        help="Hash of the last row you expect (a receipt quoted earlier, full or a prefix). "
+        "The chain alone cannot show rows missing from its end; this does.",
+    ),
 ) -> None:
     """Show the content-addressed provenance/lineage record(s) for a subject."""
-    raise typer.Exit(code=_run(subject, json=json, audit_log=audit_log))
+    raise typer.Exit(code=_run(subject, json=json, audit_log=audit_log, expect_head=expect_head))
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -227,8 +242,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("subject", nargs="?", default=None)
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--audit-log", default=None)
+    parser.add_argument("--expect-head", default=None)
     args = parser.parse_args(argv)
-    return _run(args.subject, json=args.json, audit_log=args.audit_log)
+    return _run(args.subject, json=args.json, audit_log=args.audit_log, expect_head=args.expect_head)
 
 
 if __name__ == "__main__":

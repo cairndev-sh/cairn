@@ -4,7 +4,7 @@
 evaluate `ActionRequest`s to a `PolicyDecision` (`deny > require_hitl > require_dry_run >
 allow_auto`), and inject environment-mandated gates into a `PipelinePlan` before launch.
 **Owns.** `engine.py:PolicyEngine`, `pipeline_gates.py:inject_policy_gates`
-(deterministic ids, no double-gating, `injected_by` provenance, `PolicyDeniedError`),
+(deterministic ids, no double-gating by a gate that always asks, `injected_by` provenance, `PolicyDeniedError`),
 `store.py` (console-authored policies, triad).
 **Does not own.** The runtime evaluator singleton (`approval/policy_source.py`), where gates
 are enforced (`approval/`), the policy CRUD routes (`triggers/routers/policies.py`).

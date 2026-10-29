@@ -46,7 +46,7 @@ from cairn.core.engine.expr import (  # the ONE expression language (#1118)
 from cairn.core.obs.telemetry import span  # per-operator trace span (#242)
 from cairn.core.operator.binding import OperationBinding
 from cairn.core.operator.protocol import Operation, OperationContext
-from cairn.core.workspace import current_workspace  # tenancy scope for remote jobs (#239)
+from cairn.core.workspace import scoped_workspace  # tenancy scope for remote jobs (#239)
 
 if TYPE_CHECKING:
     from cairn.core.operator.effective import ContractEnvelope
@@ -944,9 +944,9 @@ async def _invoke_remote_job_durable(
     resume — so we must check the store BEFORE re-submitting (submit is
     side-effecting). On the resume re-run, the terminal record returns/raises."""
     from cairn.core.operator.job_store import (
-        DONE, FAILED, PULL_BACKEND, RemoteJobRecord, get_remote_job_store,
+        CANCELLED, DONE, FAILED, PULL_BACKEND, RemoteJobRecord, get_remote_job_store,
     )
-    from cairn.core.operator.jobs import JobFailed
+    from cairn.core.operator.jobs import JobCancelled, JobFailed
 
     # #564 — the durable record id is keyed on run_id (``run_id:node``); the control
     # loop resumes by that same run_id. An empty/sentinel run_id (e.g. the compiler's
@@ -970,6 +970,9 @@ async def _invoke_remote_job_durable(
         return _apply_output_binding(op_name, binding, rec.result or {})
     if rec is not None and rec.status == FAILED:
         raise JobFailed(rec.error or f"remote job {rid} failed")
+    if rec is not None and rec.status == CANCELLED:
+        # ADR-0151 D9 — a cancelled job is terminal: end the node, never re-pause on it.
+        raise JobCancelled(rec.error or f"remote job {rid} was cancelled")
     if rec is None:
         target = (compute_target if compute_target is not None
                   else (binding.execution.compute_target if binding.execution else None))
@@ -980,6 +983,11 @@ async def _invoke_remote_job_durable(
         # provider AND leave a job on the queue. The run then pauses on the same
         # interrupt as a pushed job, and the worker's heartbeat drives the resume
         # through the very same control loop (`build_default_poll`).
+        # The job is the paused run's (#239): its workspace is the one in scope (the
+        # run's, scoped from its record). With auth on and nothing in scope this
+        # refuses before anything is registered or dispatched, rather than
+        # stamping the process default.
+        workspace_id = scoped_workspace()
         pool = _worker_pool(target)
         pinned_image = ""
         if pool is not None:
@@ -987,7 +995,7 @@ async def _invoke_remote_job_durable(
             await store.register(
                 RemoteJobRecord(
                     run_id=run_id, node_name=node_name,
-                    workspace_id=current_workspace(),
+                    workspace_id=workspace_id,
                     provider=getattr(op, "name", op_name),
                     backend=PULL_BACKEND, compute_target=target,
                     input=dict(resolved_input),
@@ -1006,7 +1014,7 @@ async def _invoke_remote_job_durable(
             await store.register(
                 RemoteJobRecord(
                     run_id=run_id, node_name=node_name,
-                    workspace_id=current_workspace(),  # inherit the paused run's workspace (#239)
+                    workspace_id=workspace_id,  # inherit the paused run's workspace (#239)
                     provider=getattr(op, "name", op_name),
                     job_id=handle.job_id, backend=handle.backend, job_meta=dict(handle.meta),
                     compute_target=target,
