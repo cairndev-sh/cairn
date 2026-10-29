@@ -29,6 +29,7 @@ from cairn.core.budget_reservations import (
 from cairn.core.dataflow import DataflowSpec
 from cairn.core.runtime.retry import RetryPolicy
 from cairn.core.dataflow.engine import is_terminal
+from cairn.core.obs.telemetry import StageSpans
 
 logger = logging.getLogger("cairn.core.dispatch.leg_executor")
 
@@ -62,6 +63,8 @@ class LegOutcome:
     #: each attempt's wall-clock, summed over the attempts, on ANY outcome. Kept
     #: apart from ``cost_usd`` (engine-reported, LLM) so the two never fold.
     gpu_usd: float = 0.0
+    #: how many engine attempts the leg used (0 = none was made); audit-visible (#233)
+    attempts: int = 0
 
     @property
     def ok(self) -> bool:
@@ -414,6 +417,9 @@ async def execute_leg(
                     run_id=str(run_id or ""),
                 )
             except BudgetExceeded as e:
+                # #233 — a per-leg budget refusal is a governance decision: on the audit trail
+                await _audit_budget_refusal(ref, run_id, series_id, attempt, e, estimated_usd,
+                                            spent_usd, budget_usd)
                 # an earlier attempt's engine and box time stay on the leg's record
                 return _with_notes(LegOutcome(
                     state="failed", error=str(e), cost_usd=known_attempt_cost_usd,
@@ -475,9 +481,12 @@ async def execute_leg(
                         await on_submit(handle)
                     except Exception:  # noqa: BLE001
                         logger.debug("leg %s: on_submit persistence failed", ref, exc_info=True)
+            stage_spans = StageSpans()  # #222 — cairn.flow_stage children of the leg's span
+
             def _remember_status(polled: Any) -> None:
                 nonlocal status
                 status = polled
+                stage_spans.observe(polled)
 
             status = await _poll_until_terminal(
                 engine, handle, poll_budget_s, heartbeat=heartbeat,
@@ -565,6 +574,7 @@ async def execute_leg(
         gpu = _box_time_usd(hourly_usd, attempt_started)
         gpu_total += gpu
         out.gpu_usd = round(gpu_total, 6)
+        out.attempts = attempt
         note = await _close_attempt(out, reservation, engine_usd=attempt_cost_usd,
                                     box_usd=gpu,
                                     adopted_run_id=str(run_id or "") if adopted_attempt else "",
@@ -588,6 +598,17 @@ async def execute_leg(
         await asyncio.sleep(min(delay, float(policy.maximum_interval_seconds or delay)))
         delay = delay * float(policy.backoff_coefficient or 1.0)
     return _with_notes(out, ledger_notes)
+
+
+async def _audit_budget_refusal(ref: str, run_id: Any, series_id: str, attempt: int, err: Exception,
+                                estimated_usd: Any, spent_usd: Any, budget_usd: Any) -> None:
+    """``leg.budget_refused`` (#233): the leg's reservation would pass the series cap."""
+    from cairn.core.obs.audit import audit_emit  # noqa: PLC0415 — keep obs off the import path
+
+    await audit_emit(
+        "leg.budget_refused", outcome="deny", target=ref, run_id=str(run_id or "") or None,
+        series=series_id, attempt=attempt, estimated_usd=float(estimated_usd or 0.0),
+        spent_usd=float(spent_usd or 0.0), budget_usd=float(budget_usd or 0.0), reason=str(err)[:300])
 
 
 def _with_notes(out: LegOutcome, notes: list[str]) -> LegOutcome:

@@ -52,6 +52,8 @@ _SURFACE: dict[str, tuple[str, str]] = {
     "cancel_pipeline": ("post", "/pipelines/{pipeline_id}/cancel"),
     "advance_step": ("post", "/pipelines/{pipeline_id}/steps/{step_id}/advance"),
     "approve_step": ("post", "/pipelines/{pipeline_id}/steps/{step_id}/approve"),
+    # ADR-0156 D4 — an attributable "no" at a pipeline gate
+    "reject_step": ("post", "/pipelines/{pipeline_id}/steps/{step_id}/reject"),
     "ask": ("post", "/ask"),  # platform-only: the public server has no /ask (ADR-0123 D1)
     "installed_workflows": ("get", "/registry/installed-workflows"),
     # #1629 (ADR-0095) — production signal capture. `capture_trace` and
@@ -343,6 +345,17 @@ class CairnClient:
         body = {"approver": approver} if approver else {}
         return self.request("post", f"/pipelines/{pipeline_id}/steps/{step_id}/approve", json=body)
 
+    def reject_step(
+        self, pipeline_id: str, step_id: str, *, reason: str, approver: Optional[str] = None
+    ) -> dict:
+        """Reject a pipeline gate (ADR-0156): the pipeline ends failed with the step's
+        verdict ``rejected``. ``reason`` is required; under auth the server records the
+        token's identity and ignores ``approver``."""
+        body: dict[str, Any] = {"reason": reason}
+        if approver:
+            body["approver"] = approver
+        return self.request("post", f"/pipelines/{pipeline_id}/steps/{step_id}/reject", json=body)
+
 
     # ── ask ──────────────────────────────────────────────────────────────
     def ask(
@@ -626,6 +639,17 @@ class AsyncCairnClient:
         body = {"approver": approver} if approver else {}
         return await self.request(
             "post", f"/pipelines/{pipeline_id}/steps/{step_id}/approve", json=body
+        )
+
+    async def reject_step(
+        self, pipeline_id: str, step_id: str, *, reason: str, approver: Optional[str] = None
+    ) -> dict:
+        """See :meth:`CairnClient.reject_step`."""
+        body: dict[str, Any] = {"reason": reason}
+        if approver:
+            body["approver"] = approver
+        return await self.request(
+            "post", f"/pipelines/{pipeline_id}/steps/{step_id}/reject", json=body
         )
 
 

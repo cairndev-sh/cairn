@@ -474,6 +474,34 @@ async def _ask_launch_hooks(
         )) from None
 
 
+def effective_budget(governance: Any, profile: Any) -> dict:
+    """ADR-0155 D2/D3 — the cap this launch is held to: the smaller of the pipeline's
+    own ``governance.budget.usd`` and the deployment's ``ceiling_usd``; the deployment's
+    ``default_usd`` (else its ceiling) for a pipeline that declares none.
+
+    ``profile`` is the loaded profile (or its ``budget`` mapping). Returns ``{usd, source,
+    declared_usd, default_usd, ceiling_usd}`` with ``source`` one of ``pipeline``,
+    ``deployment_default``, ``deployment_ceiling``; ``{}`` when neither the pipeline nor
+    the deployment states a cap (unbounded, as before). A declared figure above the
+    ceiling is not refused: the launch runs under the ceiling and ``source`` says so.
+    A deployment figure of 0 is "not set", as a pipeline budget of 0 is."""
+    cfg = getattr(profile, "budget", profile) or {}
+    default = float(cfg.get("default_usd") or 0.0)
+    ceiling = float(cfg.get("ceiling_usd") or 0.0)
+    b = (governance or {}).get("budget") if isinstance(governance, dict) else None
+    declared = float((b.get("usd") if isinstance(b, dict) else 0.0) or 0.0)
+    if declared:
+        usd, source = (ceiling, "deployment_ceiling") if ceiling and declared > ceiling else (declared, "pipeline")
+    elif default:
+        usd, source = default, "deployment_default"
+    elif ceiling:
+        usd, source = ceiling, "deployment_ceiling"
+    else:
+        return {}
+    return {"usd": usd, "source": source, "declared_usd": declared or None,
+            "default_usd": default or None, "ceiling_usd": ceiling or None}
+
+
 async def _price_and_check(plan: PipelinePlan, admission: Any, *, workspace_id: str) -> None:
     """ADR-0151 D2/D3 at the launch door. Prices every flow leg with a compute
     target (``leg_hooks.price_plan``), refuses a priced leg with no ``timeout`` and a
@@ -481,36 +509,52 @@ async def _price_and_check(plan: PipelinePlan, admission: Any, *, workspace_id: 
     the series' live holds; read-only, no reservation), and records the estimate on
     the admission decision. A refusal is the admission refusal (403 / exit 3).
 
+    The cap is :func:`effective_budget` (ADR-0155): the pipeline's own figure bounded by
+    the deployment's profile ``[profile.budget]``. It is recorded on the admission
+    decision when the deployment states a default or ceiling, and every later reader
+    reads that recorded figure. A leg with no target is priced at the profile's
+    ``local_hourly_usd`` when it sets one (ADR-0155 D6).
+
     Fail-closed: a price that cannot be READ (the target selection, the connection
-    store, the named connection, a malformed ``hourly_usd``) refuses the launch with
-    the reason, and a retry can pass once it is readable; "not priced" is only for a
-    target that definitely carries no price. A ``governance.budget.usd`` with no
-    ``series`` is still checked here, against the cap alone: legs reserve only under
-    a series, so for such a pipeline this door is the only budget check."""
+    store, the named connection, a malformed ``hourly_usd``, the profile) refuses the
+    launch with the reason, and a retry can pass once it is readable; "not priced" is
+    only for a target that definitely carries no price. A budget with no ``series`` is
+    still checked here, against the cap alone: legs reserve only under a series, so
+    for such a pipeline this door is the only budget check."""
     from dataclasses import replace  # noqa: PLC0415
 
     from cairn.core.admission_door import REFUSED  # noqa: PLC0415
     from cairn.core.budget_reservations import remaining_usd  # noqa: PLC0415
-    from cairn.core.dispatch.leg_hooks import LegPriceUnreadable, price_plan  # noqa: PLC0415 - cycle: hooks → executor → storage
+    from cairn.core.dispatch.leg_hooks import LegPriceUnreadable, deployment_budget, price_plan  # noqa: PLC0415 - cycle: hooks → executor → storage
+    from cairn.core.pack.profile import ProfileError  # noqa: PLC0415
     from cairn.core.workspace import workspace_scope  # noqa: PLC0415 — off the hot import path
 
+    def _refuse(*reasons: str) -> AdmissionRefusedError:
+        return AdmissionRefusedError(replace(
+            admission, verdict=REFUSED, refusing_reasons=[*admission.refusing_reasons, *reasons]))
+
+    try:
+        dep = deployment_budget()
+    except (ProfileError, OSError) as e:
+        raise _refuse(f"the deployment profile cannot be read ({e}) — the budget cannot be "
+                      "determined, so the launch is refused") from None
+    gov = getattr(plan, "governance", None) or {}
+    eff = effective_budget(gov, dep)
+    if dep.get("default_usd") or dep.get("ceiling_usd"):
+        admission.budget = eff   # ADR-0155 D3/D8: recorded only when the deployment states a cap
     try:
         with workspace_scope(workspace_id):   # the account the legs' connections resolve in
-            estimate = await price_plan(plan)
+            estimate = await price_plan(plan, local_hourly_usd=dep.get("local_hourly_usd"))
     except LegPriceUnreadable as e:
-        raise AdmissionRefusedError(replace(
-            admission, verdict=REFUSED, refusing_reasons=[
-                *admission.refusing_reasons,
-                f"{e} — the leg cannot be priced, so the launch is refused; retry once it can be read"],
-        )) from None
+        raise _refuse(f"{e} — the leg cannot be priced, so the launch is refused; "
+                      "retry once it can be read") from None
     if not estimate:
         return
     admission.cost_estimate = estimate
     reasons = [f"leg {e['step']!r} runs on {e['connection']!r} at ${e['hourly_usd']:g}/h: "
                "declare a timeout to price this leg"
                for e in estimate["legs"] if e.get("priced") and e.get("estimate_usd") is None]
-    gov = getattr(plan, "governance", None) or {}
-    budget = float((gov.get("budget") or {}).get("usd", 0.0) or 0.0)
+    budget = float(eff.get("usd") or 0.0)
     total = float(estimate.get("estimate_usd") or 0.0)
     if budget and total > 0:
         series = str(gov.get("series", "") or "")
@@ -518,15 +562,48 @@ async def _price_and_check(plan: PipelinePlan, admission: Any, *, workspace_id: 
         left = await remaining_usd(series, spent_usd=0.0, budget_usd=budget) if series else budget
         if left is not None and total > left + 1e-9:
             basis = "; ".join(f"{e['step']}: {e['basis']}" for e in estimate["legs"] if e.get("priced"))
-            reasons.append(f"the legs on a priced box are estimated at ${total:.2f} ({basis}); "
-                           f"the budget has ${left:.2f} of ${budget:.2f} left"
+            where = {"deployment_default": " (the deployment's default)",
+                     "deployment_ceiling": " (the deployment's ceiling)"}.get(eff.get("source"), "")
+            reasons.append(f"the priced legs are estimated at ${total:.2f} ({basis}); "
+                           f"the budget has ${left:.2f} of ${budget:.2f}{where} left"
                            + (f" in series {series!r}" if series else ""))
     if reasons:
-        raise AdmissionRefusedError(replace(
-            admission, verdict=REFUSED, refusing_reasons=[*admission.refusing_reasons, *reasons]))
+        raise _refuse(*reasons)
 
 
-async def launch_pipeline_def(
+async def launch_pipeline_def(d: PipelineDef, **kw: Any) -> Any:
+    """The launch door's body (:func:`_launch_pipeline_def`) plus its audit rows (#233): a
+    governance refusal writes ``pipeline.refused`` (the reasons, before any record
+    exists) and an admitted launch writes ``pipeline.admitted`` (the verdict and the
+    estimate recorded on the record). Ids, refs and reasons only — never the inputs."""
+    from cairn.core.dispatch.leg_hooks import audit_bound, audit_pipeline_event  # noqa: PLC0415 — cycle: hooks → executor → storage
+
+    ref = kw.get("bundle_ref") or f"{PIPELINE_PREFIX}{d.pack}/{d.name}"
+    src = str((kw.get("trigger") or {}).get("source") or "launch")
+    try:
+        rec = await _launch_pipeline_def(d, **kw)
+    except (AdmissionRefusedError, PolicyDeniedError, ServiceDoorError, GovernanceInputError) as e:
+        if audit_bound():
+            dec = getattr(e, "decision", None)
+            reasons = list(dec.refusing_reasons) if dec is not None else [str(e)]
+            await audit_pipeline_event(
+                "pipeline.refused", pipeline_id=ref, outcome="deny", refusal=type(e).__name__,
+                reasons=" | ".join(reasons), environment=kw.get("environment") or "",
+                workspace_id=kw.get("workspace_id") or "default", source=src)
+        raise
+    if audit_bound():
+        adm = dict(getattr(rec, "admission", None) or {})
+        est = adm.get("cost_estimate") or {}
+        await audit_pipeline_event(
+            "pipeline.admitted", pipeline_id=rec.pipeline_id, ref=ref, verdict=adm.get("verdict"),
+            degrading_reasons=" | ".join(adm.get("degrading_reasons") or []),
+            estimated_usd=est.get("estimate_usd"), environment=kw.get("environment") or "",
+            workspace_id=getattr(rec, "workspace_id", None), source=src,
+            budget_usd=((getattr(rec, "governance", None) or {}).get("budget") or {}).get("usd"))
+    return rec
+
+
+async def _launch_pipeline_def(
     d: PipelineDef,
     *,
     inputs: Optional[dict] = None,

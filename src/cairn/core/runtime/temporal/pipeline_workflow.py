@@ -77,6 +77,7 @@ class PipelineWorkflow:
 
     def __init__(self) -> None:
         self._approved: set[str] = set()   # step_ids advanced/approved via signal
+        self._rejected: set[str] = set()   # step_ids rejected at a gate via signal (ADR-0156)
         self._events: set[str] = set()     # domain events delivered via signal
         self._failed = False               # any gate_blocked / failed leg
         self._abort = False                # stop LAUNCHING pending steps (#1361)
@@ -86,6 +87,13 @@ class PipelineWorkflow:
         """Advance a `manual`/`approval` step (HITL) — the durable counterpart of
         ``PipelineBridge.advance_step``. The gate is still re-checked before submit."""
         self._approved.add(step_id)
+
+    @workflow.signal
+    def reject_step(self, step_id: str) -> None:
+        """Reject an `approval` gate (ADR-0156 D5) — the twin of ``approve_step``. The step
+        ends ``skipped`` with the verdict ``rejected`` and the workflow ends failed,
+        scheduling nothing more. The bridge has already recorded the decider."""
+        self._rejected.add(step_id)
 
     @workflow.signal
     def deliver_event(self, event: str) -> None:
@@ -170,7 +178,10 @@ class PipelineWorkflow:
             if s.get("approval") or trigger == "manual":
                 state[sid]["status"] = "awaiting_approval" if s.get("approval") else "awaiting_advance"
                 await act(MIRROR, pipeline_id, state, "paused")
-                await workflow.wait_condition(lambda sid=sid: sid in self._approved or self._abort)
+                await workflow.wait_condition(
+                    lambda sid=sid: sid in self._approved or sid in self._rejected or self._abort)
+                if await self._rejected_at_gate(sid, state, pipeline_id, act):
+                    return
                 if self._abort and sid not in self._approved:
                     state[sid]["status"] = "skipped"
                     return
@@ -236,7 +247,10 @@ class PipelineWorkflow:
                     self._approved.discard(sid)
                     state[sid]["status"] = "awaiting_approval"
                     await act(MIRROR, pipeline_id, state, "paused")
-                    await workflow.wait_condition(lambda sid=sid: sid in self._approved or self._abort)
+                    await workflow.wait_condition(
+                        lambda sid=sid: sid in self._approved or sid in self._rejected or self._abort)
+                    if await self._rejected_at_gate(sid, state, pipeline_id, act):
+                        return
                     if self._abort and sid not in self._approved:
                         state[sid]["status"] = "skipped"
                         return
@@ -261,6 +275,20 @@ class PipelineWorkflow:
         status = "failed" if self._failed else "done"
         await act(MIRROR, pipeline_id, state, status)
         return {"status": status, "step_state": state}
+
+    async def _rejected_at_gate(self, sid: str, state: dict, pipeline_id: str,
+                                act: Callable) -> bool:
+        """ADR-0156 D5 — if a person rejected this gate, end the step ``skipped`` /
+        ``rejected``, stop launching, mirror ``failed``, and tell the caller to return.
+        A reject wins over an approve that raced it. Only the DAG path takes the signal:
+        no history recorded before it contains one, so replay is unchanged."""
+        if sid not in self._rejected:
+            return False
+        state[sid].update(status="skipped", verdict="rejected")
+        self._failed = True
+        self._abort = True
+        await act(MIRROR, pipeline_id, state, "failed")
+        return True
 
     # ── pre-#1361 sequential pass — KEPT VERBATIM for replay of histories ───
     # recorded before the patch marker. Do not "improve" this body: an old

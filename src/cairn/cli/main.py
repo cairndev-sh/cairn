@@ -24,6 +24,7 @@ from cairn.core.provider_settings import load_env
 
 load_env()
 
+from cairn.cli.commands import audit as _audit
 from cairn.cli.commands import compute as _compute
 from cairn.cli.commands import config as _config
 from cairn.cli.commands import dev as _dev
@@ -104,6 +105,9 @@ app.add_typer(_init.app, name="init")
 # `remote` is a sub-app (login / submit / ps / status / logs / cancel / approve / reject)
 # that drives a running cairn-server over its HTTP + SSE control plane.
 app.add_typer(_remote.app, name="remote")
+# `audit` (ADR-0156 D2) — read the audit trail; `audit verify` checks the hash chain,
+# read-only (exit 0 verified, 2 broken, 1 no log).
+app.add_typer(_audit.app, name="audit")
 # `dev` — one-command sqlite dev environment (#1188, ADR-0085 D5): engine + vite
 # on a pinned config the repo .env can't poison; login dev/dev.
 app.add_typer(_dev.app, name="dev")

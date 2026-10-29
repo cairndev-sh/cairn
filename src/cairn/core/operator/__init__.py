@@ -16,7 +16,8 @@ Public surface:
   - The contract's re-exports (ADR-0120 D7, #2453): ``resolve_connection``,
     ``as_ssh_params``, ``ArtifactRegistry``, ``build_artifact_store``,
     ``parse_dataset_ref``, ``current_workspace``, ``workspace_collection``,
-    ``RedactSpan``, ``RedactionResult``, ``AuditEvent``, ``audit_emit``,
+    ``RedactSpan``, ``RedactionResult``, ``AuditEvent``, ``audit_emit``, the audit chain rule
+    (``GENESIS_HASH``, ``canonical``, ``chain_hash``, ``verify_chain``; ADR-0156 D3),
     ``NotifyEvent``, ``NotifyResult``, ``get_settings``, ``getenv``, ``selected_backend``
     (ADR-0134 D3b), and the compute lifecycle ``compute/acquire`` / ``compute/release``
     call (ADR-0151 D6: ``load_box``, ``ec2_client``, ``describe_state``, ``stamp_lease``,
@@ -125,6 +126,11 @@ _CONTRACT_REEXPORTS: dict[str, tuple[str, str]] = {
     "RedactionResult": ("cairn.core.obs.redact", "RedactionResult"),
     "AuditEvent": ("cairn.core.obs.audit", "AuditEvent"),
     "audit_emit": ("cairn.core.obs.audit", "audit_emit"),
+    # ADR-0156 D3 — the audit hash-chain rule, one definition for the writer and every reader
+    "GENESIS_HASH": ("cairn.core.obs.audit", "GENESIS_HASH"),
+    "canonical": ("cairn.core.obs.audit", "canonical"),
+    "chain_hash": ("cairn.core.obs.audit", "chain_hash"),
+    "verify_chain": ("cairn.core.obs.audit", "verify_chain"),
     # notification event / result types
     "NotifyEvent": ("cairn.core.notifier", "NotifyEvent"),
     "NotifyResult": ("cairn.core.notifier", "NotifyResult"),

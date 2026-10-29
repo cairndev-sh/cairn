@@ -1575,13 +1575,23 @@ class RunDispatcher:
         """Async-iterate a run's events live (backlog then tail). For SSE."""
         return self.store.subscribe(inv_id, after_seq=after_seq)
 
-    async def cancel(self, inv_id: str) -> Optional[Run]:
-        """Best-effort cancel. Terminal investigations are returned unchanged."""
+    async def cancel(self, inv_id: str, *, actor: Optional[str] = None) -> Optional[Run]:
+        """Best-effort cancel. Terminal investigations are returned unchanged.
+
+        #233 — a cancel that takes effect is on the hash-chained audit trail, with ``actor``
+        (the caller's token identity) when a person asked: ``leg.cancelled`` for a pipeline's
+        leg run, ``run.cancelled`` for any other."""
         inv = await self.store.get(inv_id)
         if inv is None:
             return None
         if inv.status in ("done", "failed", "cancelled"):
             return inv
+        from cairn.core.obs.audit import audit_emit  # noqa: PLC0415 — keep obs off the import path
+
+        await audit_emit(
+            "leg.cancelled" if inv.bundle_pipeline_id else "run.cancelled", actor=actor or None,
+            target=inv_id, run_id=inv_id, pipeline_id=inv.bundle_pipeline_id or None,
+            step_id=inv.step_id or None, prior_status=str(inv.status))
         # #601: kill any ACTIVE remote job for this run so a cancelled run does not
         # orphan the remote (GPU) process — a leaked pod / SSH training keeps
         # billing. Best-effort (a cancel failure must not block the run cancel).

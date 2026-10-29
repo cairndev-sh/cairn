@@ -126,6 +126,11 @@ def live_channel_env_for(run_id: str, node: str = "") -> dict[str, str]:
     if not run_id or run_id in ("p?", "None"):
         return {}
     env = {"CAIRN_RUN_ID": run_id, "CAIRN_NODE": node}
+    # #222 — the W3C trace context of the leg submitting this job, so the job's own
+    # spans can join the pipeline trace. Absent (not empty) when tracing is off.
+    from cairn.core.obs.telemetry import current_traceparent  # noqa: PLC0415 — keeps the telemetry import off this module's load path
+    if (traceparent := current_traceparent()):
+        env["TRACEPARENT"] = traceparent
     chan = getenv("CAIRN_JOB_CHANNEL", "").strip()
     if chan.startswith("nats://"):
         # The box wire carries both names (#2429): live.py reads CAIRN_ first; the OBS_

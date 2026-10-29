@@ -1033,3 +1033,221 @@ async def test_an_unreadable_settled_total_leaves_the_rows_held_and_names_it(mon
     assert out.ok and out.gpu_usd == 1.5
     assert "budget ledger" in out.error and "ledger read failed" in out.error
     assert [r.amount_usd for r in await B.held_for_run("r-u")] == [2.0], "held at the estimate"
+
+
+# ── ADR-0155: a deployment budget (default + ceiling) and a local rate ──────
+
+_NO_BUDGET_PIPE = """
+name: sft
+kind: pipeline
+governance: {series: s-gpu}
+steps:
+  - {id: approve-run, gate: approve-run}
+  - {id: train, flow: gpupack/train, timeout: 12h, depends_on: [approve-run]}
+"""
+
+
+def _deployment(monkeypatch, **budget):
+    """What ``[profile.budget]`` holds, as the launch door reads it."""
+    monkeypatch.setattr(LH, "deployment_budget", lambda: dict(budget))
+
+
+async def _launch(tmp_path, monkeypatch, *, budget=25, body=None, **profile_budget):
+    _deployment(monkeypatch, **profile_budget)
+    _install(tmp_path, monkeypatch, budget=budget, body=body)
+    bridge = _Bridge()
+    await launch_pipeline("gpupack/sft", inputs={}, bridge=bridge, workspace_id="default")
+    return bridge.calls[0]["admission"]
+
+
+async def test_a_ceiling_refuses_a_pipeline_that_declares_no_budget(
+        tmp_path, monkeypatch, conns, memory_budget):
+    conns.set_rate(0.53)                                  # 0.53 × 12 h = $6.36
+    _deployment(monkeypatch, ceiling_usd=5.0)
+    _install(tmp_path, monkeypatch, body=_NO_BUDGET_PIPE)
+    bridge = _Bridge()
+    with pytest.raises(AdmissionRefusedError, match=r"\$5\.00 \(the deployment's ceiling\) left") as ei:
+        await launch_pipeline("gpupack/sft", inputs={}, bridge=bridge, workspace_id="default")
+    assert bridge.calls == []
+    b = ei.value.decision.as_record()["budget"]
+    assert (b["usd"], b["source"], b["declared_usd"]) == (5.0, "deployment_ceiling", None)
+
+
+async def test_a_default_is_the_cap_of_a_pipeline_that_declares_none(
+        tmp_path, monkeypatch, conns, memory_budget):
+    conns.set_rate(0.53)
+    _deployment(monkeypatch, default_usd=5.0, ceiling_usd=100.0)
+    _install(tmp_path, monkeypatch, body=_NO_BUDGET_PIPE)
+    with pytest.raises(AdmissionRefusedError, match=r"\$5\.00 \(the deployment's default\) left") as ei:
+        await launch_pipeline("gpupack/sft", inputs={}, bridge=_Bridge(), workspace_id="default")
+    assert ei.value.decision.as_record()["budget"]["source"] == "deployment_default"
+
+
+async def test_a_declared_budget_above_the_ceiling_runs_under_the_ceiling(
+        tmp_path, monkeypatch, conns, memory_budget):
+    conns.set_rate(0.53)
+    adm = await _launch(tmp_path, monkeypatch, budget=500, ceiling_usd=10.0)   # $6.36 fits the ceiling
+    assert adm["budget"] == {"usd": 10.0, "source": "deployment_ceiling", "declared_usd": 500.0,
+                             "default_usd": None, "ceiling_usd": 10.0}
+
+    _install(tmp_path, monkeypatch, budget=500)
+    _deployment(monkeypatch, ceiling_usd=5.0)             # $6.36 does not
+    with pytest.raises(AdmissionRefusedError, match=r"\$5\.00 \(the deployment's ceiling\) left"):
+        await launch_pipeline("gpupack/sft", inputs={}, bridge=_Bridge(), workspace_id="default")
+
+
+async def test_a_lower_declared_budget_is_checked_against_itself(
+        tmp_path, monkeypatch, conns, memory_budget):
+    conns.set_rate(0.53)
+    _deployment(monkeypatch, ceiling_usd=100.0)
+    _install(tmp_path, monkeypatch, budget=5)
+    with pytest.raises(AdmissionRefusedError, match=r"\$5\.00 of \$5\.00 left") as ei:
+        await launch_pipeline("gpupack/sft", inputs={}, bridge=_Bridge(), workspace_id="default")
+    assert ei.value.decision.as_record()["budget"]["source"] == "pipeline"
+
+
+async def test_no_deployment_budget_records_no_budget_entry(tmp_path, monkeypatch, conns, memory_budget):
+    conns.set_rate(0.53)
+    adm = await _launch(tmp_path, monkeypatch, budget=25)                # nothing in the profile
+    assert "budget" not in adm and COST_ESTIMATE_KEY in adm
+    adm = await _launch(tmp_path, monkeypatch, budget=25, local_hourly_usd=0.8)   # a rate alone is no cap
+    assert "budget" not in adm
+
+
+async def test_an_unbounded_pipeline_under_no_deployment_budget_is_unchanged(
+        tmp_path, monkeypatch, conns, memory_budget):
+    conns.set_rate(0.53)
+    adm = await _launch(tmp_path, monkeypatch, body=_NO_BUDGET_PIPE)
+    assert "budget" not in adm and adm[COST_ESTIMATE_KEY]["estimate_usd"] == pytest.approx(6.36)
+
+
+async def test_a_profile_that_cannot_be_read_refuses_the_launch(tmp_path, monkeypatch, memory_budget):
+    from cairn.core.pack.profile import ProfileError
+
+    def _boom():
+        raise ProfileError("bad toml")
+
+    monkeypatch.setattr(LH, "deployment_budget", _boom)
+    _install(tmp_path, monkeypatch)
+    bridge = _Bridge()
+    with pytest.raises(AdmissionRefusedError, match="deployment profile cannot be read"):
+        await launch_pipeline("gpupack/sft", inputs={}, bridge=bridge, workspace_id="default")
+    assert bridge.calls == []
+
+
+def test_the_profile_is_read_from_the_environment(tmp_path, monkeypatch):
+    p = tmp_path / "p.toml"
+    p.write_text("[profile.budget]\nceiling_usd = 7\n")
+    monkeypatch.setenv("CAIRN_PROFILE", str(p))
+    assert LH.deployment_budget() == {"ceiling_usd": 7.0}
+    monkeypatch.delenv("CAIRN_PROFILE")
+    assert LH.deployment_budget() == {}
+
+
+# ── ADR-0155 D6: the engine's own machine carries a rate ────────────────────
+
+@pytest.fixture()
+def local_engine(monkeypatch):
+    monkeypatch.setattr(LH, "engine_and_target_for_kind", lambda kind: ("builtin", ""))
+    monkeypatch.setattr(LE, "flow_kind_of", lambda ref: "ml")
+
+
+async def test_a_local_flow_leg_is_priced_at_the_profile_rate(local_engine):
+    e = await price_flow_leg("", 7200, local_hourly_usd=0.8)
+    assert (e["priced"], e["connection"], e["hourly_usd"], e["estimate_usd"]) == (True, "local", 0.8, 1.6)
+    assert e["basis"] == "$0.8/h × 2h on the local machine (profile) = $1.60"
+    assert await price_flow_leg("", 7200) is None and await price_flow_leg("", 7200, local_hourly_usd=0) is None
+
+
+async def test_without_a_local_rate_price_plan_is_empty_as_before(local_engine):
+    plan = SimpleNamespace(steps=[SimpleNamespace(id="train", ref="flow:gpupack/train", timeout_s=3600.0)],
+                           loops={})
+    assert await LH.price_plan(plan) == {}
+    priced = await LH.price_plan(plan, local_hourly_usd=0.8)
+    assert priced["estimate_usd"] == 0.8 and priced["legs"][0]["connection"] == "local"
+
+
+async def test_a_worker_or_other_engine_stays_unpriced_with_a_local_rate(monkeypatch):
+    plan = SimpleNamespace(steps=[SimpleNamespace(id="train", ref="flow:gpupack/train", timeout_s=3600.0)],
+                           loops={})
+    monkeypatch.setattr(LE, "flow_kind_of", lambda ref: "ml")
+    monkeypatch.setattr(LH, "engine_and_target_for_kind", lambda kind: ("metaflow", ""))
+    assert await LH.price_plan(plan, local_hourly_usd=0.8) == {}
+    monkeypatch.setattr(LH, "engine_and_target_for_kind", lambda kind: ("builtin", "worker:gpu"))
+    assert (await LH.price_plan(plan, local_hourly_usd=0.8))["legs"][0]["priced"] is False
+
+
+async def test_the_door_refuses_a_local_leg_that_does_not_fit_the_budget(
+        tmp_path, monkeypatch, local_engine, memory_budget):
+    _deployment(monkeypatch, local_hourly_usd=0.8)        # 0.8 × 12 h = $9.60
+    _install(tmp_path, monkeypatch, budget=5)
+    bridge = _Bridge()
+    with pytest.raises(AdmissionRefusedError, match=r"\$9\.60 .*local machine \(profile\).*\$5\.00 of \$5\.00 left"):
+        await launch_pipeline("gpupack/sft", inputs={}, bridge=bridge, workspace_id="default")
+    assert bridge.calls == []
+
+
+async def test_a_priced_local_leg_without_a_timeout_is_refused(tmp_path, monkeypatch, local_engine, memory_budget):
+    _deployment(monkeypatch, local_hourly_usd=0.8)
+    _install(tmp_path, monkeypatch, budget=1000, timeout="")
+    with pytest.raises(AdmissionRefusedError, match="'local' at \\$0.8/h: declare a timeout"):
+        await launch_pipeline("gpupack/sft", inputs={}, bridge=_Bridge(), workspace_id="default")
+
+
+async def test_a_local_rate_with_a_ceiling_bounds_a_pipeline_with_no_budget(
+        tmp_path, monkeypatch, local_engine, memory_budget):
+    _deployment(monkeypatch, local_hourly_usd=0.8, ceiling_usd=5.0)
+    _install(tmp_path, monkeypatch, body=_NO_BUDGET_PIPE)
+    with pytest.raises(AdmissionRefusedError, match=r"\$9\.60"):
+        await launch_pipeline("gpupack/sft", inputs={}, bridge=_Bridge(), workspace_id="default")
+
+
+async def test_a_local_leg_reserves_the_recorded_estimate_and_settles_wall_clock_on_failure(
+        tmp_path, monkeypatch, local_engine, memory_budget):
+    adm = await _launch(tmp_path, monkeypatch, budget=25, local_hourly_usd=0.8)
+    rec = SimpleNamespace(admission=adm, governance={"series": "s-gpu", "budget": {"usd": 25}},
+                          plan=SimpleNamespace(steps=[SimpleNamespace(id="train")], loops={}))
+    kw = leg_price_kwargs(rec, "train", SimpleNamespace(started_at=None))
+    assert kw["estimated_usd"] == pytest.approx(9.6) and kw["hourly_usd"] == 0.8
+
+    _stub_flow(monkeypatch)
+    seen = _ledger(monkeypatch)
+    monkeypatch.setattr(LE, "_wall_now", _Clock(0, 2))
+    out = await execute_leg("flow:gpupack/train", inputs={}, engine=_Engine("failed"), run_id="r1",
+                            series_id="s-gpu", spent_usd=0.0, budget_usd=25.0, **kw)
+    assert not out.ok and seen["settle"] == [1.6] and out.gpu_usd == 1.6
+    assert [r["est_usd"] for r in seen["reserve"]] == [pytest.approx(9.6)]
+
+
+# ── ADR-0155 D4: every reader reads the recorded cap ────────────────────────
+
+def test_budget_cap_reads_the_record_then_the_pipeline():
+    declared = {"series": "s", "budget": {"usd": 25}}
+    rec = SimpleNamespace(governance=declared, admission={"budget": {"usd": 10.0, "source": "deployment_ceiling"}})
+    assert LH.budget_cap_usd(rec) == 10.0
+    assert LH.budget_cap_usd(SimpleNamespace(governance=declared, admission={})) == 25.0   # pre-ADR record
+    assert LH.budget_cap_usd(SimpleNamespace(governance={}, admission=None)) == 0.0
+
+
+async def test_both_owners_reserve_against_the_recorded_cap(monkeypatch, tmp_path):
+    run = SimpleNamespace(id="run-1", status="running", started_at=T0.isoformat(), inputs={})
+
+    def rec():
+        r = _priced_record(status="running", run_id="run-1",
+                           handle={"job_id": "j9", "engine": "stub", "meta": {}})
+        r.admission["budget"] = {"usd": 10.0, "source": "deployment_ceiling", "declared_usd": 25.0}
+        return r
+
+    _deployment(monkeypatch, ceiling_usd=1.0)             # a profile change after launch moves nothing
+    bridge = await _bridge_kwargs(monkeypatch, rec(), run)
+    temporal = await _temporal_kwargs(monkeypatch, rec(), run)
+    assert bridge["budget_usd"] == 10.0 and temporal["budget_usd"] == 10.0
+
+
+def test_the_gate_evidence_shows_the_effective_cap():
+    from cairn.core.dispatch.pipeline_bridge import PipelineBridge
+
+    rec = SimpleNamespace(governance={"budget": {"usd": 25}}, admission={"budget": {"usd": 10.0}})
+    assert PipelineBridge._budget_context(None, rec) == {"budget_usd": 10.0}
+    rec.admission = {}
+    assert PipelineBridge._budget_context(None, rec) == {"budget_usd": 25}

@@ -58,7 +58,7 @@ steps:
 | `visibility` | `public` · `internal` · `deprecated` | Default `public`. Curation for catalogs; `cairn pipeline ls` lists every installed pipeline. |
 | `inputs` | map | The launch inputs: `{name: {type, default, description}}`. See below. |
 | `outputs` | map | Names this pipeline's results: `{name: <step>.<field>}`. |
-| `governance` | map | `budget: {usd: N}`, the spending cap for the series; `series`, the series name the budget belongs to; `estimated_usd`, what each flow leg reserves before it starts; `approvers`, who may decide person gates that don't name their own. See [Cost and budgets](/concepts/cost/). |
+| `governance` | map | `budget: {usd: N}`, the spending cap for the series; `series`, the series name the budget belongs to; `estimated_usd`, what each flow leg reserves before it starts; `approvers`, who may decide person gates that don't name their own. The deployment's profile can set a default and a ceiling for `budget.usd`; a pipeline can only lower it. See [Cost and budgets](/concepts/cost/). |
 | `triggers` | list | How the pipeline starts without you. See [Triggers](#triggers). |
 | `outcome` | string | What a person achieves with it, in their words. The catalog groups on it. |
 | `suite` | string | The catalog bucket the outcome belongs to (for example `model`, `data`, `operate`). |

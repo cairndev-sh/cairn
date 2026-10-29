@@ -593,6 +593,17 @@ def _timeout_of(step: Any, authored_step: Optional[PipelineStep], kind: str) -> 
 # ─── the projection ──────────────────────────────────────────────────────
 
 
+def _deployment_budget() -> dict[str, float]:
+    """The profile's ``[profile.budget]`` for the explain view (ADR-0155); ``{}`` when
+    it cannot be read — the view reports, the launch door is what refuses."""
+    from cairn.core.dispatch.leg_hooks import deployment_budget  # noqa: PLC0415 - cycle: dispatch → engine
+
+    try:
+        return deployment_budget()
+    except Exception:  # noqa: BLE001 — a read-only projection never fails on the profile
+        return {}
+
+
 def _resolved_view(
     d: PipelineDef,
     plan: Any,
@@ -701,7 +712,8 @@ def _resolved_view(
                              inherited=dict(getattr(d, "inherited_inputs", None) or {}),
                              preset_name=preset_name),
         "governance": governance_rows(dict(d.governance or {}), workspace=workspace,
-                                      profile_name=profile_name),
+                                      profile_name=profile_name,
+                                      deployment_budget=_deployment_budget()),
         "backends": backends,
         "legs": legs,
         "gates": gates,

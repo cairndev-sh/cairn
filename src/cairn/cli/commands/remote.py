@@ -858,14 +858,37 @@ def approve(
 
 @app.command()
 def reject(
-    run_id: str = typer.Argument(..., help="the paused run id (status awaiting_approval)"),
+    target: str = typer.Argument(
+        ..., help="a paused run id (one argument), or a pipeline id (pl_…) followed by the gate step"),
+    step: Optional[str] = typer.Argument(
+        None, help="the gate step awaiting approval — names a pipeline gate to reject (ADR-0156)"),
+    reason: Optional[str] = typer.Option(
+        None, "--reason", help="why — required with a pipeline gate step; recorded on the step, the review and the event"),
     approver: str = typer.Option("cli-user", "--approver"),
     endpoint: Optional[str] = _EP,
     token: Optional[str] = _TOK,
     profile: Optional[str] = _PROF,
 ):
-    """Reject a run paused at an operation-gate HITL interrupt — skips the gated op."""
-    _resume(run_id, "reject", approver, endpoint, token, profile)
+    """Reject a gate. Two forms (ADR-0156 D6):
+
+    ``reject <run_id>`` rejects a run paused at an operation-gate HITL interrupt (skips the
+    gated op). ``reject <pipeline_id> <step> --reason TEXT`` rejects a pipeline gate: the
+    pipeline ends failed, the step's verdict is ``rejected``, and the decider and reason are
+    recorded. Under auth the server records the signed-in identity, not ``--approver``."""
+    if step is None:
+        if target.startswith("pl_"):  # the pipeline store's id prefix, as `findings` tells them apart
+            _fail(f"{target} is a pipeline — name the gate step: "
+                  f"cairn remote reject {target} <step> --reason TEXT")
+        _resume(target, "reject", approver, endpoint, token, profile)
+        return
+    if not (reason or "").strip():
+        _fail("--reason is required when rejecting a pipeline gate step")
+    with _session(endpoint, token, profile) as (ep, tok, _local):
+        with _api(ep, tok) as c:
+            out = _call(c.reject_step, target, step, reason=reason.strip(), approver=approver)
+    typer.secho(
+        f"rejected — step {step} of {target}; pipeline status={(out or {}).get('status')}",
+        fg="yellow")
 
 
 @app.command()
