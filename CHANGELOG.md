@@ -4,6 +4,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 ### Fixed
+- A pipeline `task:` leg's spend is measured and governed. Its operator now runs inside a cost scope, so model calls made through `build_chat_model` are recorded on the leg's run (`cost`, and `llm_cost_usd` in its result) and count in gate cost lines and in later legs' budget checks; the global `max_cost_usd` backstop now applies to it. Under a capped `governance.series` the leg reserves its estimate before it runs (refused, and audited, when the pipeline's spend would pass the cap) and settles what it actually spent, on success, failure or cancel, as a flow leg does. A task operator that reports its own cost in its output (`gpu_usd`, `actual_usd`, `storage_usd`) is counted the way a template run counts it. (#129, part of #63)
 - Cancelling a run stops a `train/lora` fine-tune: the trainer checks for the cancel between steps, batches and the save, and the operator waits for its training thread to stop before the cancel completes, so a cancelled run never returns an adapter. `train/lora` now declares `supports_cancel`. (#124)
 - `cairn pipeline explain` reports the run store as the store chooses it: an unrecognised `CAIRN_STORAGE` is "refused" (naming at most its scheme), not "falls back to CAIRN_RUN_DB / in-memory", since the store has refused it since #1855; `CAIRN_RUN_DB` alone is `sqlite (CAIRN_RUN_DB)`, not in-memory. `cairn doctor`'s `run_db` row names the scheme through the same helper as the other diagnostics. (#274)
 

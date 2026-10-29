@@ -463,6 +463,20 @@ _NO_WORKSPACE_VERDICT = "workspace_unresolved"
 _REFUSED = False
 
 
+async def _close_task_reservation(reservation: Any, cost: dict) -> None:
+    """Close a task leg's hold the way ``execute_leg`` closes a flow attempt's:
+    settle at the measured spend, or release when nothing was spent."""
+    if reservation is None:
+        return
+    from cairn.core.budget_reservations import release, settle  # noqa: PLC0415 - as execute_leg
+
+    actual = float((cost or {}).get("total_usd") or 0.0)
+    if actual > 0:
+        await settle(reservation, actual)
+    else:
+        await release(reservation)
+
+
 class PipelineBridge:
     """Core-owned enforcer that advances bundle pipelines off run completions."""
 
@@ -2116,6 +2130,14 @@ class PipelineBridge:
         decides), never an unhandled crash — the belt here terminalizes on
         anything unexpected so a leg can never strand its pipeline."""
         op_name = s.ref[len("task:"):] if s.ref.startswith("task:") else s.ref
+        # #129 / #63 — a task leg is accounted like the other legs: its LLM spend is
+        # measured in a cost scope and recorded on its run (so gate cost lines and
+        # later legs' admission see it), and under a capped series it reserves before
+        # it spends and settles after, as a flow leg does in `execute_leg`.
+        from cairn.core import obs  # noqa: PLC0415 - keep obs off the bridge's import path
+        from cairn.core.dispatch.dispatcher import _aggregate_cost  # noqa: PLC0415 - the template path's rollup
+        cost_ctx: Any = None
+        reservation: Any = None
         try:
             # #1687 — `dataset:<name>[@N]` refs resolve HERE for task legs, with
             # the SAME functions the flow path uses in `execute_leg` (#1466/
@@ -2139,22 +2161,28 @@ class PipelineBridge:
             # #1288 — a declared `timeout:` bounds the op call; expiry is a
             # FAILED leg naming the limit (outcome, not crash). No timeout →
             # unbounded, today's behavior.
+            reservation = await self._reserve_task_leg(rec, s, run)
             limit = getattr(s, "timeout_s", None)
-            if limit:
-                try:
-                    output = await asyncio.wait_for(
-                        self._invoke_task_op(op_name, resolved, rec, s),
-                        timeout=float(limit))
-                except asyncio.TimeoutError:
-                    raise TimeoutError(
-                        f"task leg exceeded its declared timeout of {limit}s"
-                    ) from None
-            else:
-                output = await self._invoke_task_op(op_name, resolved, rec, s)
+            with obs.cost_scope(f"leg-{rec.pipeline_id}-{s.id}") as cost_ctx:
+                if limit:
+                    try:
+                        output = await asyncio.wait_for(
+                            self._invoke_task_op(op_name, resolved, rec, s),
+                            timeout=float(limit))
+                    except asyncio.TimeoutError:
+                        raise TimeoutError(
+                            f"task leg exceeded its declared timeout of {limit}s"
+                        ) from None
+                else:
+                    output = await self._invoke_task_op(op_name, resolved, rec, s)
+            payloads = [{"output": output, "llm_cost_usd": round(cost_ctx.cost_usd, 6)}]
+            cost = _aggregate_cost(payloads)
             await self.dispatcher.store.update(
                 run.id, status="done", ended_at=_now(),
-                result_payloads=[{"output": output}],
+                result_payloads=payloads, cost=cost,
             )
+            await _close_task_reservation(reservation, cost)
+            reservation = None
             await self.dispatcher._emit(
                 run.id, "done", {"leg": s.ref, "step_id": s.id, "error": ""},
                 pipeline_id=rec.pipeline_id)
@@ -2163,15 +2191,34 @@ class PipelineBridge:
             # generic handler below turned it into `failed` and killed the
             # pipeline mid-flight, after earlier legs had already been paid for.
             logger.info("task leg %s (%s) awaits approval", s.ref, run.id)
+            # the gate fired before the operator ran: nothing was spent, the hold goes
+            await _close_task_reservation(reservation, {})
+            reservation = None
             async with self._lock(rec.pipeline_id):
                 cur = await self.store.get(rec.pipeline_id) or rec
                 await self._pause_leg_for_approval(cur, s, run, e.request)
+        except asyncio.CancelledError:
+            # a cancelled leg still settles what it spent, as a cancelled flow attempt does
+            spent = round(float(getattr(cost_ctx, "cost_usd", 0.0) or 0.0), 6)
+            try:
+                await _close_task_reservation(reservation, _aggregate_cost([{"llm_cost_usd": spent}]))
+            except Exception:  # noqa: BLE001 — cancellation proceeds either way
+                logger.exception("task leg %s (%s): failed to close its reservation", s.ref, run.id)
+            raise
         except Exception as e:  # noqa: BLE001 — outcome, not crash (incl. CapabilityNotDeclared)
             logger.exception("task leg %s (%s) failed", s.ref, run.id)
             err = f"{type(e).__name__}: {e}"
+            # what a failed attempt already spent is still spend (#1441's rule)
+            spent = round(float(getattr(cost_ctx, "cost_usd", 0.0) or 0.0), 6)
+            cost = _aggregate_cost([{"llm_cost_usd": spent}])
+            try:
+                await _close_task_reservation(reservation, cost)
+            except Exception:  # noqa: BLE001 — the leg's outcome is recorded either way
+                logger.exception("task leg %s (%s): failed to close its reservation", s.ref, run.id)
             try:
                 await self.dispatcher.store.update(
-                    run.id, status="failed", ended_at=_now(), error=err)
+                    run.id, status="failed", ended_at=_now(), error=err,
+                    **({"cost": cost} if spent else {}))
                 await self.dispatcher._emit(
                     run.id, "failed", {"leg": s.ref, "step_id": s.id, "error": err},
                     pipeline_id=rec.pipeline_id)
@@ -2202,6 +2249,31 @@ class PipelineBridge:
                                    [(f"contract://{d.id}/{d.revision}", d.digest) for d in resolution.definitions])
         return ContractEnvelope.from_dict({**data, "operator_ref": entry.operator_ref,
                                            "operator_version": entry.operator_version})
+
+    async def _reserve_task_leg(self, rec: PipelineRecord, s: Any, run: Any) -> Any:
+        """#63 — a task leg's budget claim, made the way ``execute_leg`` makes a flow
+        leg's: only under a capped series, against what the pipeline's other legs
+        actually spent, for the leg's estimate (``leg_price_kwargs``). A refusal is a
+        failed leg with the reason, on the audit trail; ``None`` when uncapped."""
+        from cairn.core.budget_reservations import BudgetExceeded, reserve  # noqa: PLC0415 - as execute_leg
+
+        gov = getattr(rec, "governance", None) or {}
+        series_id = str(gov.get("series", "") or "")
+        budget_usd = budget_cap_usd(rec)
+        if not (series_id and budget_usd):
+            return None
+        spent_usd, spend_error = await self._admission_spend(rec, s, capped=True, adopt=None)
+        if spend_error:
+            raise RuntimeError(spend_error)
+        est = float(leg_price_kwargs(rec, s.id, run).get("estimated_usd") or 0.0)
+        try:
+            return await reserve(series_id, est_usd=est, spent_usd=float(spent_usd or 0.0),
+                                 budget_usd=float(budget_usd), run_id=str(run.id))
+        except BudgetExceeded as e:
+            await self._audit(rec, s.id, "budget_refused", {
+                "series": series_id, "estimated_usd": est, "spent_usd": spent_usd,
+                "budget_usd": budget_usd, "reason": str(e)[:300]})
+            raise
 
     async def _invoke_task_op(self, op_name: str, resolved: dict,
                               rec: PipelineRecord, s: Any) -> dict:
