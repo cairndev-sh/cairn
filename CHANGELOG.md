@@ -3,12 +3,13 @@
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+
+## [0.3.2] - 2026-10-29
+
+A patch release: a governed pipeline run leaves a complete, verifiable trail. Its governance decisions and spend reach the hash-chained audit log, `cairn audit verify` checks that log, a pipeline gate can be rejected with an attributed reason, a pipeline run is one OpenTelemetry trace, and a deployment can set a budget default and ceiling. New fields and tables are additive and off by default; the behaviour changes below are tightenings of governance that was weaker than documented. It also fixes a security issue: storage and bus URLs, passwords included, were printed by `cairn doctor` and a storage error (GHSA-gw2v-3922-g7gm).
+
 ### Security
 - A storage or bus URL's user and password are no longer printed (GHSA-gw2v-3922-g7gm, reported by Hannah Lyons). `default_store()`'s refusal of an unrecognised `CAIRN_STORAGE` names at most its scheme instead of echoing the value. In `cairn doctor`, the `set:` rows show a URL as `<scheme>://host:port/path` (no user, password or query) and a value with an `@` but no scheme as `***`; this covers `CAIRN_BUS`, `CAIRN_TRIGGER_INBOX` and `CAIRN_JOB_CHANNEL`, which printed a valid DSN in full, and `CAIRN_STORAGE`, whose mask kept the first 8 characters. The `config[<key>]` rows show a backend kind: a value with no scheme that is not a plain kind word is `unrecognized`, never the value, and `CAIRN_BUS` resolves to its kind (`postgres`) as `CAIRN_STORAGE` does. Anyone who shared `cairn doctor` output or kept CI logs from a deployment whose storage or bus URL carries a password should rotate that password.
-
-## [0.3.2] - 2026-10-28
-
-A patch release: a governed pipeline run leaves a complete, verifiable trail. Its governance decisions and spend reach the hash-chained audit log, `cairn audit verify` checks that log, a pipeline gate can be rejected with an attributed reason, a pipeline run is one OpenTelemetry trace, and a deployment can set a budget default and ceiling. New fields and tables are additive and off by default; the behaviour changes below are tightenings of governance that was weaker than documented.
 
 ### Upgrade notes
 - **A policy-injected gate needs its own decision.** A gate a policy adds (`applies_to.pipeline_legs` with `require_hitl`) is no longer satisfied by approving the leg it guards or another gate; approve the injected gate itself. Its `approval_role` is now enforced as the gate's approvers, so an approver outside that role is refused.
