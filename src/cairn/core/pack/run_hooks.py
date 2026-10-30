@@ -57,9 +57,9 @@ and their payloads (every payload also carries ``"event"``):
   handled (absent ``source`` = the dispatcher's own terminal path).
 - ``leg.finished`` — ``pipeline_id``, ``step_id``, ``run_id``, ``status``
   (``done`` / ``failed`` / ``cancelled``): one leg of a pipeline settled.
-- ``pipeline.finished`` — ``pipeline_id``, ``ref`` (the pipeline ref as recorded on
-  the record, ``PipelineRecord.bundle_ref``: the stamp ``pipeline.launching`` saw as
-  ``pipeline_ref``), ``status`` (``done`` / ``failed`` / ``cancelled``),
+- ``pipeline.finished`` — ``pipeline_id``, ``pipeline_ref`` (as recorded on the record,
+  ``PipelineRecord.bundle_ref``: the same stamp ``pipeline.launching`` carries under
+  the same key), ``status`` (``done`` / ``failed`` / ``cancelled``),
   ``workspace_id``: a pipeline reached a terminal state (#306). Fired by the
   in-process pipeline bridge once per pipeline per process, AFTER the record is
   persisted with its final status and, on ``done``, its resolved ``outputs``

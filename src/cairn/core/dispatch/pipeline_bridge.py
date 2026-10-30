@@ -3012,7 +3012,7 @@ class PipelineBridge:
 
         try:
             await run_hooks.fire(run_hooks.PIPELINE_FINISHED, pipeline_id=rec.pipeline_id,
-                                 ref=rec.bundle_ref, status=rec.status,
+                                 pipeline_ref=rec.bundle_ref, status=rec.status,
                                  workspace_id=rec.workspace_id)
         except Exception:  # noqa: BLE001 — a hook must never break a terminal transition
             logger.warning("pipeline.finished run hooks failed for %s", rec.pipeline_id,

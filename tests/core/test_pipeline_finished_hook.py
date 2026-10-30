@@ -84,7 +84,7 @@ async def test_fire_accepts_it_and_a_refusal_on_it_is_ignored(monkeypatch):
 
     ok = _Recorder()
     _install(monkeypatch, _refuses, ok)
-    ran = await RH.fire(RH.PIPELINE_FINISHED, pipeline_id="pl_x", ref=REF, status="done",
+    ran = await RH.fire(RH.PIPELINE_FINISHED, pipeline_id="pl_x", pipeline_ref=REF, status="done",
                         workspace_id="ws-1")
     assert ran == ["p1"] and ok.seen[0]["event"] == "pipeline.finished"
 
@@ -102,7 +102,7 @@ async def test_done_fires_once_with_its_payload(monkeypatch, no_audit_sink):
     await _complete(bridge, disp, "run_2")
 
     assert rec_hook.seen == [{"event": "pipeline.finished", "pipeline_id": rec.pipeline_id,
-                              "ref": REF, "status": "done", "workspace_id": "ws-1"}]
+                              "pipeline_ref": REF, "status": "done", "workspace_id": "ws-1"}]
     (at_fire,) = rec_hook.stored
     assert at_fire.status == "done"                  # persisted before the hook ran
     # a later pass over the terminal record (`_advance`'s #233 path) does not repeat it
@@ -142,7 +142,7 @@ async def test_cancelled_fires_once(monkeypatch, no_audit_sink):
     await bridge.cancel_pipeline(rec.pipeline_id, actor="carol")
     await bridge._advance(rec.pipeline_id)
 
-    assert [(s["status"], s["ref"], s["workspace_id"]) for s in rec_hook.seen] == [
+    assert [(s["status"], s["pipeline_ref"], s["workspace_id"]) for s in rec_hook.seen] == [
         ("cancelled", REF, "ws-1")]
     assert rec_hook.stored[0].status == "cancelled"
 

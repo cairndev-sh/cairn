@@ -55,7 +55,7 @@ dispatch layer fires, plus the two query-shaped events whose provider may refuse
 is logged and ignored) and `pipeline.launching` (a pipeline launch, fired by the launch door
 before the pipeline record, with the launch's ref, inputs, workspace, account and trigger
 as read-only copies; a refusal is the door's `AdmissionRefusedError`, and a provider failure
-refuses the launch too); `pipeline.finished` (notify-only, #306: `pipeline_id`, `ref`, `status`
+refuses the launch too); `pipeline.finished` (notify-only, #306: `pipeline_id`, `pipeline_ref`, `status`
 `done`/`failed`/`cancelled`, `workspace_id`, fired by the in-process pipeline bridge once per
 pipeline per process after the record is stored with its final status and, on `done`, its
 `outputs`; a provider failure is logged, never raised); and `workspace.created`, fired by the

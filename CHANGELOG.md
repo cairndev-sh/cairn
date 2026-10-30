@@ -5,7 +5,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ## [Unreleased]
 
 ### Added
-- A `pipeline.finished` run-hook event. An installed `cairn.run_hooks` provider learns when a pipeline reaches `done`, `failed` or `cancelled`, including a pipeline that ends on a gate, a cancel or a deferred failure. The payload is `pipeline_id`, `ref`, `status` and `workspace_id`. The in-process pipeline bridge fires it once per pipeline per process, after the record is stored with its final status and, on `done`, its resolved `outputs`. It is notify-only: a failing provider is logged and never affects the pipeline. (#306)
+- A `pipeline.finished` run-hook event. An installed `cairn.run_hooks` provider learns when a pipeline reaches `done`, `failed` or `cancelled`, including a pipeline that ends on a gate, a cancel or a deferred failure. The payload is `pipeline_id`, `pipeline_ref`, `status` and `workspace_id`. The in-process pipeline bridge fires it once per pipeline per process, after the record is stored with its final status and, on `done`, its resolved `outputs`. It is notify-only: a failing provider is logged and never affects the pipeline. (#306)
 
 ## [0.3.3] - 2026-10-30
 
