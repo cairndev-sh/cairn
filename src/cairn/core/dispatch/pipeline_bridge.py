@@ -508,6 +508,8 @@ class PipelineBridge:
         self._leg_tasks: dict[str, asyncio.Task] = {}
         #: #233 — pipelines whose terminal row (`pipeline.finished`) this process wrote
         self._audited_terminal: set[str] = set()
+        #: #306 — pipelines this process announced to the run hooks (`pipeline.finished`)
+        self._hooked_terminal: set[str] = set()
         # ADR-0086 H5 (#1247) + #1532p2 — per-target count→admit critical
         # section. Was a single process-local lock, honestly documented as "a
         # brake, not a distributed mutex"; with the #1531 store-side count
@@ -1557,6 +1559,7 @@ class PipelineBridge:
         if rec is not None and rec.status in PIPELINE_TERMINAL:
             await self._audit_pipeline_finished(rec)   # #233 — ended on a path that skipped `_settle`
             await self._settle_outputs(rec)            # ADR-0161 — likewise
+            await self._fire_pipeline_finished(rec)    # #306 — likewise, after the outputs
         if rec is None or rec.status != "running":
             return
         plan = rec.plan
@@ -2935,6 +2938,7 @@ class PipelineBridge:
         if not was_terminal and rec.status in PIPELINE_TERMINAL:
             await self._announce_terminal(rec, failure_reason)
             await self._settle_outputs(rec)
+            await self._fire_pipeline_finished(rec)  # #306 — after status AND outputs are stored
 
     async def _settle_outputs(self, rec: PipelineRecord) -> None:
         """ADR-0161 — once a pipeline is ``done``, resolve its plan's ``outputs:``,
@@ -2983,6 +2987,36 @@ class PipelineBridge:
             outcome={"done": "ok", "cancelled": "ok"}.get(rec.status, "error"),
             state=rec.status, reason=reason, spent_usd=spent,
             budget_usd=((getattr(rec, "governance", None) or {}).get("budget") or {}).get("usd"))
+
+    async def _fire_pipeline_finished(self, rec: PipelineRecord) -> None:
+        """#306 — the ``pipeline.finished`` run hook: a terminal pipeline, announced to
+        every installed ``cairn.run_hooks`` provider once per pipeline per process.
+
+        Called next to :meth:`_audit_pipeline_finished` on every terminal path, AFTER
+        the record is put with its final status and (``done``) after
+        :meth:`_settle_outputs` stored its outputs. Its own once-guard, not the audit's:
+        that one is only taken when an audit sink is bound, and the hook fires with or
+        without one. Notify-only and fail-open: a provider failure is logged by
+        :func:`run_hooks.fire`, and anything else that escapes is logged here — the
+        terminal transition is already persisted and never depends on a provider.
+        The caller holds the pipeline's critical section, so a provider must not call
+        back into the bridge for this pipeline and should hand slow work off."""
+        if rec.status not in PIPELINE_TERMINAL:
+            return
+        # setdefault: a bridge built without __init__ (tests use __new__) has no set yet
+        hooked = self.__dict__.setdefault("_hooked_terminal", set())
+        if rec.pipeline_id in hooked:
+            return
+        hooked.add(rec.pipeline_id)
+        from cairn.core.pack import run_hooks  # noqa: PLC0415 — off the hot path
+
+        try:
+            await run_hooks.fire(run_hooks.PIPELINE_FINISHED, pipeline_id=rec.pipeline_id,
+                                 ref=rec.bundle_ref, status=rec.status,
+                                 workspace_id=rec.workspace_id)
+        except Exception:  # noqa: BLE001 — a hook must never break a terminal transition
+            logger.warning("pipeline.finished run hooks failed for %s", rec.pipeline_id,
+                           exc_info=True)
 
     def _recompute_status(self, rec: PipelineRecord) -> None:
         """`done` when every step is done/skipped; `paused` when something waits on a
@@ -3289,6 +3323,7 @@ class PipelineBridge:
                     _settle_span(rec)
                     await self.store.put(rec)
                     await self._audit_pipeline_finished(rec)
+                    await self._fire_pipeline_finished(rec)  # #306
                 # The human queue closes at REQUEST time either way: a cancelled
                 # pipeline must not still be collecting approvals while its
                 # teardown runs.
@@ -3843,6 +3878,7 @@ class PipelineBridge:
             await self._audit(rec, "", "pipeline_failed", {"reason": reason})
             await self.store.put(rec)
             await self._audit_pipeline_finished(rec, reason)   # #233
+            await self._fire_pipeline_finished(rec)            # #306
             # #1791 — opt-in per [profile.notify]; the pause events are the default.
             await self._notify_pipeline_failed(rec, reason)
             logger.info("pipeline %s failed: %s", rec.pipeline_id, reason)

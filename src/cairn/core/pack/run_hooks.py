@@ -57,6 +57,17 @@ and their payloads (every payload also carries ``"event"``):
   handled (absent ``source`` = the dispatcher's own terminal path).
 - ``leg.finished`` — ``pipeline_id``, ``step_id``, ``run_id``, ``status``
   (``done`` / ``failed`` / ``cancelled``): one leg of a pipeline settled.
+- ``pipeline.finished`` — ``pipeline_id``, ``ref`` (the pipeline ref as recorded on
+  the record, ``PipelineRecord.bundle_ref``: the stamp ``pipeline.launching`` saw as
+  ``pipeline_ref``), ``status`` (``done`` / ``failed`` / ``cancelled``),
+  ``workspace_id``: a pipeline reached a terminal state (#306). Fired by the
+  in-process pipeline bridge once per pipeline per process, AFTER the record is
+  persisted with its final status and, on ``done``, its resolved ``outputs``
+  (ADR-0161), so a provider that reads the pipeline store sees both. It fires
+  however the pipeline ended: its last leg, a gate, a deferred failure, a cancel,
+  a ``finalizer:`` settling. Notify-only: it cannot refuse, and a provider failure
+  is logged, never raised into the bridge. Not fired for a Temporal-owned pipeline
+  (its activities fire no run hooks).
 - ``run.events_ingested`` — ``run_id``, ``events`` (the accepted batch, as posted),
   ``store``, ``pipeline_store``: a worker's report batch was appended through
   ``POST /runs/{id}/events/ingest`` (a listener reacts to, e.g., a ``divergence``).
@@ -105,8 +116,9 @@ LEG_FINISHED = "leg.finished"
 RUN_EVENTS_INGESTED = "run.events_ingested"
 WORKSPACE_CREATED = "workspace.created"
 PIPELINE_LAUNCHING = "pipeline.launching"
+PIPELINE_FINISHED = "pipeline.finished"
 EVENTS = (RUN_ADMITTING, RUN_LAUNCHED, RUN_FINISHED, RUN_FAILED, LEG_FINISHED, RUN_EVENTS_INGESTED,
-          WORKSPACE_CREATED, PIPELINE_LAUNCHING)
+          WORKSPACE_CREATED, PIPELINE_LAUNCHING, PIPELINE_FINISHED)
 #: the events a provider may refuse (QUERY-shaped: fired before the record exists)
 REFUSABLE_EVENTS = (RUN_ADMITTING, PIPELINE_LAUNCHING)
 #: the events on which any provider failure refuses, rather than being logged
@@ -199,7 +211,7 @@ async def fire(event: str, **payload: Any) -> list[str]:
 
 
 __all__ = ["AdmissionRefused", "ENTRY_POINT_GROUP", "EVENTS", "FAIL_CLOSED_EVENTS", "LEG_FINISHED",
-           "PIPELINE_LAUNCHING", "REFUSABLE_EVENTS", "RUN_ADMITTING", "RUN_FAILED",
+           "PIPELINE_FINISHED", "PIPELINE_LAUNCHING", "REFUSABLE_EVENTS", "RUN_ADMITTING", "RUN_FAILED",
            "RUN_FINISHED", "RUN_LAUNCHED",
            "RUN_EVENTS_INGESTED", "WORKSPACE_CREATED",
            "RunHook", "fire", "load_run_hooks", "run_hook_load_failures"]

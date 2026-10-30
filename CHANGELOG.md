@@ -4,6 +4,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+- A `pipeline.finished` run-hook event. An installed `cairn.run_hooks` provider learns when a pipeline reaches `done`, `failed` or `cancelled`, including a pipeline that ends on a gate, a cancel or a deferred failure. The payload is `pipeline_id`, `ref`, `status` and `workspace_id`. The in-process pipeline bridge fires it once per pipeline per process, after the record is stored with its final status and, on `done`, its resolved `outputs`. It is notify-only: a failing provider is logged and never affects the pipeline. (#306)
+
 ## [0.3.3] - 2026-10-30
 
 A pipeline can start another: one pipeline's results, announced as an event when it finishes, start the next through a trigger a person turns on, and the started pipeline's record names the one that fed it. A pipeline cancel now stops its running task legs before the teardown, so a GPU box being started is never left billing. Also: task-leg spend is measured and governed, and a gated finalizer can be decided during teardown.
