@@ -3,11 +3,24 @@
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+
+## [0.3.3] - 2026-10-30
+
+A pipeline can start another: one pipeline's results, announced as an event when it finishes, start the next through a trigger a person turns on, and the started pipeline's record names the one that fed it. A pipeline cancel now stops its running task legs before the teardown, so a GPU box being started is never left billing. Also: task-leg spend is measured and governed, and a gated finalizer can be decided during teardown.
+
+### Upgrade notes
+- **A pipeline cancel now cancels its running task legs.** Before, a `running` `task:` leg was left to finish; now the bridge that runs it cancels it, waits up to 60 s, and settles it `cancelled` before any `finalizer:` runs (ADR-0159). A task leg owned by another process, and cancelling a single run, are unchanged (#207).
+- **`outputs:` expressions are checked when a pipeline loads.** A value that is neither the `<step>.<field>` shorthand nor a valid expression now fails the load, naming the output. Every pipeline in this repository and in cairn-extensions loads unchanged.
+- **A declared event or webhook trigger is still written paused.** Turn one on with `cairn remote enable-trigger <id>` (`cairn remote triggers` lists them). An event trigger applies to the next event; a webhook trigger at the next server start.
+- The example pack `cairn-pack-hello` is 0.2.6 in this release (unchanged apart from the version).
+
 ### Added
 - A stored trigger (event or webhook) can be turned on or paused: `GET /triggers/stored` and `PATCH /triggers/stored/{id}`, `cairn remote triggers`, `enable-trigger <id>` and `disable-trigger <id>`, and `CairnClient.stored_triggers()` / `set_trigger_enabled()`. A trigger a pipeline declares is written paused (ADR-0131), and until now nothing could turn it on. Each change is audited with the caller. (ADR-0160, #290)
 - A pipeline's `outputs:` now mean something: they are resolved when it ends `done` (the `<step>.<field>` shorthand, or an expression in the `predicate:` grammar) and stored on its record (`outputs`, with `outputs_errors` for any that did not resolve). A pipeline-level `emits: <topic>` publishes them once, when it ends `done`, so another pipeline can start on them with a `kind: event` trigger. Before, `outputs:` was parsed and documented but never resolved, and only a step could emit, so no event could leave after a pipeline's last gate. (ADR-0161, #293)
 
 ### Fixed
+- A template run on the Temporal or DBOS worker records its LLM spend: each graph node's cost is measured and carried on its node event, so the run's total is no longer $0. (#130, thanks to mikemikimike)
+- Under the Temporal owner, a pipeline record's read-modify-writes on the leg path (the run pin, the engine handle) run inside the pipeline's critical section, so a stale write can no longer erase them, and heartbeats start before the wait so the wait cannot retry the activity. (#126, thanks to mikemikimike)
 - A pipeline started by a `kind: event` trigger records who published the event: its `trigger` carries the bus message's `publisher` and `correlation_id`, so a pipeline started by another pipeline's `emits:` names that pipeline (`pipeline:<id>`). (#289)
 - Cancelling a pipeline stops its running `task:` legs before the teardown. The bridge cancels each task leg it is executing, waits for it (at most 60 s), and settles it `cancelled` (step `skipped`/`cancelled`, run `cancelled`, remote jobs and budget holds closed) before any `finalizer:` runs. Before, a cancel left a running task leg alone and ran the finalizers at once, so a `compute/acquire` still starting the box could start it after `compute/release` had found it stopped, and the box billed until its lease ran out. `compute/acquire` now finishes a start that was in flight when it was cancelled and stops the box itself, and `compute/release` waits (at most 180 s) for a box that is still `pending`, which EC2 refuses to stop. A task leg owned by another process, and cancelling a single run, are unchanged (still #207). (ADR-0159, #219, part of #207)
 - A `finalizer:` whose operator a profile or policy gates (for example `compute/release`, risk `external_write`) can be approved or rejected while the pipeline finalizes. Before, `advance_step` and `reject_step` refused every step once the terminal intent was set, so the gated finalizer waited forever, the pipeline stayed `running`, and the machine it releases kept billing until its lease ran out. Approving runs the finalizer and the pipeline settles; rejecting settles it `failed`. Every other step stays refused during teardown. (#218)
@@ -16,6 +29,9 @@ All notable changes to this project are documented here. The format follows [Kee
 - `cairn pipeline explain` reports the run store as the store chooses it: an unrecognised `CAIRN_STORAGE` is "refused" (naming at most its scheme), not "falls back to CAIRN_RUN_DB / in-memory", since the store has refused it since #1855; `CAIRN_RUN_DB` alone is `sqlite (CAIRN_RUN_DB)`, not in-memory. `cairn doctor`'s `run_db` row names the scheme through the same helper as the other diagnostics. (#274)
 - `[profile.approval]` works: a `profile.toml` may now carry `mode` (`"off"` or `"enforce"`) and `default_on_risk` (operator risk classes), and with `"enforce"` every operator of a listed risk needs a human approval, as ADR-0034 describes. The approval resolver always read it, but the closed profile schema refused the key, so the switch never fired. The table is closed: an unknown key, a missing or unknown `mode`, or an unknown risk class fails at load. `extends` replaces per key. (#256)
 - `cairn connect test` (and the probe `cairn connect add` runs) reaches an SSH connection's host and a Postgres/pgvector DSN's host. Before, every such connection with a host failed `blocked: no host in URL`, because the host went through the URL guard as `//host` and lost its hostname. The host is now checked directly with the same SSH/DSN rule, on every host of a multi-host DSN: private hosts are allowed, and cloud instance-metadata endpoints are refused as `blocked: cloud instance-metadata endpoint`. The metadata check compares addresses, not strings: all of `169.254.0.0/16` (IMDS and ECS task metadata) and `fd00:ec2::254`, also when written with a zone id or embedded in an IPv4-mapped, IPv4-compatible, 6to4, Teredo or NAT64 address; the URL guard shares it. A host name that cannot be encoded (`box..example.com`) is reported as unresolvable instead of raising. (#77)
+
+### Changed
+- The pipeline YAML reference says a gate's `timeout:` is shown to the approver, not enforced; ADR-0158 (PROPOSED) describes the expiry. (#259)
 
 ## [0.3.2] - 2026-10-29
 

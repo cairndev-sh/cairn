@@ -2,7 +2,7 @@
 # The DISTRIBUTION is `cairndev` (ADR-0121 D3, #2429); the import name `cairn` and the
 # `cairn` command do not change.
 name = "cairndev"
-version = "0.3.2"
+version = "0.3.3"
 description = "A governed control plane for AI and ML work: pipelines that fine-tune, evaluate, compress and serve models, with approval, policy, budget and lineage on every step"
 readme = "README.md"
 requires-python = ">=3.12"

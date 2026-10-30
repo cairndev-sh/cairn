@@ -16,7 +16,7 @@
 # installed.
 [project]
 name = "cairn-pack-hello"
-version = "0.2.5"
+version = "0.2.6"
 description = "Example cairn domain pack: a data, an agentic, an ml and an operations pipeline, each behind gates."
 readme = "README.md"
 requires-python = ">=3.12"
