@@ -125,6 +125,8 @@ running on the server; log in again and re-attach with `cairn remote pipeline <i
 | `cairn remote advance <id> <step>` | Approves a step waiting on a person: a gate, or a leg whose operator or policy asks for approval. Under sign-in the server records your identity. |
 | `cairn remote findings <id>` | A run's findings, or every step's findings for a pipeline. |
 | `cairn remote cancel-pipeline <id>` | Cancels a pipeline and its running legs. |
+| `cairn remote triggers` | Lists this workspace's stored triggers (event and webhook), whether each is on, and which pipeline declared it. |
+| `cairn remote enable-trigger <id>` / `disable-trigger <id>` | Turns a stored trigger on or pauses it. A trigger a pipeline declares starts paused; an event trigger applies to the next event, a webhook trigger at the next server start. |
 | `cairn remote ps` / `status` / `logs` | Lists runs, shows one run, prints or follows its event log. |
 | `cairn remote approve <run-id>` / `reject <run-id>` | Decides a run paused at an approval inside a flow. |
 | `cairn remote reject <id> <step> --reason TEXT` | Rejects a pipeline gate waiting on a person. `--reason` is required; `--approver` is recorded when sign-in is off, and under sign-in the server records your identity. The pipeline ends `failed` and the step's verdict is `rejected`. A single `pl_…` argument is refused: name the gate step. A 404, 403 or 409 is printed as such. |

@@ -4,6 +4,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 ### Added
+- A stored trigger (event or webhook) can be turned on or paused: `GET /triggers/stored` and `PATCH /triggers/stored/{id}`, `cairn remote triggers`, `enable-trigger <id>` and `disable-trigger <id>`, and `CairnClient.stored_triggers()` / `set_trigger_enabled()`. A trigger a pipeline declares is written paused (ADR-0131), and until now nothing could turn it on. Each change is audited with the caller. (ADR-0160, #290)
 - A pipeline's `outputs:` now mean something: they are resolved when it ends `done` (the `<step>.<field>` shorthand, or an expression in the `predicate:` grammar) and stored on its record (`outputs`, with `outputs_errors` for any that did not resolve). A pipeline-level `emits: <topic>` publishes them once, when it ends `done`, so another pipeline can start on them with a `kind: event` trigger. Before, `outputs:` was parsed and documented but never resolved, and only a step could emit, so no event could leave after a pipeline's last gate. (ADR-0161, #293)
 
 ### Fixed
