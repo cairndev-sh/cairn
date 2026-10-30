@@ -118,14 +118,19 @@ is not `compute.ssh`, fails closed with the `cairn connect ssh` command that fix
   leg whose recorded compute target is the connection the `compute/release` finalizer
   stops, then submits the release (ADR-0151 D9). A job cancel that fails is logged and
   audited (`leg_job_cancel`, `sent: false`); the release runs regardless.
+- A pipeline cancel also cancels a running `acquire` leg and waits for it before the
+  release (ADR-0159). A cancel before the start never starts the box; a cancel while the
+  start is in flight lets the call finish and stops the box `acquire` started. `release`
+  waits at most 180 s for a `pending` instance (EC2 refuses to stop one) before it stops
+  it, so a box caught mid-start is stopped once it is up (#219).
 - `remote/exec` is `external_write`.
 - In-process and DBOS run finalizers on done, failed and cancelled. Under the Temporal
   pipeline owner the launch door refuses a plan with a `task:` leg or a `finalizer:`
   step (ADR-0151 D10, #208), so a pipeline that uses these operators runs in-process or
   on DBOS.
-- Task legs reserve no budget (`08-governance.md`, partial): `acquire` is a paid task
-  leg on top of that; the minutes between `acquire` and the first priced flow leg are
-  unpriced (ADR-0151 consequences).
+- A task leg reserves and settles under a capped series like a flow leg (#129), but
+  `acquire` carries no price of its own: the minutes between `acquire` and the first
+  priced flow leg are unpriced (ADR-0151 consequences).
 
 **Upgrade.** The platform's `cairn-operator-compute` 0.1.0 declares the same two refs.
 It must drop them in the same release as this pack. The engine does not refuse to boot

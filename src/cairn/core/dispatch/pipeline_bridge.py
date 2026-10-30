@@ -1410,6 +1410,13 @@ class PipelineBridge:
         output = reconstruct_step_output(run)
         await self._audit_run_terminal(pid, step_id, term, run)
         st = rec.step_state.get(step_id) or StepState()
+        if term == "cancelled" and st.status == "skipped" and st.verdict == "cancelled":
+            # The pipeline's cancel settled this step before announcing its run's
+            # cancel (#2541, ADR-0159): it stays cancelled, not `failed`, and the
+            # cancel already decided the pipeline's outcome.
+            rec.cursor = [c for c in rec.cursor if c != step_id]
+            await self._settle(rec)
+            return
         st.run_id = run_id
         st.status = "done" if term == "done" else "failed"
         st.verdict = _verdict_of(run, output)
@@ -3209,7 +3216,11 @@ class PipelineBridge:
 
         #2540 — a child run a gate paused at ``awaiting_approval`` is settled
         ``cancelled`` (:meth:`_cancel_stranded_child_runs`): nothing executes
-        it and nobody can approve a leg of a cancelled pipeline. ``queued`` and
+        it and nobody can approve a leg of a cancelled pipeline. A ``running``
+        TASK leg this bridge executes is cancelled and waited for, bounded, BEFORE
+        the finalizers are submitted (ADR-0159, :meth:`_cancel_running_task_legs`),
+        so an in-flight ``compute/acquire`` has finished stopping what it started
+        when ``compute/release`` looks at the box (#219). Other ``queued`` and
         ``running`` child runs are left to their own paths — a leg executing in
         some process finishes and its completion no-ops once the pipeline is
         terminal; a queued leg settles itself (`_settle_cancelled_while_queued`).
@@ -3220,7 +3231,7 @@ class PipelineBridge:
         finalizers are submitted (:meth:`_cancel_legs_on_released_boxes`), so the
         box stop is never the only kill. The run itself still settles through
         its own path; a cancel that fails is logged and audited and never holds
-        the release back. Every other running leg is unchanged (#207).
+        the release back. Every other running flow leg is unchanged (#207).
         Cancel is one-shot, so it never sees an owner DEAD (that takes two probes,
         ADR-0125 D3) and leaves ``queued``/``running`` legs alone. A leg still
         ``running`` when its process dies AFTER this cancel is settled
@@ -3238,6 +3249,7 @@ class PipelineBridge:
         cancelled pipeline settles any ``awaiting_approval`` run an earlier
         cancel left."""
         stranded_owner = False
+        cancelled_legs: list[tuple[str, str, str, str]] = []
         async with self._lock(pipeline_id):
             rec = await self.store.get(pipeline_id)
             if rec is None:
@@ -3255,6 +3267,9 @@ class PipelineBridge:
                 for sid in self._settle_human_waits_on_cancel(rec):
                     await audit_leg_finished(pipeline_id, sid, ref=getattr(rec.plan.step(sid), "ref", ""),
                                              state="cancelled", reason="pipeline cancelled while waiting")
+                # ADR-0159 — the pipeline's own running task legs stop before any
+                # finalizer is submitted, so a teardown never races the work it ends.
+                cancelled_legs = await self._cancel_running_task_legs(rec, actor=actor)
                 if self._finalizer_steps(rec):
                     # #1787 — cancel is the third terminal state a `finally:`
                     # must survive, and the one that used to leave a box billing
@@ -3281,9 +3296,78 @@ class PipelineBridge:
                                                workspace_id=rec.workspace_id)
         # Outside the critical section: the `run.cancelled` emits below reach
         # `_on_run_terminal`, which takes this pipeline's section itself.
+        for run_id, step_id, ref, reason in cancelled_legs:
+            await self.dispatcher._emit(run_id, "cancelled",
+                                        {"leg": ref, "step_id": step_id, "error": reason},
+                                        pipeline_id=pipeline_id)
         if stranded_owner:
             await self._cancel_stranded_child_runs(rec)
         return rec
+
+    #: ADR-0159 — how long a pipeline cancel waits for its cancelled task legs to
+    #: wind down (an in-flight `compute/acquire` stops the box it was starting)
+    #: before the finalizers run. A leg still going after this is settled
+    #: `cancelled` anyway: the teardown must not wait on it forever.
+    _TASK_LEG_CANCEL_WAIT_S = 60.0
+
+    async def _cancel_running_task_legs(self, rec: PipelineRecord, *,
+                                        actor: Optional[str] = None) -> list[tuple[str, str, str, str]]:
+        """ADR-0159 — cancel every ``running`` non-finalizer task leg this bridge
+        executes, wait for them (bounded by :attr:`_TASK_LEG_CANCEL_WAIT_S`), and
+        settle each one ``cancelled``: the step ``skipped`` with verdict
+        ``cancelled`` (as `_settle_cancelled_while_queued` does), the run through
+        :meth:`RunDispatcher.cancel` (remote jobs, budget holds, ``leg.cancelled``
+        audit with ``actor``) and then ``cancelled``. A leg that finished on its
+        own before the cancel reached it keeps its own outcome.
+
+        Called inside the pipeline's section: a cancelled leg never takes it (its
+        ``CancelledError`` path only closes its reservation). Returns
+        ``(run_id, step_id, ref, reason)`` for the caller to emit outside it. A
+        task leg owned by another process is not in ``_leg_tasks`` and is left
+        alone, as before (#207)."""
+        finals = {s.id for s in self._finalizer_steps(rec)}
+        legs: dict[str, tuple[Any, asyncio.Task]] = {}
+        for sid, st in rec.step_state.items():
+            if sid in finals or st.status != "running" or not st.run_id:
+                continue
+            task = self._leg_tasks.get(st.run_id)
+            if task is None or task.done():
+                continue
+            try:
+                run = await self.dispatcher.store.get(st.run_id)
+            except Exception:  # noqa: BLE001 — unreadable: cancel the task, settle what we can
+                run = None
+            if leg_kind_of(str(getattr(run, "template_ref", "") or "")) != "task":
+                continue
+            task.cancel()
+            legs[sid] = (run, task)
+        if not legs:
+            return []
+        await asyncio.wait([t for _, t in legs.values()], timeout=self._TASK_LEG_CANCEL_WAIT_S)
+        settled: list[tuple[str, str, str, str]] = []
+        for sid, (run, task) in legs.items():
+            if task.done() and not task.cancelled():
+                continue  # it finished before the cancel landed: its own terminal stands
+            st = rec.step_state[sid]
+            ref = str(getattr(run, "template_ref", "") or "")
+            reason = f"pipeline cancelled while task leg '{sid}' was running"
+            if not task.done():
+                logger.warning("task leg %s (%s) still running %.0fs after its cancel; settled cancelled",
+                               sid, st.run_id, self._TASK_LEG_CANCEL_WAIT_S)
+            st.status = "skipped"
+            st.verdict = "cancelled"
+            st.ended_at = _now()
+            try:
+                await self.dispatcher.cancel(st.run_id, actor=actor)
+                updated = await self.dispatcher.store.update(
+                    st.run_id, status="cancelled", ended_at=_now(), error=reason)
+            except Exception:  # noqa: BLE001 — settle the rest regardless
+                logger.exception("pipeline %s: could not settle cancelled task leg %s", rec.pipeline_id, sid)
+                continue
+            await audit_leg_finished(rec.pipeline_id, sid, ref=ref, state="cancelled", run=run, reason=reason)
+            if str(getattr(updated, "status", "") or "") == "cancelled":
+                settled.append((st.run_id, sid, ref, reason))
+        return settled
 
     #: The capability a box-stopping finalizer provides (`compute/release`, ADR-0151 D6).
     _RELEASE_CAPABILITY = "compute.release"

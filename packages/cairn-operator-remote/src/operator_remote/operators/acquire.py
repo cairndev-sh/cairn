@@ -22,7 +22,9 @@ input a human approves at the gate anyway.
 """
 from __future__ import annotations
 
+import asyncio
 import datetime as _dt
+import logging
 
 from cairn.core.operator import (
     BILLING_STATES,
@@ -36,7 +38,24 @@ from cairn.core.operator import (
 )
 from cairn.core.operator import Operation, OperationContext, ReportSpec, register_operator
 
+from operator_remote.operators.release import stop_once_started
 from operator_remote.schemas.lifecycle import AcquireInput, AcquireOutput
+
+logger = logging.getLogger(__name__)
+
+async def _stop_after_cancel(instance_id: str, region: str, client, start: "asyncio.Future") -> None:
+    """The cancel path of a start in flight: let the start call finish (it runs in
+    a worker thread a cancel cannot stop), then stop the box once it has left
+    ``pending``. Best-effort: a failure is logged, and the release finalizer and
+    the lease sweep still stand behind it."""
+    try:
+        await start
+    except Exception:  # noqa: BLE001 — a start that failed started nothing; stop anyway
+        logger.debug("acquire: the start of %s failed while cancelled", instance_id, exc_info=True)
+    try:
+        await stop_once_started(instance_id, region=region, client=client)
+    except Exception:  # noqa: BLE001 — the release finalizer and the sweep are the backstops
+        logger.exception("acquire: could not stop %s after a cancel", instance_id)
 
 
 def _utcnow() -> _dt.datetime:
@@ -84,7 +103,17 @@ class ComputeAcquireOp(Operation[AcquireInput, AcquireOutput]):
         await stamp_lease(instance_id, region=box.region, client=client,
                           release_after=release_after or None,
                           acquired_by=inp.acquired_by)
-        state = await start_instance(instance_id, region=box.region, client=client)
+        # ADR-0159 — a pipeline cancel cancels this leg and waits for it before
+        # `compute/release` looks at the box. Once the start request may be with
+        # EC2, a cancel must not leave a box starting behind the release's back:
+        # finish the call, stop what it started, then let the cancel through.
+        start = asyncio.ensure_future(start_instance(instance_id, region=box.region, client=client))
+        try:
+            state = await asyncio.shield(start)
+        except asyncio.CancelledError:
+            if not already:
+                await _stop_after_cancel(instance_id, box.region, client, start)
+            raise
         ctx.report.stage("start", percent=100.0)
 
         ctx.report.stage("wait_ssh", percent=0.0)
