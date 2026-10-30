@@ -5,6 +5,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ## [Unreleased]
 ### Added
 - A stored trigger (event or webhook) can be turned on or paused: `GET /triggers/stored` and `PATCH /triggers/stored/{id}`, `cairn remote triggers`, `enable-trigger <id>` and `disable-trigger <id>`, and `CairnClient.stored_triggers()` / `set_trigger_enabled()`. A trigger a pipeline declares is written paused (ADR-0131), and until now nothing could turn it on. Each change is audited with the caller. (ADR-0160, #290)
+- Every GitHub release attaches CycloneDX SBOMs built from the tag's lock files: `cairn-<version>.cdx.json` (the whole `uv.lock` closure, all extras and platforms, no licence data), `cairn-engine-<version>.cdx.json` (the engine image's lock-resolved Python packages on linux/x86_64, with licences) and `cairn-docs-site-<version>.cdx.json` (the docs site's runtime npm packages). A release with an empty SBOM fails. The install page lists them. (ADR-0121 D6, #295)
 
 ### Fixed
 - A pipeline started by a `kind: event` trigger records who published the event: its `trigger` carries the bus message's `publisher` and `correlation_id`, so a pipeline started by another pipeline's `emits:` names that pipeline (`pipeline:<id>`). (#289)
