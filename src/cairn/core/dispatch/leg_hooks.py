@@ -773,4 +773,62 @@ __all__ = ["BUDGET_KEY", "COST_ESTIMATE_KEY", "LOCAL_CONNECTION", "budget_cap_us
            "recorded_budget", "FlowLegHooks", "LegPriceUnreadable", "NOT_PRICED", "PRICED_ENGINE",
            "PRICED_TARGET_KIND", "engine_and_target_for_kind",
            "compute_target_for_kind", "estimate_evidence", "leg_price_kwargs", "price_flow_leg",
-           "price_plan", "publish_pipeline_audit", "budget_cap_usd", "recorded_budget", "recorded_cost_estimate", "recorded_leg_price"]
+           "price_plan", "publish_pipeline_audit", "budget_cap_usd", "recorded_budget", "recorded_cost_estimate", "recorded_leg_price",
+           "resolve_pipeline_outputs", "emit_pipeline_outputs"]
+
+
+# ── ADR-0161: a pipeline's outputs, resolved and emitted when it ends `done` ──
+
+
+def resolve_pipeline_outputs(declared: dict, *, inputs: dict, steps: dict) -> tuple[dict, dict]:
+    """``(values, errors)`` for a plan's ``outputs:`` over the done steps' outputs.
+
+    A ``<step>.<field>`` shorthand resolves as a gate's ``show:`` does (with the
+    ``findings`` fallback); anything else is an expression in the predicate grammar
+    over ``{steps, input}``. One the run cannot resolve is ``None`` in ``values``
+    with its reason in ``errors``: a finished pipeline never fails on its outputs.
+    Shared by both pipeline owners."""
+    from cairn.core.engine.expr import MISSING, Scopes, compile_predicate, step_path  # noqa: PLC0415
+    from cairn.core.engine.pipeline import is_output_shorthand  # noqa: PLC0415
+
+    values: dict[str, Any] = {}
+    errors: dict[str, str] = {}
+    scopes = Scopes(input=dict(inputs or {}), steps=dict(steps or {}))
+    for name, raw in (declared or {}).items():
+        try:
+            if not isinstance(raw, str):
+                val = raw
+            elif is_output_shorthand(raw):
+                step, _, rest = raw.strip().partition(".")
+                val = step_path((steps or {}).get(step), rest.split("."), source=f"outputs.{name}")
+            else:
+                val = compile_predicate(raw, source=f"outputs.{name}").try_evaluate(scopes)
+                val = None if val is MISSING else val
+        except Exception as e:  # noqa: BLE001 — recorded, never raised past a finished pipeline
+            values[name] = None
+            errors[name] = f"{type(e).__name__}: {e}"[:300]
+            continue
+        values[name] = val
+        if val is None:
+            errors[name] = f"{raw!r} did not resolve"
+    return values, errors
+
+
+async def emit_pipeline_outputs(rec: Any, *, bus: Any = None) -> bool:
+    """Publish a ``done`` pipeline's resolved outputs on its plan's ``emits:`` topic,
+    the way a step's ``emits:`` publishes (``publisher: pipeline:<id>``). True when
+    sent. A broadcast failure is logged: it never changes the finished pipeline."""
+    plan = getattr(rec, "plan", None)
+    topic = getattr(plan, "emits", None)
+    if not topic or getattr(rec, "status", "") != "done":
+        return False
+    try:
+        from cairn.core.bus import get_bus  # noqa: PLC0415 — the bus is selected at first use
+
+        await (bus or get_bus()).publish(
+            topic, dict(getattr(rec, "outputs", None) or {}),
+            publisher=f"pipeline:{rec.pipeline_id}", correlation_id=rec.pipeline_id)
+        return True
+    except Exception:  # noqa: BLE001
+        logger.warning("pipeline %s: emitting %r failed", rec.pipeline_id, topic, exc_info=True)
+        return False

@@ -56,8 +56,8 @@ from cairn.core.dispatch.leg_executor import (
 )
 from cairn.core.dispatch.leg_hooks import (
     FlowLegHooks, audit_bound, audit_flow_leg_finished, audit_leg_finished, audit_leg_submitted,
-    audit_pipeline_event, budget_cap_usd, compute_target_for_kind, estimate_evidence, flow_leg_record,
-    leg_price_kwargs, pipeline_spent_usd,
+    audit_pipeline_event, budget_cap_usd, compute_target_for_kind, emit_pipeline_outputs, estimate_evidence,
+    flow_leg_record, leg_price_kwargs, pipeline_spent_usd, resolve_pipeline_outputs,
 )
 from cairn.core.dispatch.pipeline_resume import plan_resume
 from cairn.core.dispatch.target_concurrency import in_flight_on_target, target_cap
@@ -1549,6 +1549,7 @@ class PipelineBridge:
         rec = _rec or await self.store.get(pipeline_id)
         if rec is not None and rec.status in PIPELINE_TERMINAL:
             await self._audit_pipeline_finished(rec)   # #233 — ended on a path that skipped `_settle`
+            await self._settle_outputs(rec)            # ADR-0161 — likewise
         if rec is None or rec.status != "running":
             return
         plan = rec.plan
@@ -2926,6 +2927,24 @@ class PipelineBridge:
         await self.store.put(rec)
         if not was_terminal and rec.status in PIPELINE_TERMINAL:
             await self._announce_terminal(rec, failure_reason)
+            await self._settle_outputs(rec)
+
+    async def _settle_outputs(self, rec: PipelineRecord) -> None:
+        """ADR-0161 — once a pipeline is ``done``, resolve its plan's ``outputs:``,
+        store them on the record, then publish them on its ``emits:`` topic. Exactly
+        once: ``rec.outputs`` is ``None`` until this writes it, and the emit follows
+        that write. A pipeline that declares neither is untouched."""
+        plan = rec.plan
+        if (rec.status != "done" or rec.outputs is not None or plan is None
+                or not (plan.outputs or plan.emits)):
+            return
+        rec.outputs, rec.outputs_errors = resolve_pipeline_outputs(
+            plan.outputs, inputs=rec.inputs, steps=await self._collected_outputs(rec))
+        await self.store.put(rec)
+        if rec.outputs_errors:
+            await self._audit(rec, "", "outputs_unresolved", {"errors": rec.outputs_errors})
+        if await emit_pipeline_outputs(rec, bus=self._bus):
+            await self._audit(rec, "", "emitted", {"event": plan.emits})
 
     async def _announce_terminal(self, rec: PipelineRecord, failure_reason: str = "") -> None:
         """The side effects a terminal transition owes — fired on the transition,
