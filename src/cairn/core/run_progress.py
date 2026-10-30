@@ -9,7 +9,9 @@ from datetime import datetime
 from typing import Any, Optional
 
 
-def _duration_ms(start: str | None, end: str | None) -> Optional[float]:
+def duration_ms(start: str | None, end: str | None) -> Optional[float]:
+    """Milliseconds between two ISO timestamps, or ``None`` when either is missing or
+    unparsable. Public (#297)."""
     if not start or not end:
         return None
     try:
@@ -18,16 +20,16 @@ def _duration_ms(start: str | None, end: str | None) -> Optional[float]:
         return None
 
 
-def _trace_from_events(events: list[dict]) -> list[dict]:
+def trace_from_events(events: list[dict]) -> list[dict]:
     """Derive a per-step trace from the captured event log: each ``node`` event is
     a step; its duration is the gap to the next lifecycle event (real timestamps,
-    not invented). Falls back to empty when no node events were recorded."""
+    not invented). Falls back to empty when no node events were recorded. Public (#297)."""
     steps = []
     nodes = [e for e in events if e.get("type") == "node"]
     ordered = [e for e in events if e.get("type") in ("node", "done", "failed", "cancelled")]
     for e in nodes:
         nxt = next((o for o in ordered if (o.get("seq") or 0) > (e.get("seq") or 0)), None)
-        ms = _duration_ms(e.get("ts"), nxt.get("ts")) if nxt else None
+        ms = duration_ms(e.get("ts"), nxt.get("ts")) if nxt else None
         data = e.get("data") or {}
         steps.append({
             "step": data.get("node", "step"),
@@ -38,6 +40,11 @@ def _trace_from_events(events: list[dict]) -> list[dict]:
             "output": data.get("output"),
         })
     return steps
+
+
+# The earlier private names (#297); the same functions.
+_duration_ms = duration_ms
+_trace_from_events = trace_from_events
 
 
 def run_progress(events: list[dict]) -> dict[str, Any]:
@@ -58,7 +65,7 @@ def run_progress(events: list[dict]) -> dict[str, Any]:
         data = e.get("data") or {}
         if e.get("type") == "awaiting_approval" and isinstance(data.get("approval"), dict):
             pending = data["approval"]  # latest wins (multi-gate runs)
-    return {"steps": _trace_from_events(events), "pending": pending}
+    return {"steps": trace_from_events(events), "pending": pending}
 
 
-__all__ = ["run_progress"]
+__all__ = ["duration_ms", "run_progress", "trace_from_events"]

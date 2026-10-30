@@ -54,9 +54,9 @@ class SuggestionActuator(Protocol):
     async def actuate(self, suggestion: Suggestion) -> ActuationResult: ...
 
 
-def _proposal_markdown(s: Suggestion) -> str:
+def proposal_markdown(s: Suggestion) -> str:
     """The human-reviewable proposal — description + evidence + routing. Serves
-    as the GitHub issue/PR body AND the DB issue's rendered detail."""
+    as the GitHub issue/PR body AND the DB issue's rendered detail. Public (#297)."""
     ev = s.evidence or {}
     cluster = ev.get("cluster", {})
     lines = [
@@ -82,6 +82,9 @@ def _proposal_markdown(s: Suggestion) -> str:
     return "\n".join(lines) + "\n"
 
 
+_proposal_markdown = proposal_markdown  # the earlier private name; same function
+
+
 def _plan(s: Suggestion) -> dict[str, Any]:
     """Build the actuation plan. ``mode`` is ``pr`` when the suggestion carries a
     concrete diff, else ``issue`` (routed intent + evidence only)."""
@@ -89,7 +92,7 @@ def _plan(s: Suggestion) -> dict[str, Any]:
     plan: dict[str, Any] = {
         "mode": "pr" if has_diff else "issue",
         "title": f"[suggestion] {s.title}",
-        "body": _proposal_markdown(s),
+        "body": proposal_markdown(s),
     }
     if has_diff:  # a PR needs a branch + a file to carry the change
         plan["branch"] = f"suggest/{s.suggestion_id}"
@@ -271,4 +274,5 @@ __all__ = [
     "GitHubActuator",
     "SuggestionActuator",
     "get_actuator",
+    "proposal_markdown",
 ]
