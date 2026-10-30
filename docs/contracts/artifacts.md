@@ -10,7 +10,7 @@
 | `id` | sha256 of the bytes | **the identity**; two registrations of identical bytes are one row |
 | `kind` | `dataset` · `model` · `report` · `index` (descriptor literal, `src/cairn/core/dataflow/contract.py:234`) | what the bytes are |
 | `uri` | where the bytes were produced (`file://`, `s3://`, `hf://`, `stub://`) | may be a box-local path |
-| `durable_uri` | where they can still be read after the producing box is gone | set by the relay (`src/cairn/core/storage/artifact_bytes.py:13-17`) when `CAIRN_ARTIFACT_S3_BUCKET` is configured; empty otherwise |
+| `durable_uri` | where they can still be read after the producing box is gone | set by the relay (`src/cairn/core/storage/artifact_bytes.py:13-17`) when `CAIRN_ARTIFACT_S3_BUCKET` is configured; empty otherwise. A file is copied to `…/artifacts/<content_hash>/<name>`; a directory (an adapter dir) is copied as a tree under that root and `durable_uri` names the root (#286). The size cap counts the whole tree, and a tree that holds a symlink is not relayed |
 | `parents` | content ids (or URIs the registry could not map) of what produced it | lineage DAG; URIs are mapped to ids when known (`leg_executor.py:522-545`) |
 | `stats`, `data_schema`, `size_bytes`, `row_count` | facts from the producer | never re-derived control-side |
 | `producer_run_id`, `producer_job`, `account_id`, `created_at` | provenance | set at registration |
