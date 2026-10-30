@@ -3,6 +3,8 @@
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+### Added
+- Public names for an HTTP surface a `cairn.routers` provider mounts: `cairn.core.triggers.auth.oauth2_scheme` and `env_admin_username()`, `cairn.core.triggers.server.langfuse_trace_url()` and `run_failure_types()`, `cairn.core.triggers.router.user_trigger_overlay_dir()`, and `cairn.core.engine.triggers_presets.TRIGGER_PRESETS` / `SIGNATURE_SCHEMES`, listed in `docs/contracts/operators-and-packs.md`. The earlier private names stay as aliases for the same objects. (#297)
 
 ## [0.3.3] - 2026-10-30
 

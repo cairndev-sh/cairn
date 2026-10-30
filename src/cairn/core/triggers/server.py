@@ -121,11 +121,11 @@ def _run_template_ref(run) -> str:
     return run_template_ref(run)
 
 
-def _langfuse_trace_url(trace_id: str) -> Optional[str]:
+def langfuse_trace_url(trace_id: str) -> Optional[str]:
     """``{langfuse_base}/project/{id}/traces/{trace_id}`` deep-link (§D5,
     #248), mirroring ``core/console/api.py``'s ``ConsoleConfig`` build.
     ``None`` when tracing is off or Langfuse isn't configured — the console
-    hides the "Open trace in Langfuse" link in that case."""
+    hides the "Open trace in Langfuse" link in that case. Public (#297)."""
     if not trace_id:
         return None
     from cairn.core.provider_settings import get_settings
@@ -140,19 +140,25 @@ def _langfuse_trace_url(trace_id: str) -> Optional[str]:
     return f"{base}/trace/{trace_id}"
 
 
-async def _run_failure_types(ledger: Any, run: Any) -> list[str]:
+_langfuse_trace_url = langfuse_trace_url  # the earlier private name; same function
+
+
+async def run_failure_types(ledger: Any, run: Any) -> list[str]:
     """The failure-type tags for a run — the eval ledger's ``failure_labels``
     (#474) is the source of truth, since the diagnosis write path
     (``label_run_failures``) persists there and ``Run.failure_type`` is not
     populated by the current dispatcher path. Falls back to ``Run.failure_type``
     if it IS set (forward-compat: a future writer / a migrated row), unioned
-    so neither source is lost. Deduped, order-stable."""
+    so neither source is lost. Deduped, order-stable. Public (#297)."""
     labels = await ledger.get_failure_labels(run.id)
     types_ = [l.failure_type for l in labels]
     for t in (run.failure_type or []):
         if t not in types_:
             types_.append(t)
     return types_
+
+
+_run_failure_types = run_failure_types  # the earlier private name; same function
 
 
 def _artifact_kind(key: str, uri: str) -> str:

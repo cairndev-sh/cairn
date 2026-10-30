@@ -400,6 +400,13 @@ def _configured_user() -> Optional[tuple[str, str]]:
     return None
 
 
+def env_admin_username() -> Optional[str]:
+    """The deployment admin's username (``CAIRN_API_USER``), or ``None`` when no
+    admin password is configured. Public (#297); never returns the password hash."""
+    cfg = _configured_user()
+    return cfg[0] if cfg is not None else None
+
+
 def _verify_env_admin(username: str, password: str, ph) -> Optional[str]:
     """The legacy single-admin check (``CAIRN_API_USER``/``CAIRN_API_PASSWORD``).
 
@@ -593,8 +600,11 @@ async def identity_from_claims(claims: dict[str, Any]) -> dict[str, Any]:
 # instead of an auto-401, so ``require_auth`` can wave requests through when
 # auth is disabled (no ``CAIRN_JWT_SECRET``) — matching the middleware's
 # fail-open contract. The ``tokenUrl`` only feeds the OpenAPI "Authorize"
-# button; it's the same login route ``install_auth`` mounts.
-_oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token", auto_error=False)
+# button; it's the same login route ``install_auth`` mounts. Public (#297): a
+# ``cairn.routers`` provider takes the raw bearer token with
+# ``Depends(oauth2_scheme)`` to hand to ``caller_identity`` and its siblings.
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token", auto_error=False)
+_oauth2_scheme = oauth2_scheme  # the earlier private name; same object
 
 
 def require_auth(token: Annotated[Optional[str], Depends(_oauth2_scheme)]) -> Optional[str]:

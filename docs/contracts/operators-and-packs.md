@@ -65,6 +65,22 @@ D4, `src/cairn/core/pack/run_hooks.py`) · `cairn.routers`
 checks this list against the code). Adding a group is an architecture change (root
 `CLAUDE.md` §5).
 
+### Public Python names for a `cairn.routers` provider (#297)
+A router provider is a surface: it gets a `RouterDeps` (the app, runner, dispatcher, pipeline
+bridge, scheduler and review store the server was built with,
+`src/cairn/core/triggers/router_providers.py`) and may import these names. They follow
+`docs/compatibility.md` like any public name; each earlier private spelling stays as an alias
+for the same object.
+
+| Name | What it is |
+|---|---|
+| `cairn.core.triggers.auth.oauth2_scheme` | the bearer-token dependency: `Depends(oauth2_scheme)` yields the raw token (or `None`) for `caller_identity`, `require_auth` and `require_admin` |
+| `cairn.core.triggers.auth.env_admin_username()` | the deployment admin's username (`CAIRN_API_USER`, default `admin`), or `None` when no admin password is configured; never the hash |
+| `cairn.core.triggers.server.langfuse_trace_url(trace_id)` | a run's Langfuse deep link, or `None` when tracing is not configured |
+| `cairn.core.triggers.server.run_failure_types(ledger, run)` | a run's failure types: the eval ledger's failure labels, unioned with `Run.failure_type` |
+| `cairn.core.triggers.router.user_trigger_overlay_dir()` | where user trigger files live (`CAIRN_TRIGGERS_DIR`, default `~/.cairn/triggers`) |
+| `cairn.core.engine.triggers_presets.TRIGGER_PRESETS`, `SIGNATURE_SCHEMES` | the webhook-receiver preset catalogue and the signature schemes it verifies |
+
 ## Dependency rules (root `CLAUDE.md` §3, test-enforced)
 - Packs depend on core; **core never imports `cairn.packs.*`** nor an operator pack
   (`tests/core/test_architecture_boundaries.py`, `test_engine_registry.py`).
