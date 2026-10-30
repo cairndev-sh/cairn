@@ -568,6 +568,36 @@ async def pipeline_emit_event(event: str, output: dict, pipeline_id: str, step_i
         logger.warning("pipeline_emit_event failed for %r (step %s): %s", event, step_id, e)
 
 
+async def _settle_pipeline_outputs(store: Any, pipeline_id: str) -> None:
+    """ADR-0161 D3 — the bridge's ``_settle_outputs`` for a Temporal-owned pipeline,
+    through the same helpers: resolve the plan's ``outputs:`` from the done legs' runs,
+    store them, then emit them. Once: ``outputs`` is ``None`` until written here.
+    Never fails the mirror."""
+    from cairn.core.dispatch.leg_hooks import emit_pipeline_outputs, resolve_pipeline_outputs  # noqa: PLC0415
+    from cairn.core.dispatch.pipeline_bridge import reconstruct_step_output  # noqa: PLC0415
+
+    try:
+        async with _SECTIONS.hold(pipeline_id):
+            rec = await store.get(pipeline_id)
+            plan = getattr(rec, "plan", None)
+            if (rec is None or rec.status != "done" or rec.outputs is not None or plan is None
+                    or not (plan.outputs or plan.emits)):
+                return
+            runs = _dispatcher().store
+            steps: dict = {}
+            for sid, st in rec.step_state.items():
+                if st.status == "done" and st.run_id:
+                    run = await runs.get(st.run_id)
+                    if run is not None:
+                        steps[sid] = reconstruct_step_output(run)
+            rec.outputs, rec.outputs_errors = resolve_pipeline_outputs(
+                plan.outputs, inputs=rec.inputs, steps=steps)
+            await store.put(rec)
+        await emit_pipeline_outputs(rec)
+    except Exception:  # noqa: BLE001 — the read-model never fails the workflow
+        logger.warning("pipeline %s: settling outputs failed", pipeline_id, exc_info=True)
+
+
 @activity.defn(name="cairn.pipeline_mirror_state")
 async def pipeline_mirror_state(pipeline_id: str, step_state: dict, status: str) -> None:
     """Mirror the workflow's authoritative state into the ``pipelines`` read-model so the
@@ -644,6 +674,8 @@ async def pipeline_mirror_state(pipeline_id: str, step_state: dict, status: str)
                 await _audit_pipeline_terminal(rec)
             except Exception:  # noqa: BLE001 — audit never breaks the mirror
                 logger.debug("pipeline audit failed for %s", pipeline_id, exc_info=True)
+            if status == "done":
+                await _settle_pipeline_outputs(store, pipeline_id)
     except Exception as e:  # noqa: BLE001 — read-model, never fail the workflow on it
         logger.debug("pipeline_mirror_state failed for %s: %s", pipeline_id, e)
 

@@ -3,6 +3,9 @@
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+### Added
+- A pipeline's `outputs:` now mean something: they are resolved when it ends `done` (the `<step>.<field>` shorthand, or an expression in the `predicate:` grammar) and stored on its record (`outputs`, with `outputs_errors` for any that did not resolve). A pipeline-level `emits: <topic>` publishes them once, when it ends `done`, so another pipeline can start on them with a `kind: event` trigger. Before, `outputs:` was parsed and documented but never resolved, and only a step could emit, so no event could leave after a pipeline's last gate. (ADR-0161, #293)
+
 ### Fixed
 - A pipeline started by a `kind: event` trigger records who published the event: its `trigger` carries the bus message's `publisher` and `correlation_id`, so a pipeline started by another pipeline's `emits:` names that pipeline (`pipeline:<id>`). (#289)
 - A `finalizer:` whose operator a profile or policy gates (for example `compute/release`, risk `external_write`) can be approved or rejected while the pipeline finalizes. Before, `advance_step` and `reject_step` refused every step once the terminal intent was set, so the gated finalizer waited forever, the pipeline stayed `running`, and the machine it releases kept billing until its lease ran out. Approving runs the finalizer and the pipeline settles; rejecting settles it `failed`. Every other step stays refused during teardown. (#218)
