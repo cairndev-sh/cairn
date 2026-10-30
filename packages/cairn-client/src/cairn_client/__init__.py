@@ -34,6 +34,8 @@ _SURFACE: dict[str, tuple[str, str]] = {
     # contract test went red on main until the next PR's review caught it.
     "run_findings": ("get", "/runs/{run_id}/findings"),
     "pipeline_findings": ("get", "/pipelines/{pipeline_id}/findings"),
+    "stored_triggers": ("get", "/triggers/stored"),
+    "set_trigger_enabled": ("patch", "/triggers/stored/{trigger_id}"),
     "pending_approval": ("get", "/runs/{run_id}/pending-approval"),
     "trigger_manual": ("post", "/triggers/manual"),
     "packs": ("get", "/packs"),
@@ -280,6 +282,15 @@ class CairnClient:
 
     def pipeline(self, pipeline_id: str) -> dict:
         return self.request("get", f"/pipelines/{pipeline_id}")
+
+    # ── stored triggers (ADR-0160) ───────────────────────────────────────
+    def stored_triggers(self) -> dict:
+        """GET /triggers/stored — this workspace's trigger-store rows and their switch."""
+        return self.request("get", "/triggers/stored")
+
+    def set_trigger_enabled(self, trigger_id: str, enabled: bool) -> dict:
+        """PATCH /triggers/stored/{id} — enable or pause one trigger-store row."""
+        return self.request("patch", f"/triggers/stored/{trigger_id}", json={"enabled": enabled})
 
     def pipeline_findings(self, pipeline_id: str) -> dict:
         """GET /pipelines/{id}/findings — every non-pending step's findings,
@@ -574,6 +585,15 @@ class AsyncCairnClient:
 
     async def pipeline(self, pipeline_id: str) -> dict:
         return await self.request("get", f"/pipelines/{pipeline_id}")
+
+    # ── stored triggers (ADR-0160) ───────────────────────────────────────
+    async def stored_triggers(self) -> dict:
+        """GET /triggers/stored — see the sync twin."""
+        return await self.request("get", "/triggers/stored")
+
+    async def set_trigger_enabled(self, trigger_id: str, enabled: bool) -> dict:
+        """PATCH /triggers/stored/{id} — see the sync twin."""
+        return await self.request("patch", f"/triggers/stored/{trigger_id}", json={"enabled": enabled})
 
     async def pipeline_findings(self, pipeline_id: str) -> dict:
         """GET /pipelines/{id}/findings — every non-pending step's findings,

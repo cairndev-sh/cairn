@@ -1098,6 +1098,55 @@ def delete_preset_cmd(
                 fg="green" if (out or {}).get("deleted") else "yellow")
 
 
+@app.command(name="triggers")
+def triggers_cmd(
+    endpoint: Optional[str] = _EP,
+    token: Optional[str] = _TOK,
+    profile: Optional[str] = _PROF,
+):
+    """List this workspace's stored triggers (event, webhook) and whether each is on (ADR-0160)."""
+    with _session(endpoint, token, profile) as (ep, tok, _local):
+        with _api(ep, tok) as c:
+            out = _call(c.stored_triggers)
+    rows = (out or {}).get("triggers", [])
+    for t in rows:
+        state = "enabled" if t.get("enabled") else "paused"
+        typer.echo(f"{t.get('id', ''):48s} {t.get('source', ''):8s} {state:8s} {t.get('declared_by') or 'by hand'}")
+    if not rows:
+        typer.echo("(no stored triggers in this workspace)")
+
+
+def _set_trigger(trigger_id: str, enabled: bool, endpoint, token, profile) -> None:
+    with _session(endpoint, token, profile) as (ep, tok, _local):
+        with _api(ep, tok) as c:
+            out = _call(c.set_trigger_enabled, trigger_id, enabled)
+    state = "enabled" if (out or {}).get("enabled") else "paused"
+    typer.secho(f"{(out or {}).get('id', trigger_id)} {state}; applies {(out or {}).get('applies', 'now')}",
+                fg="green" if enabled else "yellow")
+
+
+@app.command(name="enable-trigger")
+def enable_trigger_cmd(
+    trigger_id: str = typer.Argument(..., help="a stored trigger id, from `cairn remote triggers`"),
+    endpoint: Optional[str] = _EP,
+    token: Optional[str] = _TOK,
+    profile: Optional[str] = _PROF,
+):
+    """Turn a stored trigger on: a declared trigger is paused until a person does (ADR-0131)."""
+    _set_trigger(trigger_id, True, endpoint, token, profile)
+
+
+@app.command(name="disable-trigger")
+def disable_trigger_cmd(
+    trigger_id: str = typer.Argument(..., help="a stored trigger id, from `cairn remote triggers`"),
+    endpoint: Optional[str] = _EP,
+    token: Optional[str] = _TOK,
+    profile: Optional[str] = _PROF,
+):
+    """Pause a stored trigger: it starts nothing until it is enabled again."""
+    _set_trigger(trigger_id, False, endpoint, token, profile)
+
+
 @app.command()
 def launch(
     ref: str = typer.Argument(..., help="installed pipeline ref, e.g. training/e2e-finetune"),
