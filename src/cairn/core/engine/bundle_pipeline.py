@@ -191,6 +191,11 @@ class PipelinePlan(BaseModel):
     #: property of the pipeline, and a snapshotted plan must carry the terms the
     #: run was admitted under even if the def is edited afterwards.
     governance: dict[str, Any] = Field(default_factory=dict)
+    #: ADR-0161 — the def's ``outputs:`` and pipeline-level ``emits:``, resolved and
+    #: published when the pipeline ends ``done``. In the record's JSON blob, so rows
+    #: written before this hydrate to empty.
+    outputs: dict[str, Any] = Field(default_factory=dict)
+    emits: Optional[str] = None
     #: #1155 — loop name → its authored definition (serialized `PipelineStep`).
     #: The plan holds only iteration 1; the bridge appends later iterations, so
     #: it needs the spec (bound, `until`, `on_exhausted`, body) to decide.

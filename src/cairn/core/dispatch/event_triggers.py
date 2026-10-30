@@ -96,6 +96,10 @@ class EventTriggerBridge:
 
         payload = getattr(msg, "payload", None)
         event = payload if isinstance(payload, dict) else {"value": payload}
+        # #289 — who published the event goes on the started pipeline's record, so a
+        # pipeline started by another pipeline's `emits:` names it (`pipeline:<id>`).
+        source = {k: v for k in ("publisher", "correlation_id")
+                  if (v := getattr(msg, k, None))}
         for row, spec in rows:
             inputs = map_inputs(event, dict(spec.run.input or {}))
             token = set_current_workspace(row.workspace_id)
@@ -103,7 +107,7 @@ class EventTriggerBridge:
                 rec = await launch_ref(
                     spec.run.template, inputs, dispatcher=self.dispatcher,
                     workspace_id=row.workspace_id,
-                    trigger={"source": "event", "topic": topic, "trigger_id": row.id},
+                    trigger={"source": "event", "topic": topic, "trigger_id": row.id, **source},
                 )
                 logger.info("event %s started %s (trigger %s)", topic,
                             getattr(rec, "pipeline_id", None) or getattr(rec, "id", None), row.id)

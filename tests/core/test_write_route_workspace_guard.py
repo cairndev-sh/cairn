@@ -155,6 +155,7 @@ GUARDED = [
     ("POST", "/triggers/scheduled", {"json": {}}, 400),
     ("PATCH", "/triggers/scheduled/sched-x", {"json": {"enabled": False}}, 404),
     ("DELETE", "/triggers/scheduled/sched-x", {}, 404),
+    ("PATCH", "/triggers/stored/trig-x", {"json": {"enabled": True}}, 404),  # ADR-0160
     ("POST", "/registry/sync-workflows", {}, 200),
     ("POST", "/registry/enable", {"json": {"ref": "x/y"}}, 404),
     ("POST", "/registry/disable", {"json": {"ref": "x/y"}}, 404),
