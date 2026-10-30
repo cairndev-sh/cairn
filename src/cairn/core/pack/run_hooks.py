@@ -66,8 +66,11 @@ and their payloads (every payload also carries ``"event"``):
   (ADR-0161), so a provider that reads the pipeline store sees both. It fires
   however the pipeline ended: its last leg, a gate, a deferred failure, a cancel,
   a ``finalizer:`` settling. Notify-only: it cannot refuse, and a provider failure
-  is logged, never raised into the bridge. Not fired for a Temporal-owned pipeline
-  (its activities fire no run hooks).
+  is logged, never raised into the bridge. A Temporal-owned pipeline's ``done`` /
+  ``failed`` is not announced (its activities fire no run hooks); a cancel the
+  bridge applies to one is. Delivery is not durable (a crash between the terminal
+  write and the hook loses it) and a later process may announce a pipeline again,
+  so a provider should be idempotent.
 - ``run.events_ingested`` — ``run_id``, ``events`` (the accepted batch, as posted),
   ``store``, ``pipeline_store``: a worker's report batch was appended through
   ``POST /runs/{id}/events/ingest`` (a listener reacts to, e.g., a ``divergence``).

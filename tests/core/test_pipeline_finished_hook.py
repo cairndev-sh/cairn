@@ -203,3 +203,28 @@ async def test_a_failure_escaping_fire_is_contained_by_the_bridge(monkeypatch, n
     rec2 = await _start(bridge2, _prep_then("train"))
     await _complete(bridge2, disp2, "run_1", topic="run.failed")
     assert (await bridge2.store.get(rec2.pipeline_id)).status == "failed"
+
+
+async def test_with_an_audit_sink_bound_the_hook_still_fires_once(monkeypatch, tmp_path):
+    """The audit row's own once-guard and the hook's are independent: with a sink bound
+    both are written, each once."""
+    from operator_audit_store.operators.audit_store import AuditStoreOp
+
+    log = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("CAIRN_AUDIT_LOG", str(log))
+    audit_mod.reset_audit_sink()
+    monkeypatch.setattr(audit_mod, "_CACHE", AuditStoreOp())
+    try:
+        bridge, disp = _bridge()
+        rec_hook = _Recorder(bridge.store)
+        _install(monkeypatch, rec_hook)
+        rec = await _start(bridge, _prep_then("train"))
+        await _complete(bridge, disp, "run_1", output={"staged_dataset_uri": "s3://s"})
+        await _complete(bridge, disp, "run_2")
+        await bridge._advance(rec.pipeline_id)
+
+        assert [s["status"] for s in rec_hook.seen] == ["done"]
+        rows = [r for r in log.read_text().splitlines() if '"pipeline.finished"' in r]
+        assert len(rows) == 1
+    finally:
+        audit_mod.reset_audit_sink()
