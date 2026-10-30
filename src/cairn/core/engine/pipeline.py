@@ -229,7 +229,13 @@ class PipelineDef(BaseModel):
     #: the domain: teacher vs student, pre- vs post-hardening, base vs tuned.
     #: `{"before": <leg id>, "after": <leg id>}`; both must name real legs.
     compare: dict[str, str] = Field(default_factory=dict)
+    #: ADR-0161 — this pipeline's results, ``{name: expression}``, resolved when it
+    #: ends ``done`` (the ``<step>.<field>`` shorthand of ``show:``, or a predicate-
+    #: grammar expression over ``steps`` and ``input``).
     outputs: dict[str, Any] = Field(default_factory=dict)
+    #: ADR-0161 D2 — a topic the resolved ``outputs`` are published on, once, when the
+    #: pipeline ends ``done``. Outside the identity at its default (as a step's is).
+    emits: Optional[str] = None
     governance: dict[str, Any] = Field(default_factory=dict)
     #: The LEGACY spelling of ``triggers:`` (#1159). Kept, accepted and never
     #: removed; parsed into the same declarations (ADR-0101 S7, #1987). Only
@@ -328,6 +334,7 @@ def parse_pipeline_def(text: str, *, pack: str, source: str = "<string>") -> Pip
     _validate_on(d, source=source)
     _validate_triggers(d, source=source)
     _validate_compare(d, source=source)
+    _validate_outputs(d, source=source)
     try:
         dataset_expectations(d)
     except ValueError as e:
@@ -388,6 +395,8 @@ _DISPLAY_TOP: tuple[str, ...] = ("outcome", "suite", "compare")
 _DISPLAY_STEP: tuple[str, ...] = ("label",)
 #: #2605 — step fields that join the identity only when an author sets them.
 _STEP_DEFAULTS_OUTSIDE_IDENTITY: dict[str, Any] = {"trigger": "auto", "emits": None}
+#: ADR-0161 — the same for the pipeline-level ``emits:``.
+_TOP_DEFAULTS_OUTSIDE_IDENTITY: dict[str, Any] = {"emits": None}
 #: …and on an INPUT spec (D10). These needed no model change — `inputs` is an
 #: open `dict[str, Any]` — which is exactly how they were missed at first: they
 #: ride INSIDE `inputs`, which is part of the identity dump, so annotating a
@@ -419,6 +428,9 @@ def _identity_view(dump: dict[str, Any]) -> dict[str, Any]:
     before it shipped. Recursion has no depth limit, so nesting cannot outrun it.
     """
     out = {k: v for k, v in dump.items() if k not in _DISPLAY_TOP}
+    for k, default in _TOP_DEFAULTS_OUTSIDE_IDENTITY.items():
+        if k in out and out[k] == default:
+            del out[k]
 
     # `inputs` is `{key: spec}`; the display keys sit inside each SPEC.
     ins = out.get("inputs")
@@ -452,6 +464,36 @@ def _identity_view(dump: dict[str, Any]) -> dict[str, Any]:
     if "steps" in out:
         out["steps"] = _steps(out["steps"])
     return out
+
+
+def _validate_outputs(d: "PipelineDef", *, source: str) -> None:
+    """ADR-0161 — a pipeline-level ``emits:`` is a domain topic, and every ``outputs:``
+    expression compiles, so a typo fails at load and never at the end of a run."""
+    if d.emits is not None:
+        if not _EVENT_TOPIC.fullmatch(d.emits) or d.emits.startswith("run."):
+            raise PipelineDefError(
+                f"{source}: pipeline {d.name!r} emits {d.emits!r}: an event topic is letters, "
+                f"digits and `._:-`, and `run.*` is reserved for the engine")
+    from cairn.core.engine.expr import ExprError, compile_predicate  # noqa: PLC0415
+
+    for name, raw in (d.outputs or {}).items():
+        if not isinstance(raw, str) or is_output_shorthand(raw):
+            continue
+        try:
+            compile_predicate(raw, source=f"{source}: outputs.{name}")
+        except ExprError as e:
+            raise PipelineDefError(f"{source}: outputs.{name}: {e}") from None
+
+
+#: ADR-0161 — ``<step>.<field>[.<field>…]``, the ``show:`` spelling, resolved with the
+#: ``findings`` fallback; anything else is an expression (``steps.…``, ``input.…``,
+#: functions, filters).
+_OUTPUT_SHORTHAND = re.compile(r"[A-Za-z_][\w-]*(?:\.[\w-]+)+")
+
+
+def is_output_shorthand(raw: str) -> bool:
+    raw = raw.strip()
+    return bool(_OUTPUT_SHORTHAND.fullmatch(raw)) and raw.split(".", 1)[0] not in ("steps", "input")
 
 
 def _validate_compare(d: "PipelineDef", *, source: str) -> None:
@@ -549,7 +591,7 @@ def _validate_triggers(d: PipelineDef, *, source: str) -> None:
         raise PipelineDefError(f"{source}: {e}") from None
     # ADR-0131 D6 — a pipeline that starts on a topic one of its own legs emits would
     # start the next run from every run. Refused here; longer cycles are not detected.
-    emitted = {s.emits for s in _all_steps(d.steps) if s.emits}
+    emitted = {s.emits for s in _all_steps(d.steps) if s.emits} | ({d.emits} if d.emits else set())
     for decl in decls:
         if getattr(decl, "kind", "") == "event" and decl.topic in emitted:
             raise PipelineDefError(
@@ -1196,6 +1238,8 @@ def plan_pipeline(d: PipelineDef) -> PipelinePlan:
         # #1688 — governance rides the plan into the durable record; dropping it
         # here is what left `budget:`/`series:`/`approvers:` decorative.
         governance=dict(d.governance or {}),
+        outputs=dict(d.outputs or {}),   # ADR-0161
+        emits=d.emits,
         loops=loops,
         loop_tail=loop_tail,
         steps=[

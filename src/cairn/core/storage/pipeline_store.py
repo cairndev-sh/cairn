@@ -129,6 +129,12 @@ class PipelineRecord(BaseModel):
     #: have needed a full scan of every terminal pipeline at every boot.
     #: Stored inside the record's JSON blob ⇒ no migration; older rows read "".
     terminal_intent: str = ""
+    #: ADR-0161 — the plan's ``outputs:``, resolved once when the pipeline ended
+    #: ``done``; ``None`` until then (and for a pipeline that declares none).
+    #: ``outputs_errors`` names each output that did not resolve. JSON blob, no
+    #: migration.
+    outputs: Optional[dict[str, Any]] = None
+    outputs_errors: dict[str, str] = Field(default_factory=dict)
     #: #222 — the W3C trace context of the short ``cairn.pipeline`` root span opened
     #: at launch (``{"traceparent": "00-<trace>-<span>-<flags>"}``). Every leg, gate
     #: and flow-stage span starts as its child, in whichever request or process

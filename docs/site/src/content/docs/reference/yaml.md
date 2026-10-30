@@ -57,7 +57,8 @@ steps:
 | `description` | string | Shown in the catalog and in `cairn pipeline show`. |
 | `visibility` | `public` · `internal` · `deprecated` | Default `public`. Curation for catalogs; `cairn pipeline ls` lists every installed pipeline. |
 | `inputs` | map | The launch inputs: `{name: {type, default, description}}`. See below. |
-| `outputs` | map | Names this pipeline's results: `{name: <step>.<field>}`. |
+| `outputs` | map | This pipeline's results, resolved when it ends `done` and shown on its record (`cairn remote pipeline <id>`): `{name: <step>.<field>}`, or an expression in the `predicate:` grammar over `steps` and `input`, for example `join('', ['dataset:', steps.prepare.findings.dataset_versions[0]])`. A value that does not resolve is `null`, with its reason in `outputs_errors`; it never fails the pipeline. |
+| `emits` | string | A topic the resolved `outputs` are published on, once, when the pipeline ends `done` (never on `failed` or `cancelled`). Another pipeline starts on it with a `kind: event` trigger and maps `$event.<output name>` to its inputs. A pipeline cannot start on a topic it emits. |
 | `governance` | map | `budget: {usd: N}`, the spending cap for the series; `series`, the series name the budget belongs to; `estimated_usd`, what each flow leg reserves before it starts; `approvers`, who may decide person gates that don't name their own. The deployment's profile can set a default and a ceiling for `budget.usd`; a pipeline can only lower it. See [Cost and budgets](/concepts/cost/). |
 | `triggers` | list | How the pipeline starts without you. See [Triggers](#triggers). |
 | `outcome` | string | What a person achieves with it, in their words. The catalog groups on it. |
