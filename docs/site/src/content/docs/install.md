@@ -16,7 +16,7 @@ sudo. Choose extras or pin a version with environment variables:
 
 ```bash
 curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_EXTRAS=hello,rag sh
-curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_VERSION=0.3.2 sh
+curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_VERSION=0.3.3 sh
 ```
 
 | Variable | Default | |
@@ -50,7 +50,7 @@ cairn ls            # the installed packs and what they contribute
 
 Re-run the installer, or `uv tool upgrade cairndev`. For a server:
 `git pull && docker compose up -d --build` in `deploy/light`, or
-`helm upgrade … --version 0.3.2` for the chart.
+`helm upgrade … --version 0.3.3` for the chart.
 
 Single-node and sign-in-off deployments, where everything belongs to the
 `default` workspace and account, are unaffected by 0.2.0's workspace, tenant
@@ -237,7 +237,7 @@ secret and an admin password:
 docker run -d -p 9090:9090 \
   -e CAIRN_JWT_SECRET="$(openssl rand -hex 32)" -e CAIRN_API_PASSWORD=<choose one> \
   -e CAIRN_STORAGE=sqlite:////data/cairn.db -v cairn-data:/data \
-  ghcr.io/cairndev-sh/cairn-engine:0.3.2
+  ghcr.io/cairndev-sh/cairn-engine:0.3.3
 curl -s http://localhost:9090/healthz
 cairn remote login --endpoint http://localhost:9090 -u admin
 ```
@@ -247,7 +247,7 @@ port answers nothing. For a keyless try-out on your own machine, bind it explici
 and publish on the host's loopback only:
 
 ```bash
-docker run --rm -p 127.0.0.1:9090:9090 -e CAIRN_TRIGGER_HOST=0.0.0.0 ghcr.io/cairndev-sh/cairn-engine:0.3.2
+docker run --rm -p 127.0.0.1:9090:9090 -e CAIRN_TRIGGER_HOST=0.0.0.0 ghcr.io/cairndev-sh/cairn-engine:0.3.3
 ```
 
 Without `CAIRN_STORAGE` runs are kept in memory and lost when the container stops.
@@ -277,7 +277,7 @@ The same chart is published as an OCI artifact, so you can install a released
 version without cloning the repository:
 
 ```bash
-helm upgrade --install cairn oci://ghcr.io/cairndev-sh/charts/cairn --version 0.3.2 -n cairn -f my-values.yaml
+helm upgrade --install cairn oci://ghcr.io/cairndev-sh/charts/cairn --version 0.3.3 -n cairn -f my-values.yaml
 ```
 
 Then `kubectl -n cairn rollout status deploy/cairn-server` and
