@@ -3,6 +3,9 @@
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+### Added
+- A stored trigger (event or webhook) can be turned on or paused: `GET /triggers/stored` and `PATCH /triggers/stored/{id}`, `cairn remote triggers`, `enable-trigger <id>` and `disable-trigger <id>`, and `CairnClient.stored_triggers()` / `set_trigger_enabled()`. A trigger a pipeline declares is written paused (ADR-0131), and until now nothing could turn it on. Each change is audited with the caller. (ADR-0160, #290)
+
 ### Fixed
 - A pipeline started by a `kind: event` trigger records who published the event: its `trigger` carries the bus message's `publisher` and `correlation_id`, so a pipeline started by another pipeline's `emits:` names that pipeline (`pipeline:<id>`). (#289)
 - A `finalizer:` whose operator a profile or policy gates (for example `compute/release`, risk `external_write`) can be approved or rejected while the pipeline finalizes. Before, `advance_step` and `reject_step` refused every step once the terminal intent was set, so the gated finalizer waited forever, the pipeline stayed `running`, and the machine it releases kept billing until its lease ran out. Approving runs the finalizer and the pipeline settles; rejecting settles it `failed`. Every other step stays refused during teardown. (#218)
