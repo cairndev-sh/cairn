@@ -63,10 +63,13 @@ from cairn.core.engine.triggers_spec import (
 logger = logging.getLogger("cairn.core.triggers.router")
 
 
-def _user_trigger_overlay_dir() -> Path:
+def user_trigger_overlay_dir() -> Path:
     """Layer ② — the user-overlay file dir (hand / git authored). Override with
-    ``CAIRN_TRIGGERS_DIR``; defaults to ``~/.cairn/triggers``."""
+    ``CAIRN_TRIGGERS_DIR``; defaults to ``~/.cairn/triggers``. Public (#297)."""
     return Path(os.path.expanduser(getenv("CAIRN_TRIGGERS_DIR", "").strip() or "~/.cairn/triggers"))
+
+
+_user_trigger_overlay_dir = user_trigger_overlay_dir  # the earlier private name; same function
 
 
 def _store_trigger_specs() -> list[TriggerSpec]:
@@ -386,7 +389,7 @@ class TriggerRouter:
         specs: list[TriggerSpec] = []
         for pack in get_packs():
             specs.extend(getattr(pack, "trigger_specs", []) or [])
-        specs.extend(load_trigger_specs(_user_trigger_overlay_dir()))
+        specs.extend(load_trigger_specs(user_trigger_overlay_dir()))
         # #209 — a stored row knows the workspace it was created in; last-wins by
         # path like the specs themselves, so the workspace follows the winning spec.
         workspaces: dict[str, str] = {}
