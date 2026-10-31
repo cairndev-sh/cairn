@@ -165,6 +165,16 @@ The same governed core is driven from two places in this repository:
 | [Install and deploy](https://docs.cairndev.sh/install/) | Install, Docker Compose, Helm, sign-in |
 | [Operators catalog](https://docs.cairndev.sh/reference/operators/) | Every shipped operator, by domain |
 
+## Contributing
+
+Start with [`CONTRIBUTING.md`](./CONTRIBUTING.md): the dev loop, where each kind of test
+lives, and the DCO sign-off every commit needs. Self-contained starting points are
+labelled [`good first issue`](https://github.com/cairndev-sh/cairn/labels/good%20first%20issue).
+
+<a href="https://github.com/cairndev-sh/cairn/graphs/contributors">
+  <img alt="Contributors" src="https://contrib.rocks/image?repo=cairndev-sh/cairn">
+</a>
+
 ## Status & license
 
 cairn is in **early access** and under active development. The API and command
