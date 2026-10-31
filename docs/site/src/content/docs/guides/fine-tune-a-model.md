@@ -22,6 +22,9 @@ What you get:
 - **Promotion only after a person decides,** with the losses on the card.
 - **Every step recorded.** You can read the findings and replay the run later.
 
+To try the same governance on one machine first, with no cloud account, see
+[Fine-tune with governance on one machine](/guides/fine-tune-on-one-machine/).
+
 ## The layout
 
 | Machine | Runs | Installs |
