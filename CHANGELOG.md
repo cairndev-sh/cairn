@@ -3,6 +3,8 @@
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+### Added
+- Public names over a run's record: `cairn.core.run_progress.trace_from_events()` and `duration_ms()`, `cairn.core.eval.actuation.proposal_markdown()` and `cairn.core.demo_seed.demo_inputs_for()`, listed with `run_template_ref()` in `docs/contracts/pipelines-and-runs.md`. The earlier private names stay as aliases for the same functions. (#297)
 
 ## [0.3.3] - 2026-10-30
 
