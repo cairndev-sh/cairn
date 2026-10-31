@@ -40,8 +40,9 @@ from cairn.core.compute_lifecycle import (
     sweep_expired,
 )
 
+# ADR-0097
 app = typer.Typer(
-    help="Governed compute boxes — status + the expired-lease sweep (ADR-0097).",
+    help="Governed compute boxes — status + the expired-lease sweep.",
     no_args_is_help=True,
 )
 _console = Console()

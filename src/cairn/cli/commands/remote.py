@@ -825,6 +825,7 @@ def _resume(run_id: str, decision: str, approver: str, endpoint, token, profile)
     typer.echo(json.dumps(out, indent=2))
 
 
+# ADR-0034; the interactive HITL loop: #53
 @app.command()
 def approve(
     run_id: str = typer.Argument(..., help="the paused run id (status awaiting_approval)"),
@@ -840,10 +841,10 @@ def approve(
     token: Optional[str] = _TOK,
     profile: Optional[str] = _PROF,
 ):
-    """Approve a run paused at an operation-gate HITL interrupt (ADR-0034).
+    """Approve a run paused at an operation-gate HITL interrupt.
 
     With ``--watch``, stream the run and prompt (or auto-decide) at each pause —
-    the interactive HITL loop (#53). Without it, post an immediate approval.
+    the interactive HITL loop. Without it, post an immediate approval.
     """
     if on_timeout not in ("detach", "reject", "abort"):
         _fail("--on-timeout must be detach | reject | abort")
@@ -856,12 +857,14 @@ def approve(
     _resume(run_id, "approve", approver, endpoint, token, profile)
 
 
+# the two forms: ADR-0156 D6
 @app.command()
 def reject(
     target: str = typer.Argument(
         ..., help="a paused run id (one argument), or a pipeline id (pl_…) followed by the gate step"),
+    # ADR-0156
     step: Optional[str] = typer.Argument(
-        None, help="the gate step awaiting approval — names a pipeline gate to reject (ADR-0156)"),
+        None, help="the gate step awaiting approval — names a pipeline gate to reject"),
     reason: Optional[str] = typer.Option(
         None, "--reason", help="why — required with a pipeline gate step; recorded on the step, the review and the event"),
     approver: str = typer.Option("cli-user", "--approver"),
@@ -869,7 +872,7 @@ def reject(
     token: Optional[str] = _TOK,
     profile: Optional[str] = _PROF,
 ):
-    """Reject a gate. Two forms (ADR-0156 D6):
+    """Reject a gate. Two forms:
 
     ``reject <run_id>`` rejects a run paused at an operation-gate HITL interrupt (skips the
     gated op). ``reject <pipeline_id> <step> --reason TEXT`` rejects a pipeline gate: the
@@ -1098,13 +1101,14 @@ def delete_preset_cmd(
                 fg="green" if (out or {}).get("deleted") else "yellow")
 
 
+# ADR-0160
 @app.command(name="triggers")
 def triggers_cmd(
     endpoint: Optional[str] = _EP,
     token: Optional[str] = _TOK,
     profile: Optional[str] = _PROF,
 ):
-    """List this workspace's stored triggers (event, webhook) and whether each is on (ADR-0160)."""
+    """List this workspace's stored triggers (event, webhook) and whether each is on."""
     with _session(endpoint, token, profile) as (ep, tok, _local):
         with _api(ep, tok) as c:
             out = _call(c.stored_triggers)
@@ -1125,6 +1129,7 @@ def _set_trigger(trigger_id: str, enabled: bool, endpoint, token, profile) -> No
                 fg="green" if enabled else "yellow")
 
 
+# ADR-0131
 @app.command(name="enable-trigger")
 def enable_trigger_cmd(
     trigger_id: str = typer.Argument(..., help="a stored trigger id, from `cairn remote triggers`"),
@@ -1132,7 +1137,7 @@ def enable_trigger_cmd(
     token: Optional[str] = _TOK,
     profile: Optional[str] = _PROF,
 ):
-    """Turn a stored trigger on: a declared trigger is paused until a person does (ADR-0131)."""
+    """Turn a stored trigger on: a declared trigger is paused until a person does."""
     _set_trigger(trigger_id, True, endpoint, token, profile)
 
 

@@ -598,6 +598,7 @@ def _drop_artifact(
     typer.echo(f"created {kind}: {pack_root.name}/{rel}")
 
 
+# one concept, flow: ADR-0084; no templates/ dir in a scaffolded pack: #1511
 @app.command("template")
 def init_template(
     name: str = typer.Argument(..., help="Template name (snake_case)."),
@@ -605,9 +606,9 @@ def init_template(
 ) -> None:
     """Add a minimal ``flow: prompt`` flow stub to the current pack.
 
-    Writes into ``flows/`` — ONE concept: FLOW (ADR-0084). ``templates/`` is
+    Writes into ``flows/`` — one concept: flow. ``templates/`` is
     the retired alias, and a pack scaffolded by `cairn init pack` no longer
-    has that directory (#1511).
+    has that directory.
     """
     _drop_artifact(
         "flow", "flows", name, ".md", _render_flow, force=force,

@@ -21,8 +21,9 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
+# #109
 app = typer.Typer(
-    help="Inspect packs: the UI contract behind every surface (#109).",
+    help="Inspect packs: the UI contract behind every surface.",
     no_args_is_help=True,
 )
 console = Console()
@@ -140,13 +141,14 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - parity wit
     return 0
 
 
+# #1105
 @app.command("check")
 def check_cmd(
     json_out: bool = typer.Option(
         False, "--json", help="Emit findings as JSON (for CI).",
     ),
 ) -> None:
-    """Fail on manifest ↔ code drift in operator packs (#1105).
+    """Fail on manifest ↔ code drift in operator packs.
 
     Every operator is declared twice — in code (`@register_operator` + the
     Operation class) and in `pack.toml`. They drift, and because the manifest is
@@ -344,6 +346,7 @@ def wire_pack_into_pyproject(text: str, *, member: str, dist: str) -> tuple[str,
     return out, changes
 
 
+# #1545
 @app.command("add")
 def add_cmd(
     pack_dir: str = typer.Argument(
@@ -353,7 +356,7 @@ def add_cmd(
         help="Don't touch pyproject.toml — print the CAIRN_PACK_PATH export "
              "that makes this pack loadable with no install at all."),
 ) -> None:
-    """Make a scaffolded pack discoverable by the engine (#1545).
+    """Make a scaffolded pack discoverable by the engine.
 
     Two modes, and `--dev` is the one to reach for first:
 
@@ -448,6 +451,7 @@ def add_cmd(
     console.print(f"[dim]Then confirm:[/] [bold]cairn ls {dist}[/]")
 
 
+# #1254, ADR-0087 (the drift guard: D6)
 def build_cmd(
     target: str = typer.Argument(
         ..., help="Pipeline class: `module:Class` or `path/to/file.py:Class`.",
@@ -457,12 +461,12 @@ def build_cmd(
         help="Pack directory to write (default: ./<pack-name>).",
     ),
 ) -> None:
-    """Compile a ``@pipeline`` class to its pack records (#1254, ADR-0087).
+    """Compile a ``@pipeline`` class to its pack records.
 
     The class is a VIEW — this writes ``pipelines/*.yaml`` + ``flows/*.yaml``,
     and for lifted ``@step`` defs the private-op module plus wheel wiring
     (``pack.toml`` / ``pyproject.toml`` only when absent, never clobbering).
-    Prints the content hash to pin launches with (D6 drift guard).
+    Prints the content hash to pin launches with (the drift guard).
     """
     # optional dependency — cairn-sdk is a sibling workspace member; a bare
     # engine install may not carry it
@@ -524,6 +528,7 @@ def build_cmd(
     _warn_shadowing_authoring_file(compiled, dest)
 
 
+# #1539; the doctor drift check: #1105
 @app.command("sync")
 def sync_cmd(
     pack_dir: str = typer.Argument(
@@ -531,7 +536,7 @@ def sync_cmd(
     check: bool = typer.Option(
         False, "--check", help="Report drift without writing (exit 1 on drift)."),
 ) -> None:
-    """Regenerate operator metadata from the classes (#1539).
+    """Regenerate operator metadata from the classes.
 
     The Operation class is the single source of truth for the whole
     ``[operator."<n>"]`` table — identity, schemas, lifecycle flags, risk,
@@ -539,7 +544,7 @@ def sync_cmd(
     ``sync`` walks the pack's ``src/<package>/``, derives each table, and
     rewrites only the stale/missing blocks (comments between tables
     survive). ``--check`` is the CI form of the same comparison; the doctor
-    drift check (#1105 + governance fields) covers the installed tree.
+    drift check (manifest drift + governance fields) covers the installed tree.
     """
     from cairn.core.operator.manifest_sync import check_pack, sync_pack  # noqa: PLC0415 — heavy walk, load on use
 

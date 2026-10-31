@@ -52,8 +52,9 @@ from cairn.core.connections import (
 from cairn.core.oauth import AuthSession, OAuthBrokerError, get_oauth_broker
 from cairn.services.mcp import presets
 
+# #68
 app = typer.Typer(
-    help="Manage typed infra connections (model APIs, compute, MCP) (#68). "
+    help="Manage typed infra connections (model APIs, compute, MCP). "
     "`cairn connect presets` lists the shipped MCP connector presets "
     "(github, slack, notion); add one with `cairn connect add --preset <name>`.",
     no_args_is_help=True,

@@ -46,7 +46,8 @@ def doctor(
     ),
     values: Path = typer.Option(
         None, "--values", "-f",
-        help="Validate a HELM VALUES file instead of a .env (ADR-0104 D4). The values "
+        # chart deploy: ADR-0104 D4
+        help="Validate a HELM VALUES file instead of a .env. The values "
              "are rendered into the effective environment and run through the SAME "
              "checks; --env and --profile are ignored.",
     ),

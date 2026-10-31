@@ -30,16 +30,18 @@ from cairn.core.dataflow.gate_split import (
     split_at_gates,
 )
 
+# #1079
 app = typer.Typer(
-    help="Inspect flows; split them at in-flow approval gates (#1079).",
+    help="Inspect flows; split them at in-flow approval gates.",
     no_args_is_help=True,
 )
 console = Console()
 
 
+# #1133, ADR-0084 D2
 @app.command("ls")
 def ls_cmd() -> None:
-    """List every flow — ALL THREE KINDS (#1133, ADR-0084 D2).
+    """List every flow — all three kinds.
 
     `flows/` holds data/ml as `.yaml` (stage body) and agentic as `.md`
     (frontmatter + prose). `templates/` is still searched as the transition

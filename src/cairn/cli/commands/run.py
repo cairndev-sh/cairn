@@ -730,6 +730,8 @@ def _start_governed_from_file(template_ref: str, input_path: str, **kw: Any) -> 
 # ─── entry points ───────────────────────────────────────────────────
 
 
+# Help text refs: every start is a one-leg pipeline (ADR-0105 D1); the command owns
+# that pipeline (#1702); the dev loop writes no run row (#2128).
 def cmd(
     trigger_file: str = typer.Argument(
         ...,
@@ -765,26 +767,29 @@ def cmd(
     ),
     mock: bool = typer.Option(
         False, "--mock",
+        # in-process, no run row: #2128
         help="Direct-template mode: stub LLM responses and run operators that "
              "declare supports_mock through .mock(); refuse before execution if "
              "any reachable operator lacks mock support. "
              "Runs IN-PROCESS: no pipeline record, no run row, not a governed "
-             "pipeline (#2128). Cannot be combined with --series.",
+             "pipeline. Cannot be combined with --series.",
     ),
     mode: str = typer.Option(
         "live", "--mode",
+        # the Playground sandbox: ADR-0101 D3 / ADR-0073
         help="Direct-template mode: 'live' (default, unchanged) or 'sandbox' — "
-             "the Playground sandbox (ADR-0101 D3 / ADR-0073): write-class "
+             "the Playground sandbox: write-class "
              "operators are stubbed while side-effect-free reads run for real, "
              "so the metrics are real and the spend is ~0. Narrower than --mock, "
              "which stubs everything.",
     ),
     interactive: bool = typer.Option(
         False, "--interactive", "-I",
+        # in-process, no run row: #2128
         help="Direct-template mode: at each governed HITL gate, prompt "
              "approve/reject in the terminal and resume in-process (no server). "
              "Runs IN-PROCESS: no pipeline record, no run row, not a governed "
-             "pipeline (#2128). Cannot be combined with --series.",
+             "pipeline. Cannot be combined with --series.",
     ),
     detach: bool = typer.Option(
         False, "--detach",
@@ -794,39 +799,41 @@ def cmd(
     ),
     from_run: Optional[str] = typer.Option(
         None, "--from",
-        help="Run lineage (#989): the id of the run this one is derived from, so "
+        # run lineage: #989
+        help="Run lineage: the id of the run this one is derived from, so "
              "'eval → fix → finetune → promote' forms a provenance chain. Recorded "
              "on the run as `parent_run`.",
     ),
     series: Optional[str] = typer.Option(
         None, "--series",
-        help="Attach this run to a budgeted SERIES (#993, ADR-0076 D5). The series "
+        # budgeted series: #993, ADR-0076 D5; refused with the dev loop: #2128
+        help="Attach this run to a budgeted SERIES. The series "
              "caps spend across the whole group: if it's already over its budget the "
              "run is REJECTED before it starts. The run's cost is recorded + counts "
              "toward the series total. Get the id from `cairn series ls`. A series "
-             "groups GOVERNED runs, so it is refused with --interactive/--mock "
-             "(#2128).",
+             "groups GOVERNED runs, so it is refused with --interactive/--mock.",
     ),
     set_: Optional[list[str]] = typer.Option(
         None, "--set", "-s",
+        # pipeline-file mode: #1092
         help="Override one input, repeatable: --set rows=100 --set model=gpt-4o-mini "
-             "(#1092, pipeline-file mode). Values are parsed as JSON when possible, "
+             "(pipeline-file mode). Values are parsed as JSON when possible, "
              "else kept as strings.",
     ),
 ) -> None:
-    """Start a flow — as the ONE-LEG PIPELINE every start becomes (ADR-0105 D1).
+    """Start a flow as a one-leg pipeline.
 
     `cairn run <pack>/<flow> --input values.json` goes through the same launch
     door as `POST /start`, the console and a trigger: the flow is wrapped in a
     one-leg pipeline stamped `flow:<pack>/<name>`, its leg is a governed run
     with the usual admission, budget, policy and audit trail, and the command
-    prints both ids. It then OWNS that pipeline (#1702) — under the in-process
+    prints both ids. It then OWNS that pipeline — under the in-process
     runtime this process is the only thing driving it — so it stays until a
     terminal state and exits on the leg's outcome. `--detach` opts out, loudly.
 
     THREE FLAGS KEEP THE LOCAL DEV LOOP and run the flow IN-PROCESS instead.
     They are NOT governed pipelines: no pipeline record, no console row, no leg
-    — and no run row either (#2128: every run belongs to a pipeline, so a run
+    — and no run row either (every run belongs to a pipeline, so a run
     that cannot have one is not written as a run). `--series` is refused with
     them, because a series groups governed runs.
 
@@ -1025,7 +1032,7 @@ def preflight_cmd(
     ),
 ) -> None:
     """Preflight a workflow: the side-effect-free ready/blocked verdict — cost,
-    gates, and blockers — without starting a run (ADR-0072). Exit 0=ready, 1=blocked."""
+    gates, and blockers — without starting a run. Exit 0=ready, 1=blocked."""
     from cairn.profiles import default_dev_profile  # noqa: PLC0415 — #2241 D: local compiles get local-dev
 
     default_dev_profile()
