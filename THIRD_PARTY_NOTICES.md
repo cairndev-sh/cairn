@@ -5,8 +5,9 @@ It depends on the third-party Python distributions below, each under its own lic
 
 Generated from `uv.lock` for the **base install** (`pip install cairndev`, no extras), read
 with `pip-licenses --from=mixed`; 0.1.2 added `pwdlib`, `argon2-cffi` and `argon2-cffi-bindings`
-(MIT) by hand when password hashing joined the base install. The engine
-image's full component list is the CycloneDX SBOM (`make sbom`). The console's bundled
+(MIT) by hand when password hashing joined the base install. Each GitHub release attaches
+CycloneDX SBOMs: `cairn-<version>.cdx.json` (the whole `uv.lock` closure) and
+`cairn-engine-<version>.cdx.json` (the engine image's `uv.lock`-resolved Python packages, with licences). The console's bundled
 JavaScript and fonts are listed in `console/THIRD_PARTY_NOTICES.md`.
 
 ## Base install — 139 distributions

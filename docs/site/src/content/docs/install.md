@@ -142,6 +142,17 @@ uv run cairn --help
 `uv sync` keeps only the extras you name: a later `uv sync` without them
 removes them again.
 
+### Software bill of materials
+
+Every [GitHub release](https://github.com/cairndev-sh/cairn/releases) after v0.3.2
+attaches CycloneDX SBOMs built from that tag's lock files:
+
+| File | What it lists |
+|---|---|
+| `cairn-<version>.cdx.json` | every package in `uv.lock` that the published wheels can install: all extras, every platform. No licence data. |
+| `cairn-engine-<version>.cdx.json` | the engine image's Python packages that `uv.lock` resolves, on linux/x86_64, with licences. Packages the image adds with `uv pip install` (the spaCy models, the production tier) are not in it. |
+| `cairn-docs-site-<version>.cdx.json` | the documentation site's runtime npm packages, with licences |
+
 ## Choose the backends
 
 Where cairn keeps its state and how durable a run is are three settings on the
