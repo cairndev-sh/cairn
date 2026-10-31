@@ -32,7 +32,8 @@ import typer
 
 from cairn.core import settings as _settings
 
-app = typer.Typer(help="One-command sqlite dev environment (ADR-0085 D5).", no_args_is_help=False)
+# ADR-0085 D5
+app = typer.Typer(help="One-command sqlite dev environment.", no_args_is_help=False)
 
 #: Every knob the repo .env could otherwise inject into a dev session. Pinned
 #: explicitly (set-but-empty = "use the built-in default"; every getter treats
@@ -126,7 +127,8 @@ def dev_cmd(
     db: Optional[str] = typer.Option(None, "--db", help="Sqlite path (default ~/.cairn/dev.db)."),
     seed: bool = typer.Option(
         False, "--seed",
-        help="Seed deterministic demo data first (#1189) — every surface non-empty on first paint.",
+        # #1189
+        help="Seed deterministic demo data first — every surface non-empty on first paint.",
     ),
 ) -> None:
     """Start the engine + console on a pinned sqlite dev config. Ctrl-C stops both."""

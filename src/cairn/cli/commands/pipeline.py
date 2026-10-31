@@ -33,8 +33,9 @@ from rich.console import Console
 from cairn.core.engine.pipeline import PipelineDef, plan_pipeline
 from cairn.core.engine.pipeline_resolve import PIPELINE_PREFIX, all_pipeline_defs, resolve_pipeline_ref
 
+# ADR-0084 D4
 app = typer.Typer(
-    help="Inspect pack pipelines — the composed, runnable surface (ADR-0084 D4).",
+    help="Inspect pack pipelines — the composed, runnable surface.",
     no_args_is_help=True,
 )
 console = Console()
@@ -143,9 +144,10 @@ def _preset_inputs(d: PipelineDef, preset: str, workspace: str) -> dict:
 _PRESET = typer.Option(
     "", "--preset", "-p", help="layer a saved or pack-shipped input set under --input, "
     "as `cairn remote launch --preset` does")
+# the `workspace` layer of the resolved view: ADR-0101 D2
 _WORKSPACE = typer.Option(
     "default", "--workspace", "-w", help="whose variables answer the "
-    "`workspace` layer of the resolved view (ADR-0101 D2), and whose saved presets --preset reads")
+    "`workspace` layer of the resolved view, and whose saved presets --preset reads")
 
 
 def _inspection_pipeline(ref: str) -> PipelineDef | None:
@@ -194,6 +196,7 @@ def show_cmd(
     console.print(render_pipeline(d), markup=False)
 
 
+# #1792; the RESOLVED block: #2134 S4; --preset refusals: #231
 @app.command("explain")
 def explain_cmd(
     ref: str = typer.Argument(..., help="<pack>/<name> or pipeline:<pack>/<name>"),
@@ -206,7 +209,7 @@ def explain_cmd(
     workspace: str = _WORKSPACE,
     json_out: bool = typer.Option(False, "--json", help="the raw projection"),
 ) -> None:
-    """Dry-run how every step will be TRIGGERED — before anything spends (#1792).
+    """Dry-run how every step will be TRIGGERED — before anything spends.
 
     Per leg: the resolved target file, the engine and compute target that will
     run it, every gate on its path with the authority demanding it, each config
@@ -216,14 +219,14 @@ def explain_cmd(
     not happen — including the unpleasant truths (a `retry:` that is not a map
     renders as `IGNORED (not a map)`).
 
-    Then the RESOLVED block (#2134 S4): each declared input, the governance
+    Then the RESOLVED block: each declared input, the governance
     numbers, the engine/target backends and the gates, each beside the document
     that owns it — so "which file do I edit to change this" is answered without
     opening four of them.
 
     ``--preset NAME`` layers a saved or pack-shipped input set under ``-i`` exactly
     as ``cairn remote launch --preset`` does, and refuses what that launch refuses
-    (an unknown name, a key the pipeline no longer declares) (#231).
+    (an unknown name, a key the pipeline no longer declares).
 
     Offline: installed packs + the environment's selection plane + the
     deployment's policies + this workspace's variables. No run, no engine, no
@@ -303,11 +306,13 @@ async def _drive_until_terminal(bridge, pipeline_id: str, *, poll_s: float = 2.0
         await asyncio.sleep(poll_s)
 
 
+# ref resolution: ADR-0106 D1 (#2134); the dev loop needs no pipeline: ADR-0106 D6;
+# the CLI owns the pipeline it launched: #1702
 @app.command("run")
 def run_pipeline(
     ref: str = typer.Argument(
         ..., help="`<pack>/<name>` or `pipeline:<pack>/<name>` — a declared pipeline; "
-                  "bare flow refs are refused. A pipeline wins at a shared ref (ADR-0106 D1)"),
+                  "bare flow refs are refused. A pipeline wins at a shared ref"),
     input_: list[str] = typer.Option(
         None, "--input", "-i", help="`key=value` (JSON parsed when possible); repeatable"),
     environment: str = typer.Option("", "--environment", "-e", help="environment to run in"),
@@ -319,13 +324,12 @@ def run_pipeline(
 
     The same door the console uses, so a run started here and one started from
     the UI are the same governed object. ``ref`` is resolved the way ``POST
-    /start`` resolves it (:func:`resolve_start_ref`), which since ADR-0106 D1
-    (#2134) means: a declared pipeline runs, a bare FLOW ref is refused with
-    the one-leg wrapper to add, and a pipeline WINS over a flow at the same
-    ref. ``cairn run`` keeps the flow-shaped surface — its inputs and the
-    dev-loop flags, which need no pipeline at all (ADR-0106 D6).
+    /start`` resolves it, which means: a declared pipeline runs, a bare FLOW
+    ref is refused with the one-leg wrapper to add, and a pipeline WINS over a
+    flow at the same ref. ``cairn run`` keeps the flow-shaped surface — its
+    inputs and the dev-loop flags, which need no pipeline at all.
 
-    The difference from the console is ownership (#1702): its caller is a
+    The difference from the console is ownership: its caller is a
     long-lived server; this process is the pipeline's owner only for as long as
     it lives. So by default the CLI STAYS: bridge up, leg transitions printed,
     exit code from the pipeline's own terminal state. ``--detach`` restores
@@ -435,6 +439,7 @@ def run_pipeline(
         raise typer.Exit(1)
 
 
+# #2527
 @app.command("respell-packs")
 def respell_packs_cmd(
     apply: bool = typer.Option(False, "--apply", help="Write the rewrite. Without it nothing is written."),
@@ -443,7 +448,7 @@ def respell_packs_cmd(
         help="Required with --apply: the server and workers are stopped, so nothing writes these rows meanwhile."),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Print sample before/after pairs per table."),
 ) -> None:
-    """Rewrite recorded refs of the three hyphenated packs to their manifest spelling (#2527).
+    """Rewrite recorded refs of the three hyphenated packs to their manifest spelling.
 
     `dataset_readiness/…`, `security_triage/…` and `security_kb/…` (the directory
     spelling a source checkout recorded) become `dataset-readiness/…`,
@@ -496,6 +501,8 @@ def respell_packs_cmd(
         console.print("  [dim]take a backup, then re-run with --apply[/]")
 
 
+# #2128 item C; every run is a leg of a pipeline: ADR-0105 D1, made true at the
+# chokepoint by #2133
 @app.command("backfill")
 def backfill_cmd(
     apply: bool = typer.Option(
@@ -516,10 +523,10 @@ def backfill_cmd(
         "Second-hand, so opt-in; such records are marked trigger.ref_inferred."),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="List every run."),
 ) -> None:
-    """Give every pipeline-less run its one-leg pipeline (#2128 item C).
+    """Give every pipeline-less run its one-leg pipeline.
 
-    ADR-0105 D1: every run is a leg of a pipeline. #2133 made that true at the
-    chokepoint, for every run created from now on; this makes it true of the
+    Every run is a leg of a pipeline. The launch door makes that true for
+    every run created from now on; this makes it true of the
     HISTORY, so the count of runs with no bundle_pipeline_id reaches 0 — the
     invariant is total, with no permanent "legacy" label.
 
