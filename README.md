@@ -17,8 +17,11 @@
   <a href="https://docs.cairndev.sh"><img alt="Docs" src="https://img.shields.io/badge/docs-cairndev.sh-3b82f6"></a>
   <a href="https://cairndev.sh"><img alt="Website" src="https://img.shields.io/badge/website-cairndev.sh-111827"></a>
   <a href="https://demo.cairndev.sh"><img alt="Live demo" src="https://img.shields.io/badge/live%20demo-demo.cairndev.sh-16a34a"></a>
-  <img alt="Python" src="https://img.shields.io/badge/python-3.12%2B-3776ab">
-  <img alt="Status" src="https://img.shields.io/badge/status-early%20access-f59e0b">
+  <a href="https://github.com/cairndev-sh/cairn/actions/workflows/ci.yml?query=branch%3Amain"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/cairndev-sh/cairn/ci.yml?branch=main&label=ci"></a>
+  <a href="https://pypi.org/project/cairndev/"><img alt="PyPI" src="https://img.shields.io/pypi/v/cairndev"></a>
+  <a href="https://pypi.org/project/cairndev/"><img alt="Python versions" src="https://img.shields.io/pypi/pyversions/cairndev"></a>
+  <a href="https://pypistats.org/packages/cairndev"><img alt="Downloads" src="https://img.shields.io/pypi/dm/cairndev"></a>
+  <a href="./LICENSE"><img alt="License" src="https://img.shields.io/github/license/cairndev-sh/cairn"></a>
 </p>
 
 <p align="center">
@@ -27,8 +30,7 @@
   <a href="https://docs.cairndev.sh/install/">Install</a> ·
   <a href="https://docs.cairndev.sh/reference/catalog/">Pipeline catalog</a> ·
   <a href="https://docs.cairndev.sh/concepts/gates/">Gates and approvals</a> ·
-  <a href="https://github.com/cairndev-sh/cairn-extensions">Extensions</a> ·
-  <a href="https://cairndev.sh">Waitlist</a>
+  <a href="https://github.com/cairndev-sh/cairn-extensions">Extensions</a>
 </p>
 
 ---
@@ -88,40 +90,74 @@ work runs behind deterministic guardrails you can inspect afterward:
 
 ## Quickstart
 
-The engine ships as the `cairndev` distribution (import name `cairn`). The `cairndev` wheel
-carries the builtin operator packs (14) and the core contracts (13); their sources live under
-`packages/` in this repository. The public release is five wheels: `cairndev`, `cairn-client`,
-the optional Metaflow and SkyPilot engines, and the example pack `cairn-pack-hello`.
+Run a governed pipeline on your machine: it checks a dataset, stops at a gate for
+you, and writes an audit row. No API key, no spend, about ten minutes.
 
 ```bash
-curl -LsSf https://docs.cairndev.sh/install.sh | sh     # or: pip install cairndev
-cairn --version && cairn doctor
+curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_EXTRAS=hello sh   # or: pip install 'cairndev[hello]'
+mkdir cairn-quickstart && cd cairn-quickstart
+curl -LsSfO https://raw.githubusercontent.com/cairndev-sh/cairn/main/examples/hello-cairn/data/sample.jsonl
+
+cairn dev --engine-only --port 8471 &                       # local engine on SQLite
+cairn remote login -u dev -p dev -e http://localhost:8471
+cairn remote launch hello-cairn/profile-and-publish \
+  -i path=$PWD/sample.jsonl --environment sandbox --watch
 ```
 
-Or try it without installing: the live demo at https://demo.cairndev.sh (a shared
-sandbox, so don't enter real credentials). The
-[Quickstart](https://docs.cairndev.sh/quickstart/) runs a pipeline on a local engine.
+The pipeline profiles the file, passes its **data gate** (the profile must pass and
+count at least 10 rows), redacts and versions the file, and stops at `review`, a
+**person gate**:
+
+```text
+  paused
+    profile            done                 run=run-task-data--profile-1f9a14
+    data-ok            done                 run=None
+    redact             done                 run=run-task-redact--text-85ecfb
+    engine-check       done                 run=run-flow-hello-cairn--engine-check-55b570
+    stage              done                 run=run-task-storage--put-1295cd
+    review             awaiting_approval    run=None
+    promote            pending              run=None
+    publish            pending              run=None
+    audit              pending              run=None
+⏸ paused — 1 step(s) waiting on a human
+```
+
+Approve it, then the promotion the operator itself gates, and read the record:
+
+```bash
+cairn remote advance <pipeline_id> review     # the person gate
+cairn remote advance <pipeline_id> promote    # the operator's own gate
+cairn remote pipeline <pipeline_id>           # plan, inputs, every step, every decision
+```
+
+```text
+pipeline pl_3f5b6ec6a25d414d  status=done
+  …
+  promote  [done] run=run-task-artifact--promote-3b4d2f
+    artifact_id           sha256:d2c09d27b2874cee
+    tag                   hello-sample@published
+  audit  [done] run=run-task-audit--store-39b32a
+    hash  af362a96212cf0d5298dfe71e81b5109d08a0219f3079387550e753f2fa25466
+```
+
+The audit row lands in `./audit.jsonl`, chained to the row before it by its hash. Try
+`-i min_rows=1000` to watch the data gate stop the pipeline before anything is
+written. The full walkthrough is the [Quickstart](https://docs.cairndev.sh/quickstart/);
+to look around without installing, use the live demo at https://demo.cairndev.sh (a
+shared sandbox, so don't enter real credentials).
 
 From source:
 
 ```bash
 git clone https://github.com/cairndev-sh/cairn && cd cairn
 uv sync --extra dev
-uv run cairn --help
-```
-
-A domain pack is a data wheel the engine discovers through an entry point; the example
-pack shows the shape, and a governed run is a declared pipeline:
-
-```bash
-CAIRN_PACK_PATH=examples/hello-cairn uv run cairn pipeline ls
 CAIRN_PACK_PATH=examples/hello-cairn uv run cairn pipeline explain hello-cairn/profile-and-publish
 ```
 
-Those are the commands the public CI job runs on every change. The container image is
-built from `Dockerfile.engine`, the Helm chart lives under `deploy/helm/cairn`, and the
-optional extras are `auth`, `dataflow-engine`, `dev`, `hello`, `infisical`, `kernel`, `metaflow`, `nats`, `oauth`, `optuna`, `pii`, `rag`, `rag-pgvector`, `rag-pinecone`, `rag-qdrant`, `rag-sqlite-vec`, `rerank-cohere`, `rerank-cross-encoder`, `runtime-dbos`, `runtime-postgres`, `runtime-sqlite`, `runtime-temporal`, `skypilot`, `ssh`, `storage-postgres`, `telemetry`, `train`.
-Full setup: [Install and deploy](https://docs.cairndev.sh/install/) ·
+The engine ships as the `cairndev` distribution (import name `cairn`), carrying the
+builtin operator packs and the core contracts; the container image is built from
+`Dockerfile.engine` and the Helm chart lives under `deploy/helm/cairn`. Optional
+extras and team setup: [Install and deploy](https://docs.cairndev.sh/install/) ·
 [CLI reference](https://docs.cairndev.sh/reference/cli/).
 
 ## The ModelOps lifecycle
@@ -172,5 +208,3 @@ surface may still change between releases; see [`CHANGELOG.md`](./CHANGELOG.md).
 
 Licensed under the **Apache License 2.0** — see [`LICENSE`](./LICENSE).
 Contributions are welcome: read [`CONTRIBUTING.md`](./CONTRIBUTING.md) first.
-Want a say in what ships next?
-**[Join the waitlist](https://cairndev.sh).**
