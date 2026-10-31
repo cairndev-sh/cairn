@@ -4,6 +4,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+- **A registered directory artifact gets a durable copy.** When an artifact object store is configured, registering a directory (a LoRA adapter, for example) copies its tree to `…/artifacts/<content_hash>/<name>/` and records that root as `durable_uri`, the way a file was already copied. The artifact then reads `durable` in `cairn doctor` and the registry health check after the producing machine is gone. The `CAIRN_ARTIFACT_RELAY_MAX_BYTES` cap counts the whole tree. A tree that holds a symlink is not copied. File relay is unchanged (#286).
+
 ## [0.3.3] - 2026-10-30
 
 A pipeline can start another: one pipeline's results, announced as an event when it finishes, start the next through a trigger a person turns on, and the started pipeline's record names the one that fed it. A pipeline cancel now stops its running task legs before the teardown, so a GPU box being started is never left billing. Also: task-leg spend is measured and governed, and a gated finalizer can be decided during teardown.

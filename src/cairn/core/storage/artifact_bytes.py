@@ -45,8 +45,14 @@ the relay can only copy bytes the CONTROL PLANE can read — the co-located case
 operator staged back. A file that only ever existed on a remote GPU box is not
 reachable from here; it registers with no durable copy and shows as dangling
 once the box is gone, which is the honest answer and the one the health check
-exists to surface. Directory URIs (an adapter dir) are likewise not relayed —
-``checkpoint_sync`` owns those.
+exists to surface.
+
+**Directories** (an adapter dir, #286) relay as a TREE under the same
+content-addressed root — ``…/artifacts/<content-hash>/<name>/<relative path>`` —
+and ``durable_uri`` names that root. The cap counts the whole tree; a tree with
+a symlink in it is not relayed (a copy that silently drops or follows links
+would claim durability for bytes it did not copy). Checkpoints mid-run stay
+``checkpoint_sync``'s.
 """
 from __future__ import annotations
 from cairn.core.settings import getenv
@@ -150,34 +156,70 @@ def _put(src: str, dest: str) -> None:
     client.upload_file(src, bucket, key)
 
 
+def _tree(root: str) -> list[tuple[str, str]] | None:
+    """``(absolute path, relative posix path)`` for every file under ``root``, sorted,
+    or ``None`` when the tree holds a symlink (file or directory) or cannot be read."""
+    files: list[tuple[str, str]] = []
+    try:
+        for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+            for name in dirnames + filenames:
+                if os.path.islink(os.path.join(dirpath, name)):
+                    return None
+            for name in filenames:
+                full = os.path.join(dirpath, name)
+                files.append((full, os.path.relpath(full, root).replace(os.sep, "/")))
+    except OSError:
+        return None
+    return sorted(files, key=lambda f: f[1])
+
+
+def _put_tree(files: list[tuple[str, str]], dest: str) -> None:
+    """Blocking upload of a directory's files under ``dest`` — run off the event loop."""
+    for src, rel in files:
+        _put(src, f"{dest}/{rel}")
+
+
 async def relay(uri: str, content_hash: str) -> str:
-    """Copy a LOCAL artifact's bytes to the object store; return its durable URI.
+    """Copy a LOCAL artifact's bytes — a file, or a directory's tree (#286) — to the
+    object store; return its durable URI (for a directory, the tree's root).
 
     ``""`` — never an exception — whenever the relay does not happen: no store
     configured, a remote URI (already durable), a path this host cannot read (the
-    remote-box case), a directory, an oversized file, or an S3 error. The caller
-    stores that empty string as "no durable copy", which is what
-    :func:`resolution_state` then reports.
+    remote-box case), an oversized file or tree, an empty tree, a tree holding a
+    symlink, or an S3 error. The caller stores that empty string as "no durable
+    copy", which is what :func:`resolution_state` then reports. A tree that failed
+    part-way leaves its uploaded files under the content-addressed root, so the next
+    registration of the same bytes completes it rather than duplicating it.
     """
     target = durable_target()
     if target is None or not content_hash:
         return ""
     path = local_path(uri)
-    if not path or not os.path.isfile(path):
+    if not path:
+        return ""
+    if os.path.isdir(path) and not os.path.islink(path):
+        files = _tree(path)
+        if not files:
+            return ""
+        what, upload = "tree", _put_tree
+    elif os.path.isfile(path):
+        files = [(path, "")]
+        what, upload = "file", _put
+    else:
         return ""
     try:
-        size = os.path.getsize(path)
+        size = sum(os.path.getsize(f) for f, _ in files)
     except OSError:
         return ""
     cap = _max_bytes()
     if size > cap:
         logger.warning(
-            "artifact %s not relayed: %d bytes exceeds CAIRN_ARTIFACT_RELAY_MAX_BYTES=%d "
-            "— it stays reachable only on this host", content_hash, size, cap)
+            "artifact %s not relayed: %s of %d bytes exceeds CAIRN_ARTIFACT_RELAY_MAX_BYTES=%d "
+            "— it stays reachable only on this host", content_hash, what, size, cap)
         return ""
     dest = durable_uri_for(content_hash, path, target)
     try:
-        await asyncio.to_thread(_put, path, dest)
+        await asyncio.to_thread(upload, path if what == "file" else files, dest)
     except Exception:  # noqa: BLE001 - the relay is best-effort; a dead bucket must not fail a registration
         logger.warning("artifact byte relay failed for %s → %s", uri, dest, exc_info=True)
         return ""
