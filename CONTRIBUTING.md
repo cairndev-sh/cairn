@@ -78,6 +78,25 @@ installed engine at load time — a mismatch warns, in the log and as a
 uvx ruff check .                   # lint, the rule set CI runs
 ```
 
+### Where tests live, and how to run one layer
+
+| Directory | What it covers | Run it alone |
+|---|---|---|
+| `tests/core` | the engine: dispatch, pipelines, gates, budget, storage, policy, the HTTP control plane | `.venv/bin/pytest tests/core -q` |
+| `tests/cli` | the `cairn` command, driven through its real entry point | `.venv/bin/pytest tests/cli -q` |
+| `tests/services` | RAG, vector stores, MCP and the other services under `src/cairn/services` | `.venv/bin/pytest tests/services -q` |
+| `tests/deploy` | the Helm chart and the deploy examples | `.venv/bin/pytest tests/deploy -q` |
+| `tests/examples` | the example pack, `examples/hello-cairn` | `.venv/bin/pytest tests/examples -q` |
+| `tests/dataflow_conformance` | the dataflow engine contract every engine must meet | `.venv/bin/pytest tests/dataflow_conformance -q` |
+| `tests/e2e` | the hello-cairn feature proof: a real `cairn-server` per cell, driven as a user would | `.venv/bin/pytest -m e2e tests/e2e -q` (or `scripts/oss/feature_proof.sh` with services) |
+| `packages/*/tests` | each builtin operator pack's own tests | `.venv/bin/pytest packages/cairn-operator-data-profile/tests -q` |
+
+Run one file or one test while you work (`.venv/bin/pytest tests/cli/test_gate.py -q`,
+add `-k <name>` for one case), and the layer it belongs to before you push. What each
+kind of test is allowed to prove, and which kinds a change needs, is in
+[docs/testing/strategy.md](docs/testing/strategy.md). A bug fix lands with the
+regression test, and the PR shows that test failing without the fix.
+
 `tests/core/test_dbos_runtime.py` needs the `runtime-dbos` extra (in the sync line
 above). CI's `public` job runs `tests/core`, `tests/cli`, `tests/deploy` and the
 optional engines' own tests with `-m "not dbos and not timing and not e2e"`; its
@@ -140,7 +159,18 @@ Build it locally with `npm ci && npm run build` in `docs/site/`. The one-line in
    [Developer Certificate of Origin](https://developercertificate.org/): commit
    with `git commit -s`, which adds a `Signed-off-by: Your Name <you@example.com>`
    line matching the commit author. The public repository's `dco` check refuses a
-   pull request with an unsigned commit; `git rebase --signoff main` fixes a branch after the fact.
+   pull request with an unsigned commit. To fix it after the fact, use
+   `git commit --amend -s --no-edit` for the last commit, or `git rebase --signoff main`
+   for the whole branch, then force-push your branch.
+
+   ```bash
+   git config user.name  "Your Name"
+   git config user.email "you@example.com"   # the address on your GitHub account
+   git commit -s -m "fix(cli): …"
+   ```
+
+   If your GitHub email is private, use your `<id>+<login>@users.noreply.github.com`
+   address for both the author and the sign-off, or GitHub refuses the push.
 
 ### What review looks for
 
@@ -185,7 +215,8 @@ vocabulary.
    concept, pipelines as the runnable surface), ADR-0085 (this contributor
    experience and where it's going).
 3. The GitHub issue tracker — what's in flight. Issues labeled
-   `good-first-issue` are curated to be self-contained.
+   [`good first issue`](https://github.com/cairndev-sh/cairn/labels/good%20first%20issue)
+   are curated to be self-contained.
 
 Changing a locked surface needs a **new ADR**, not an edit to an old one.
 
