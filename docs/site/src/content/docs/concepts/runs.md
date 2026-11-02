@@ -52,8 +52,10 @@ dataset version always points at one exact file.
 ## The audit trail
 
 With the audit trail on, cairn appends security-relevant events to a log in
-which every row carries `sha256(previous hash + row)`. Changing or deleting a
-row breaks the chain at that row. The log records operator approvals inside
+which every row carries `sha256(previous hash + row)`. Changing a row, or deleting
+one that has rows after it, breaks the chain at that row, unless the hashes are
+recomputed; [Verify the audit trail](#verify-the-audit-trail) lists what the chain
+can't detect. The log records operator approvals inside
 flows, `llm_complete` model calls, `mcp/call` tool calls, actions, and every governed
 step of a pipeline run, listed below. A template's own prompt and agent nodes write
 no row yet. The pipeline record and the run events stay the place to replay a run; the
@@ -106,7 +108,7 @@ audit log: audit.jsonl
   rows:      412
   first ts:  2026-10-28T09:01:12+00:00
   last ts:   2026-10-28T11:47:03+00:00
-  head hash: 9c1f…
+  head hash: 9c1f6e0b47d2a8353fe1c07ab96d4e12087fb35ac1de6490b2738f5ea1c4d07e
 chain OK
 ```
 
@@ -117,42 +119,58 @@ broken}`. The exit code is 0 when the chain verifies (an empty log verifies, wit
 zero rows), 2 when it is broken or has a corrupt line, and 1 when there is no log
 or it cannot be read, so a CI job can gate on it.
 
-"Tamper-evident" means an edit that leaves the hashes as they were shows up, at
-the row it broke:
+"Tamper-evident" has a narrow meaning here. When rows inside the log are altered
+and the hashes are left as they were, the command names the row it broke:
 
 | Altered | Result | Row named |
 |---|---|---|
 | A field in a row | exit 2, `hash` | that row |
-| A row deleted | exit 2, `prev_hash` | the row now in its place |
-| A forged row inserted, linked correctly to the row before it | exit 2, `prev_hash` | the row after the forgery |
-| Two neighbouring rows swapped | exit 2, `prev_hash` | the first of them, then the two rows after it |
+| A row deleted, with rows after it | exit 2, `prev_hash` | the row now in its place |
+| A forged row inserted before other rows, linked correctly to the row before it | exit 2, `prev_hash` | the row after the forgery |
+| Two neighbouring rows swapped, with a row after them | exit 2, `prev_hash` | the first of them, then the two rows after it |
 
 It does not mean the log can't be rewritten. The chain has no key and nothing
 outside the file to compare with, so anyone who can write the file can recompute
 the hashes. These all exit 0 from `cairn admin audit verify`:
 
+- a forged row appended at the end, linked correctly to the last row, which is the
+  cheapest forgery of all
 - the last rows cut off, or the whole file emptied (an empty log verifies)
 - a row changed and every hash after it recomputed
 - the whole file rewritten, with every hash recomputed
 
-To detect them, save the head hash somewhere the log's writer can't reach, and
-check the log against it:
+To detect them, save the head hash (`head_hash` in the `--json` output) somewhere
+the log's writer can't reach, and check the log against it:
 
 ```console
-$ cairn admin lineage --json --audit-log audit.jsonl --expect-head 9c1f…
+$ saved="$(cat saved-head)"
+$ test "${#saved}" -eq 64 && cairn admin lineage --json --audit-log audit.jsonl --expect-head "$saved"
 ```
 
-A log that no longer ends at that hash exits 2, with `chain_ok: false`. Pass
-`--json`: without it, a log with no lineage records exits 1 even when the head
-matches, and that is every log on a public install.
+A log that no longer ends at that hash exits 2, with `chain_ok: false`. How you
+call the check matters:
 
-A saved head only covers the rows written before you saved it. Rows added later
-and then cut go unnoticed even with that head, and a log that has simply grown
-exits 2 as well, so save the head again as the log grows.
+- **Use the full 64-character hash.** `--expect-head` accepts any prefix, and a short
+  one can be matched: with rows cut, trying values in one field of the new last row
+  matches 4 characters quickly, and the check exits 0.
+- **Don't let the value come out empty.** An empty or blank value compares nothing, so
+  a log with rows cut exits 0. The `test` above refuses one.
+- **Pass `--json`.** Without it, a log with no lineage records exits 1 even when the
+  head matches, and a public install writes no lineage records.
+
+A saved head has limits of its own:
+
+- It only covers the rows written before you saved it. Rows added later and then cut
+  go unnoticed even with that head.
+- An exit 2 doesn't say why. A log that only grew and a log with a forged row appended
+  get the same answer, and `cairn admin audit verify` exits 0 on both, so neither
+  command can tell them apart. A new head you save vouches for every row before it,
+  a forgery included, so check the rows added since the last head some other way
+  before you save it.
 
 [`benchmark/audit_tamper.py`](https://github.com/cairndev-sh/cairn/blob/main/benchmark/audit_tamper.py)
-runs all of this on a log a real engine wrote, and fails if any answer differs
-from this section.
+runs these cases on a log a real engine wrote, altering it in the middle and at the
+end, and fails if one of them answers differently. Its result lists each case it ran.
 
 ## Reading it back
 

@@ -1,12 +1,13 @@
 """What the audit log detects when someone alters it, and what it can't: no API key, no spend.
 
 Runs the quickstart's pipeline on a real local engine, so the log is one the engine wrote, then
-alters copies of it and asks the real commands about each copy. Changing a field, deleting a row,
-inserting a forged row and swapping two rows must each exit 2 and name the row they should. A hash
-chain has nothing outside the file to compare with, so cutting the tail or recomputing the hashes
-is not detected; those cases must pass ``cairn admin audit verify`` and fail against a head saved
-earlier (``cairn admin lineage --expect-head``), and the result says so. If any of this differs,
-the published claim would be wrong: the script exits non-zero and writes no result.
+alters copies of it and asks the real commands about each copy. In the middle of the log, changing
+a field, deleting a row, inserting a forged row and swapping two rows must each exit 2 and name the
+row they should. A hash chain has nothing outside the file to compare with, so appending a forged
+row, cutting the tail or recomputing the hashes is not detected; those cases must pass ``cairn admin
+audit verify`` and fail against a head saved earlier (``cairn admin lineage --expect-head``), and the
+result says so, along with what that head check misses. If any of this differs, the published claim
+would be wrong: the script exits non-zero and writes no result.
 
 The engine is driven through ``cairn-client``, like every measurement. The two checks go through
 the CLI because those commands are what is being measured.
@@ -32,6 +33,10 @@ from quickstart_path import PIPELINE, PROFILE, _one_run
 FORGED_ACTOR = "not-the-approver"
 #: how many rows the truncation cuts
 CUT = 3
+#: how much of a saved head the prefix check is given
+PREFIX = 4
+#: 64 times the tries a PREFIX-long match takes on average, so running out means something is wrong
+MAX_TRIES = 64 * 16 ** PREFIX
 BROKEN_EXIT = 2
 
 
@@ -52,12 +57,16 @@ class HeadVerdict:
     chain_ok: bool
 
 
+def _run(log: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run([cairn_command(), *args, "--audit-log", str(log)], cwd=log.parent,
+                          env={**scrubbed_env(), "HOME": str(log.parent)}, capture_output=True, text=True,
+                          timeout=120)
+
+
 def _cli(log: Path, *args: str) -> tuple[int, dict]:
     """The exit code and JSON report of a read-only command. Exit 1 means the file could not be
     read, which is neither answer this measurement is after."""
-    done = subprocess.run([cairn_command(), *args, "--json", "--audit-log", str(log)], cwd=log.parent,
-                          env={**scrubbed_env(), "HOME": str(log.parent)}, capture_output=True, text=True,
-                          timeout=120)
+    done = _run(log, *args, "--json")
     command = f"cairn {' '.join(args)}"
     if done.returncode not in (0, BROKEN_EXIT):
         raise RuntimeError(f"`{command}` exited {done.returncode} on {log.name}:\n{done.stderr}")
@@ -77,6 +86,10 @@ def _check_head(log: Path, head: str) -> HeadVerdict:
     # --json: without it a log with no lineage records exits 1 whether or not the head matches
     code, report = _cli(log, "admin", "lineage", "--expect-head", head)
     return HeadVerdict(code, report["chain_ok"])
+
+
+def _head_exit_without_json(log: Path, head: str) -> int:
+    return _run(log, "admin", "lineage", "--expect-head", head).returncode
 
 
 def _approval_position(lines: list[str]) -> int:
@@ -101,16 +114,34 @@ def _deleted(lines: list[str], at: int) -> list[str]:
     return [*lines[:at - 1], *lines[at:]]
 
 
-def _inserted(lines: list[str], at: int) -> list[str]:
-    """A forged copy of row ``at`` goes before it, as well forged as the file allows: it links to
-    the row before it and its own hash is right, so the first row that can't hold is the next."""
+def _forged(model: str, before: str, actor: str = FORGED_ACTOR) -> str:
+    """A copy of the row ``model`` naming ``actor``, as well forged as the file allows: it links to
+    the row ``before`` it and its own hash is right."""
     from cairn.core.obs.audit import chain_hash  # noqa: PLC0415 — the rule the writer and `audit verify` share
 
-    row = _payload(lines[at - 1])
-    prev = json.loads(lines[at - 2])["hash"]
-    forged = {**row, "actor": FORGED_ACTOR}
-    return [*lines[:at - 1], json.dumps({**forged, "prev_hash": prev, "hash": chain_hash(prev, forged)}),
-            *lines[at - 1:]]
+    prev = json.loads(before)["hash"]
+    forged = {**_payload(model), "actor": actor}
+    return json.dumps({**forged, "prev_hash": prev, "hash": chain_hash(prev, forged)})
+
+
+def _inserted(lines: list[str], at: int) -> list[str]:
+    """A forged copy of row ``at`` goes before it, so the first row that can't hold is the next."""
+    return [*lines[:at - 1], _forged(lines[at - 1], lines[at - 2]), *lines[at - 1:]]
+
+
+def _appended(lines: list[str], at: int) -> list[str]:
+    """A forged copy of row ``at`` goes at the end, where no row comes after it to break."""
+    return [*lines, _forged(lines[at - 1], lines[-1])]
+
+
+def _matching_prefix(lines: list[str], prefix: str) -> list[str]:
+    """``lines`` with a last row whose hash starts with ``prefix``, found by trying values in one
+    field. Nothing stops this but the length of the prefix."""
+    for attempt in range(MAX_TRIES):
+        forged = _forged(lines[-1], lines[-2], f"{FORGED_ACTOR}-{attempt}")
+        if json.loads(forged)["hash"].startswith(prefix):
+            return [*lines[:-1], forged]
+    raise RuntimeError(f"no last row matched {prefix!r} in {MAX_TRIES} tries")
 
 
 def _swapped(lines: list[str], at: int) -> list[str]:
@@ -185,8 +216,8 @@ def _detected(breaks: tuple[tuple[int, str], ...]) -> str:
     return f"detected: exit {BROKEN_EXIT}, row{'s' if len(breaks) > 1 else ''} {rows} ({', '.join(reasons)})"
 
 
-def _measure(untouched: Path, verify: Callable[[Path], Verdict],
-             check_head: Callable[[Path, str], HeadVerdict]) -> list[dict[str, str]]:
+def _measure(untouched: Path, verify: Callable[[Path], Verdict], check_head: Callable[[Path, str], HeadVerdict],
+             head_exit_without_json: Callable[[Path, str], int]) -> list[dict[str, str]]:
     """Every check, on copies of ``untouched``; the result's rows once all of them held."""
     scratch = untouched.parent
     lines = untouched.read_text(encoding="utf-8").splitlines()
@@ -196,10 +227,16 @@ def _measure(untouched: Path, verify: Callable[[Path], Verdict],
     _passes("the untouched log", baseline, rows=total)
     head = baseline.head
     _head_matches("the untouched log", check_head(untouched, head))
+    without_json = head_exit_without_json(untouched, head)
+    if without_json != 1:
+        raise RuntimeError(f"the untouched log with its own head, without --json: exit {without_json}, expected 1; "
+                           "the docs tell readers to pass --json because of this")
     results = [
         {"what": f"The untouched log, {total} rows, with `cairn admin audit verify`", "result": "verifies: exit 0"},
         {"what": "The untouched log against its own head, with `cairn admin lineage --expect-head`",
          "result": "matches: exit 0"},
+        {"what": "The same, without `--json`, on a log with no lineage records",
+         "result": "exit 1, because it has no lineage records, though the head matches"},
     ]
 
     for name, what, altered, rows, breaks in (
@@ -213,17 +250,23 @@ def _measure(untouched: Path, verify: Callable[[Path], Verdict],
         _caught(what, verify(_write_altered(scratch, name, altered, lines)), rows=rows, breaks=breaks)
         results.append({"what": what, "result": _detected(breaks)})
 
-    for name, what, altered, rows in (
-        ("truncated", f"Limit: cut the last {CUT} rows", lines[:-CUT], total - CUT),
-        ("emptied", "Limit: emptied the file", [], 0),
-        ("rewritten", f"Limit: changed row {at} and recomputed every hash after it", _rewritten(lines, at), total),
-        ("rewritten-all", "Limit: changed row 1 and recomputed every hash in the file", _rewritten(lines, 1), total),
+    only_a_head = (f"NOT detected by the chain: exit 0. Detected only against a head saved outside the log "
+                   f"(`--expect-head`): exit {BROKEN_EXIT}")
+    for name, what, altered, rows, result in (
+        ("appended", "Limit: appended a forged approval at the end, correctly linked", _appended(lines, at), total + 1,
+         f"NOT detected by the chain: exit 0. Against a saved head: exit {BROKEN_EXIT}, "
+         "the same answer a log that only grew gets"),
+        ("truncated", f"Limit: cut the last {CUT} rows", lines[:-CUT], total - CUT, only_a_head),
+        ("emptied", "Limit: emptied the file", [], 0, only_a_head),
+        ("rewritten", f"Limit: changed row {at} and recomputed every hash after it", _rewritten(lines, at), total,
+         only_a_head),
+        ("rewritten-all", "Limit: changed row 1 and recomputed every hash in the file", _rewritten(lines, 1), total,
+         only_a_head),
     ):
         path = _write_altered(scratch, name, altered, lines)
         _passes(what, verify(path), rows=rows)
         _head_refused(what, check_head(path, head))
-        results.append({"what": what, "result": f"NOT detected by the chain: exit 0. Detected only against a head "
-                                                f"saved outside the log (`--expect-head`): exit {BROKEN_EXIT}"})
+        results.append({"what": what, "result": result})
 
     # a head saved when the log was shorter: it says nothing about the rows written since
     older = scratch / "truncated.jsonl"
@@ -235,6 +278,21 @@ def _measure(untouched: Path, verify: Callable[[Path], Verdict],
     _head_refused(what, check_head(untouched, older_head))
     results.append({"what": what, "result": f"reported as a mismatch: exit {BROKEN_EXIT}. "
                                             "The saved head has to be the latest one"})
+
+    # what `--expect-head` is given matters as much as what the log holds
+    what = f"Limit: cut the last {CUT} rows, with `--expect-head` given an empty or blank value"
+    for value in ("", "  "):
+        _head_matches(what, check_head(older, value))
+    results.append({"what": what, "result": "NOT detected: exit 0. The check compares nothing"})
+
+    what = (f"Limit: cut the last {CUT} rows and tried values in the new last row until its hash began with "
+            f"the first {PREFIX} characters of the saved head")
+    matched = _write_altered(scratch, "prefix-matched", _matching_prefix(lines[:-CUT], head[:PREFIX]), lines)
+    _passes(what, verify(matched), rows=total - CUT)
+    _head_matches(what, check_head(matched, head[:PREFIX]))
+    _head_refused(what, check_head(matched, head))
+    results.append({"what": what, "result": f"NOT detected with that prefix: exit 0. "
+                                            f"With the full saved head: exit {BROKEN_EXIT}"})
     return results
 
 
@@ -264,11 +322,11 @@ def main() -> int:
             except Exception:
                 print(engine.log_tail(), file=sys.stderr)
                 raise
-        results = _measure(untouched, _verify, _check_head)
+        results = _measure(untouched, _verify, _check_head, _head_exit_without_json)
 
     path = write_result(args.out, "audit_tamper", title="What the audit log detects, and what it can't", inputs={
         "pipeline": PIPELINE, "profile": PROFILE.name, "profile_sha256": sha256_file(PROFILE),
-        "rows_cut": CUT,
+        "rows_cut": CUT, "prefix_length": PREFIX,
     }, results=results)
     print(path.read_text(encoding="utf-8"))
     return 0
