@@ -112,11 +112,10 @@ sequences and records.
 outputs, artifacts registered, bus events, console rows (`routers/pipelines.py:393 list_pipelines`).
 
 ## Tests
-`tests/core/test_pipeline_launch.py`, `test_pipeline_bridge.py`, `test_pipeline_bridge_e2e.py`,
-`test_pipeline_governance_wiring.py`, `test_policy_injected_gates.py`, `test_leg_executor.py`,
-`test_leg_approval_gates.py`, `test_flow_leg_gate_guard.py`, `test_pipeline_drift_guard.py`,
-`test_pipeline_leg_timeout.py`, `test_pipeline_artifacts.py`, `test_target_concurrency.py`,
-`test_temporal_owner_leg_kinds.py`, `test_temporal_owner_readopt.py`, `test_run_template_ref.py`.
+`tests/core/test_pipeline_bridge.py`, `test_pipeline_gates.py`, `test_pipeline_task_leg.py`,
+`test_policy_injected_gates.py`, `test_leg_executor.py`, `test_leg_retry.py`, `test_leg_readopt.py`,
+`test_flow_leg_gate_guard.py`, `test_pipeline_leg_timeout.py`, `test_target_concurrency.py`,
+`test_temporal_owner_capability.py`.
 
 ## Where to modify it
 | Change | File |

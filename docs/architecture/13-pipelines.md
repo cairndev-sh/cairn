@@ -59,7 +59,7 @@ Everything downstream: engines, operators, LLM calls, HITL notifications (`gate_
 `routers/start.py:111 start_anything`; `routers/pipelines.py:192 launch_installed_pipeline`; `cli/commands/pipeline.py:211 run_pipeline`; `dispatch/scheduler.py:55 fire_scheduled_workflow`; `operator_monitor_threshold/.../dispatch.py`; Temporal `PipelineWorkflow` re-entry on restart; `PipelineBridge._adopt_in_flight` (`:349`) on boot.
 
 ## Tests
-34 `tests/core/test_pipeline_*.py` (bridge, bridge_e2e, launch, artifacts, drift guard, governance wiring, leg timeout, checkpoint pull, explain, …), `test_leg_executor.py`, `test_leg_approval_gates.py`, `test_flow_leg_gate_guard.py`, `test_dispatcher*.py`, `test_run_template_ref.py`, `test_target_concurrency.py`, `test_temporal_owner_*.py`, `test_policy_injected_gates.py`, `test_verifiable_finetune_pipeline.py`, `test_serve_leg_pipeline.py`.
+`tests/core/test_pipeline_*.py` (bridge, gates, task legs, leg timeout, checkpoint pull, audit trail, …), `test_leg_*.py`, `test_flow_leg_gate_guard.py`, `test_dispatcher*.py`, `test_target_concurrency.py`, `test_temporal_owner_*.py`, `test_policy_injected_gates.py`.
 
 ## Invariants
 | Invariant | Status |
