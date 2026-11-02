@@ -39,7 +39,7 @@ LLM metering scope only — #1441, maintainer-approved 2026-10-15). **Forbidden.
 (`test_engine_registry.py::test_core_never_imports_an_operator_pack`) and by name as a string
 (`test_public_core_boundary.py`); core reads the entry-point GROUPS and never the pack that
 fills them. No SSH / cloud SDK: `fetch.py` names what crosses a transport, the adapter owns
-the transport. LangGraph never loads on a data leg
+the transport. `execute_leg` and the job process load no LangGraph on a data leg
 (`test_leg_executor.py::test_a_data_leg_never_imports_langgraph`).
 
 **Verify.** `tests/core/test_dataflow_substrate.py` (the substrate imports with no

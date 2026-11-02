@@ -200,8 +200,9 @@ def _run(subject: Optional[str], *, json: bool, audit_log: Optional[str],
             print(f"  {_render_line(r)}")
 
     if broken:
-        print(f"\n⚠ audit chain broken at row(s) {broken} — the log was altered; "
-              f"provenance is NOT trustworthy.", file=sys.stderr)
+        # A broken chain doesn't say why: an edit, a crash mid-write and racing writers look alike.
+        print(f"\n⚠ audit chain broken at row(s) {broken}; provenance is NOT trustworthy.",
+              file=sys.stderr)
         return 2
     if head_mismatch:
         print(f"\n⚠ the log's last row is not the expected head {expect_head!r}. This does not "

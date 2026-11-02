@@ -88,7 +88,7 @@ completeness gate — is not memoised. There is no switch to disable the memo.
 ## Invariants touching the engine
 - D8 "the compiler is amended, never replaced" (ADR-0084) — DOCUMENTED; `compile_template` is the only template compile entry (CONFIRMED by grep: no second compiler).
 - `agent_loop` retired — CONFIRMED: `compiler.py:163` raises on `flow.type: agent_loop`. The compiler docstring still says "three flow types" and lists two.
-- LangGraph is confined to agentic legs — OBSERVED: importing `dispatch/leg_executor.py` loads no `langgraph` module. No test in this repository asserts it for a data leg; `test_pipeline_durability.py` asserts it for resume planning only.
+- LangGraph is confined to agentic legs: no graph holds a data or ml leg, and `execute_leg` and the job process load no LangGraph — CONFIRMED (`test_leg_executor.py`). **CONFLICT** with ADR-0084's "a pure data/ml pipeline loads neither LangGraph nor Temporal": the module is still loaded around the leg. `engine/compiler.py` imports it at module level; `dispatch/dispatcher.py` reaches that through `engine/runner.py`, `pipeline_bridge.py:_submit_flow_leg` imports the dispatcher, and the CLI reaches it through `core/validate.py`. It's also a required dependency in `pyproject.toml`.
 
 ## Known hotspots (see 15-architecture-risks.md)
 `_compile_bt` (703 lines), `compiler.py` (1947).
