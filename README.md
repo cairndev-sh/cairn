@@ -98,14 +98,14 @@ measured on: see [`benchmark/`](./benchmark/README.md).
 
 | Measured | Result |
 |---|---|
-| Engine start to answering | 17.1 s |
-| Launch to a pipeline paused at its person gate | 6.9 s (median of 5, after one warm-up run) |
-| Both approvals to a finished pipeline, nobody waiting | 1.1 s (median of 5, after one warm-up run) |
+| Engine start to answering | 3.2 s |
+| Launch to a pipeline paused at its person gate | 1.9 s (median of 5, after one warm-up run) |
+| Both approvals to a finished pipeline, nobody waiting | 1.0 s (median of 5, after one warm-up run) |
 | Nothing published before the person gate | held on all 6 runs |
 | A false data gate stops the pipeline before any later step starts | held |
 | Audit chain verifies at the end | held (6 rows) |
 
-cairndev 0.3.1, `uv.lock` `43c69f31e985`, Darwin x86_64 with 8 CPUs and Python 3.13.12, 2026-11-02.
+cairndev 0.3.3, `uv.lock` `43c69f31e985`, Linux x86_64 with 4 CPUs and Python 3.13.13, 2026-11-02.
 
 <!-- benchmark:end -->
 
