@@ -57,7 +57,7 @@ refused: a flow runs as a leg of a pipeline.
 | `2` | a pipeline is waiting on a person and there is no terminal to ask on (it prints the `cairn decide` command); or the command line is wrong: a bad input, a flag that doesn't apply, a ref that names a flow |
 | `77` | the session expired; run `cairn setup`, or `cairn setup --server <url>` |
 
-The old names keep working for one more minor version, and each says its new name on stderr: `cairn pipeline run` and `cairn remote launch` are now `cairn run`, `cairn pipeline explain` and `cairn preflight` are `cairn run --dry-run`, `cairn gate` is `cairn run --check`, and `cairn remote submit` is `cairn run --skill`. `cairn dev` is `cairn setup --foreground` (and keeps its default port, 8000), `cairn doctor` is `cairn setup --check`, and `cairn remote login` is `cairn setup --server`. They keep their own exit codes: `cairn pipeline run` still exits `3` on a refused launch and `130` on Ctrl-C, and now `2` at a human gate it has no way to ask about.
+The old names keep working for one more minor version, and each says its new name on stderr: `cairn pipeline run` and `cairn remote launch` are now `cairn run`, `cairn pipeline explain` and `cairn preflight` are `cairn run --dry-run`, `cairn gate` is `cairn run --check`, and `cairn remote submit` is `cairn run --skill`. `cairn dev` is `cairn setup --foreground` (it keeps its default port, 8000, and like `cairn setup` it listens on this machine only unless `CAIRN_TRIGGER_HOST` is set), `cairn doctor` is `cairn setup --check`, and `cairn remote login` is `cairn setup --server`. They keep their own exit codes: `cairn pipeline run` still exits `3` on a refused launch and `130` on Ctrl-C, and now `2` at a human gate it has no way to ask about.
 
 ## Flows
 

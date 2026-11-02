@@ -59,6 +59,9 @@ def dev_env(port: int, db_path: Optional[str] = None, *, example_pack: bool = Tr
         "CAIRN_API_USER": "dev",
         "CAIRN_API_PASSWORD": "dev",
     })
+    # This login and secret are public, and auth being on makes the engine bind every interface by default.
+    if not (_settings.getenv("CAIRN_TRIGGER_HOST", "", environ=env) or "").strip():
+        env["CAIRN_TRIGGER_HOST"] = "127.0.0.1"
     for k in _PINNED_EMPTY:
         env[k] = ""
         if k.startswith(_settings.ENV_PREFIX):  # an OBS_* spelling would otherwise fill it (ADR-0122)

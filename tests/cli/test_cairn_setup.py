@@ -433,12 +433,14 @@ def test_an_explicit_host_wins(world, monkeypatch):
     assert world.started[0][1]["env"]["CAIRN_TRIGGER_HOST"] == "0.0.0.0"
 
 
-def test_attached_listens_on_this_machine_too(world, monkeypatch):
-    seen = {}
-    monkeypatch.setattr(dev_cli, "run_attached", lambda **k: seen.update(os.environ))
-    monkeypatch.setitem(os.environ, "CAIRN_TRIGGER_HOST", "")
-    assert cli.invoke(app, ["setup", "--foreground"]).exit_code == 0
-    assert seen["CAIRN_TRIGGER_HOST"] == "127.0.0.1"
+def test_every_local_engine_listens_on_this_machine_by_default(monkeypatch):
+    """`cairn dev`, `cairn setup` and the temporary engine `cairn run` starts all come through here."""
+    monkeypatch.delenv("CAIRN_TRIGGER_HOST", raising=False)
+    assert dev_cli.dev_env(1)["CAIRN_TRIGGER_HOST"] == "127.0.0.1"
+    monkeypatch.setenv("CAIRN_TRIGGER_HOST", "")
+    assert dev_cli.dev_env(1)["CAIRN_TRIGGER_HOST"] == "127.0.0.1"
+    monkeypatch.setenv("CAIRN_TRIGGER_HOST", "0.0.0.0")
+    assert dev_cli.dev_env(1)["CAIRN_TRIGGER_HOST"] == "0.0.0.0"
 
 
 # ── the old names (ADR-0165 D12) ─────────────────────────────────────────────────────────────

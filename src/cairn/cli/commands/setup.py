@@ -21,7 +21,6 @@ import typer
 
 from cairn.cli.commands import dev as dev_cli
 from cairn.cli.commands import remote
-from cairn.core import settings
 
 #: The port the CLI looks at when nothing is configured, so a bare `cairn setup` needs no flag.
 _DEFAULT_PORT = 9090
@@ -100,12 +99,6 @@ def _forget_sign_in(state: dict[str, Any]) -> None:
         if state.get("previous_default") in (cfg.get("profiles") or {}):
             cfg["default_profile"] = state["previous_default"]
     remote._save_config(cfg)
-
-
-def _on_this_machine(environ: Any) -> None:
-    """A setup engine is for this machine, unless ``CAIRN_TRIGGER_HOST`` says otherwise."""
-    if not (settings.getenv("CAIRN_TRIGGER_HOST", "", environ=environ) or "").strip():
-        environ["CAIRN_TRIGGER_HOST"] = "127.0.0.1"
 
 
 def _write_state(state: dict[str, Any]) -> None:
@@ -290,7 +283,6 @@ def cmd(
     if foreground or web_only:
         if profile_file:
             os.environ["CAIRN_PROFILE"] = str(profile_file)  # dev_env keeps a profile that is set
-        _on_this_machine(os.environ)
         dev_cli.run_attached(port=port or _DEFAULT_PORT, engine_only=engine_only, web_only=web_only, db=db, seed=seed,
                              example_pack=seed)
         return
@@ -308,7 +300,6 @@ def cmd(
 
     # Only --seed needs the checkout's example pack: its requirements aren't what was asked to run.
     env = dev_cli.dev_env(wanted_port, wanted_db, example_pack=seed)
-    _on_this_machine(env)
     if wanted_profile:
         env["CAIRN_PROFILE"] = wanted_profile
     endpoint = f"http://127.0.0.1:{wanted_port}"
