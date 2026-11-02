@@ -3,7 +3,8 @@
 #
 #   curl -LsSf https://docs.cairndev.sh/install.sh | sh
 #   curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_EXTRAS=hello,rag sh
-#   curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_VERSION=0.3.3 sh
+#   curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_VERSION=0.4.0 sh
+#   curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_PACKS="finetune[laptop] dataset-prep" sh
 #
 # Installs uv if it is missing (astral.sh's own installer, into ~/.local/bin, no sudo; like any uv
 # install it adds that directory to your shell's PATH), then installs — or upgrades — the
@@ -11,6 +12,8 @@
 # of its own, isolated from every other Python project. Re-run it to upgrade.
 #
 #   CAIRN_EXTRAS   comma-separated extras, e.g. hello,rag,metaflow (default: none)
+#   CAIRN_PACKS    space-separated packs to install beside it, as `finetune[laptop]` for the
+#                  distribution cairn-pack-finetune with its `laptop` extra (default: none)
 #   CAIRN_VERSION  an exact version to pin (default: the latest release)
 #   CAIRN_PYTHON   the Python uv provisions for the tool (default: 3.13)
 #   CAIRN_RELEASE  also look for cairn's wheels in this GitHub Release and pin cairndev and
@@ -29,9 +32,11 @@ main() {
   extras="${CAIRN_EXTRAS:-}"
   version="${CAIRN_VERSION:-}"
   python="${CAIRN_PYTHON:-3.13}"
+  packs="${CAIRN_PACKS:-}"
 
   # The values are spliced into a package spec, so only the characters a spec can hold pass.
   case "$extras" in *[!a-z0-9,-]*) die "CAIRN_EXTRAS may hold only lowercase letters, digits, '-' and ',' (got: $extras)";; esac
+  case "$packs" in *[!]a-z0-9\ [,-]*) die "CAIRN_PACKS may hold only lowercase letters, digits, '-', ',', '[', ']' and spaces (got: $packs)";; esac
   case "$version" in *[!A-Za-z0-9.+-]*) die "CAIRN_VERSION is not a version (got: $version)";; esac
   case "$python" in ""|*[!0-9.]*) die "CAIRN_PYTHON is not a Python version (got: $python)";; esac
   # cairn comes from PyPI. CAIRN_RELEASE=<version> also looks for cairn's wheels in that GitHub
@@ -43,6 +48,15 @@ main() {
     install_uv
   fi
 
+  # Each pack goes in the tool's own environment, as `--with`. `set -f`: `[laptop]` is not a glob.
+  set --
+  set -f
+  for pack in $packs; do
+    case "$pack" in cairn-pack-*) ;; *) pack="cairn-pack-$pack";; esac
+    set -- "$@" --with "$pack"
+  done
+  set +f
+
   spec="cairndev"
   [ -n "$extras" ] && spec="cairndev[$extras]"
   [ -n "$version" ] && spec="$spec==$version"
@@ -53,14 +67,23 @@ main() {
     [ -n "$version" ] || spec="$spec==$release"
     links="https://github.com/cairndev-sh/cairn/releases/expanded_assets/v$release"
     say "installing $spec (Python $python) as a uv tool, wheels from $links"
-    uv tool install --upgrade --force --python "$python" --find-links "$links" --with "cairn-client==$release" "$spec"
+    uv tool install --upgrade --force --python "$python" --find-links "$links" --with "cairn-client==$release" "$@" "$spec" || install_failed
   else
     say "installing $spec (Python $python) as a uv tool"
-    uv tool install --upgrade --force --python "$python" "$spec"
+    uv tool install --upgrade --force --python "$python" "$@" "$spec" || install_failed
   fi
 
   say "done — run: cairn --help"
-  say "if 'cairn' is not found, run 'uv tool update-shell' and open a new shell"
+  if ! command -v cairn >/dev/null 2>&1; then
+    say "cairn isn't on PATH yet. In this shell: export PATH=\"${UV_TOOL_BIN_DIR:-${XDG_BIN_HOME:-\$HOME/.local/bin}}:\$PATH\""
+    say "for new shells: uv tool update-shell"
+  fi
+}
+
+install_failed() {
+  # uv's message above names what it couldn't find.
+  [ -z "$packs" ] || die "the install failed. CAIRN_PACKS asked for: $packs (each is cairn-pack-<name> on PyPI)"
+  exit 1
 }
 
 install_uv() {

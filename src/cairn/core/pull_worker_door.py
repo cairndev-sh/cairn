@@ -115,7 +115,7 @@ async def check_pull_worker(operator_names: Iterable[str], *, target: Optional[s
         + ", and no pull worker has checked in"
         + (f" (last seen {seen})" if seen else " at all")
         + f" in the last {int(within_minutes)} minutes — start "
-          "`cairn worker --pull --engine-url <control-plane-url> --token <token>` on the machine "
+          "`cairn admin worker --pull --engine-url <control-plane-url> --token <token>` on the machine "
           "that should run it, or point the environment's ML target at a connection instead"
     )
     return v

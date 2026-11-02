@@ -249,7 +249,7 @@ _PROFILE_HINT = (
     "Point it at a shipped deployment profile "
     "(/app/.venv/lib/python3.13/site-packages/cairn/profiles/secure.toml in the engine image) "
     "or your own — see docs/runbooks/deployment-profile.md. For local development, "
-    "`cairn dev` passes local-dev.toml."
+    "`cairn setup` passes local-dev.toml."
 )
 
 

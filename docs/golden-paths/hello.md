@@ -3,7 +3,7 @@
 ## What this workflow does
 `examples/hello-cairn` is the public core's feature proof (ADR-0127 D1). It ships four
 pipelines, one per pipeline kind a new user meets, and together they exercise every public
-feature. Each runs from the CLI or the HTTP API on the public core alone. This page traces
+feature, plus `over-budget`, which a budget refuses before its engine starts. Each runs from the CLI or the HTTP API on the public core alone. This page traces
 what each one does on its way through the engine; the shared spine is
 [pipeline.md](pipeline.md), and this page only names where the example leaves it.
 
@@ -13,6 +13,7 @@ what each one does on its way through the engine; the shared spine is
 | `ask-the-docs` | agentic | template `assistant` (RAG search → rerank → model call → MCP tool → memory write) → `monitor/threshold` → person gate `review` | LLM through `build_chat_model`, MCP, RAG + vector store, memory, monitor, `kind: event` trigger on `dataset.ready` |
 | `tiny-finetune` | ml | `data/profile` → data gate → flow `lora` (`train/lora` stage) → `train/eval-loss` → `monitor/threshold` → data gate `loss-ok` → `artifact/promote` → person gate → `storage/put` (model card) | ml flow kind, a real LoRA fine-tune (`train.finetune`), the `[train]` extra |
 | `nightly-ops` | flow + hooks | template `nightly-job` (secret check → SSH report) → flow `summarise` → `monitor/propose` → `audit/store` | cron `schedule` (armed when enabled), `secrets.store` on env or Infisical, `remote/exec` over SSH, run hooks (`hooks.py`), monitor propose |
+| `over-budget` | budget refusal | flow `engine-check`, refused at its reservation (`leg_executor.py`, `budget_reservations.reserve`) before the engine is handed the job | `governance.estimated_usd` above `governance.budget.usd`, `leg.budget_refused`; proved in `tests/examples/test_hello_cairn.py`, not in the feature proof |
 
 ## Trigger
 - `cairn pipeline run hello-cairn/<name> --set k=v`, or `POST /start {"ref": "hello-cairn/<name>"}`.

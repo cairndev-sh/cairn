@@ -20,7 +20,8 @@ from typing import List, Optional
 
 import typer
 
-app = typer.Typer(help="Run a cairn worker — Temporal task queue or HTTP pull (#565).",
+# #565
+app = typer.Typer(help="Run a cairn worker — Temporal task queue or HTTP pull.",
                   no_args_is_help=False)
 
 
@@ -29,14 +30,15 @@ def worker_cmd(
     remote: bool = typer.Option(
         False, "--remote", help="Poll the dedicated remote/GPU queue (CAIRN_TEMPORAL_REMOTE_TASK_QUEUE)."
     ),
+    # ADR-0104 D2
     pull: bool = typer.Option(
-        False, "--pull", help="Claim jobs from the control plane over HTTP (ADR-0104 D2) — no Temporal.",
+        False, "--pull", help="Claim jobs from the control plane over HTTP — no Temporal.",
     ),
     engine_url: Optional[str] = typer.Option(
         None, "--engine-url", envvar="CAIRN_ENGINE_URL", help="--pull: the control plane's base URL.",
     ),
     token: Optional[str] = typer.Option(
-        None, "--token", envvar="CAIRN_ENGINE_TOKEN", help="--pull: a worker credential: a worker-pool token (cairn remote worker-token) or the deployment admin's token. A user's token, and a per-run worker token, cannot claim.",
+        None, "--token", envvar="CAIRN_ENGINE_TOKEN", help="--pull: a worker credential: a worker-pool token (cairn admin worker-token) or the deployment admin's token. A user's token, and a per-run worker token, cannot claim.",
     ),
     capabilities: Optional[List[str]] = typer.Option(
         None, "--capabilities", "-c", help="--pull: what this machine offers, e.g. gpu=T4 (repeatable).",
@@ -64,8 +66,9 @@ def worker_cmd(
     worker_id: Optional[str] = typer.Option(
         None, "--worker-id", help="--pull: this worker's identity (default: hostname + a random suffix).",
     ),
+    # #962
     dataset: bool = typer.Option(
-        False, "--dataset", help="Poll the dedicated dataset-batch queue (CAIRN_TEMPORAL_DATASET_TASK_QUEUE) — #962."
+        False, "--dataset", help="Poll the dedicated dataset-batch queue (CAIRN_TEMPORAL_DATASET_TASK_QUEUE)."
     ),
     task_queue: Optional[str] = typer.Option(
         None, "--task-queue", help="Override the task queue to poll (takes precedence over --remote/--dataset)."

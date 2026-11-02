@@ -1132,6 +1132,7 @@ class PipelineBridge:
                 st.started_at = getattr(run, "started_at", None) or _now()
                 if st.status == "awaiting_approval":
                     st.awaiting_since = _now()
+                    st.gate_context = None  # #258 — a paused run's wait, not a gate's
                 cur.step_state[sid] = st
                 cur.cursor = sorted(set(cur.cursor) | {sid})
                 changed = True
@@ -1506,6 +1507,7 @@ class PipelineBridge:
             st = rec.step_state.get(step_id) or StepState()
             st.status = GATE_STATUS
             st.verdict = "loop_exhausted"
+            st.gate_context = None  # #258 — an earlier pause's evidence is not this pause's
             rec.step_state[step_id] = st
             rec.cursor = sorted(set(rec.cursor) | {step_id})
             self._recompute_status(rec)
@@ -1918,6 +1920,7 @@ class PipelineBridge:
         st = rec.step_state.get(s.id) or StepState()
         st.status = "awaiting_approval"
         st.awaiting_since = _now()
+        st.gate_context = None  # #258 — another authority's pause: an earlier gate's evidence is not its
         rec.step_state[s.id] = st
         detail = {
             "run_id": getattr(run, "id", ""),
@@ -3645,6 +3648,7 @@ class PipelineBridge:
         # ADR-0125 D5 — the fire key belongs to the wait that is ending: a loop
         # iteration's earlier fire must never park a step that has not fired.
         st.fired_key = None
+        st.gate_context = gate_ctx  # #258 — on the step, so every reader of the record has it
         rec.step_state[s.id] = st
         detail = {"trigger": s.trigger, "status": status}
         if gate_ctx:

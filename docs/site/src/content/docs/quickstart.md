@@ -19,7 +19,7 @@ curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_EXTRAS=hello sh
 
 The installer puts `cairn` on your PATH as a [uv](https://docs.astral.sh/uv/)
 tool, installing uv first if it is missing. The `hello` extra adds the example
-pack, `hello-cairn`, with four pipelines to try. Without the script:
+pack, `hello-cairn`, with five pipelines to try. Without the script:
 
 ```bash
 pip install 'cairndev[hello]'   # inside a virtual environment, Python 3.12 or later
@@ -31,11 +31,14 @@ pipelines.
 ## 2. Get a dataset to check
 
 The `profile-and-publish` pipeline checks a JSONL file whose rows have a
-`text` and a `label` field. Use the example's sample:
+`text` and a `label` field. Use the example's sample, and its deployment profile,
+which turns the audit trail on:
 
 ```bash
 mkdir cairn-quickstart && cd cairn-quickstart
 curl -LsSfO https://raw.githubusercontent.com/cairndev-sh/cairn/main/examples/hello-cairn/data/sample.jsonl
+curl -LsSfO https://raw.githubusercontent.com/cairndev-sh/cairn/main/examples/hello-cairn/profiles/hello.toml
+export CAIRN_PROFILE=$PWD/hello.toml
 ```
 
 ## 3. See what will happen before anything runs
@@ -67,7 +70,8 @@ cairn remote login -u dev -p dev -e http://localhost:8471
 `cairn dev` starts the engine on a local SQLite database (`~/.cairn/dev.db`
 unless you pass `--db`), with the in-process runtime and sign-in on, as the
 user `dev` with the password `dev`. `remote login` stores the token, so the
-next commands need no flags.
+next commands need no flags. `hello.toml` binds `audit.sink`, which the default
+`local-dev` profile leaves off.
 
 ## 5. Launch the pipeline
 
@@ -136,18 +140,41 @@ pipeline pl_3f5b6ec6a25d414d  status=done
     hash  af362a96212cf0d5298dfe71e81b5109d08a0219f3079387550e753f2fa25466
 ```
 
-The audit row is in `./audit.jsonl`, next to where the engine runs
-(`CAIRN_AUDIT_LOG` moves it), chained to the row before it by its hash. The
+The audit trail is in `./audit.jsonl`, next to where the engine runs
+(`CAIRN_AUDIT_LOG` moves it). It has rows for the launch, each step and each decision
+a person made (`pipeline.gate_approved`, with the signed-in user as `actor`), and the
+row the pipeline's own `audit` step writes, whose hash the record above shows. Each row is
+chained to the one before it by its hash, and `cairn audit verify` checks the file.
+[The audit trail](/concepts/runs/) lists every row. The
 staged and published summaries are under `~/.cairn/artifacts`
 (`CAIRN_ARTIFACTS_DIR`).
 
 ## Try the other outcomes
 
 - `-i min_rows=1000`: the data gate is false, so the pipeline fails at
-  `data-ok` (`gate_blocked`) before anything is written.
+  `data-ok` (`gate_blocked`) before any later step starts. The audit trail still
+  records the launch and the failure.
 - `--environment hello-prod`: the example pack's policy makes every
   `storage/put` in that environment wait for a person, though the pipeline
   file has no gate there.
+- `cairn run hello-cairn/over-budget --environment sandbox`: a pipeline whose
+  estimate ($5) is above its budget ($1). The flow leg's reservation fails, so
+  its engine never starts, nothing is spent, and the command exits 1:
+
+  ```text
+  pipeline_id=pl_592c6c850aec40a5 status=running
+    failed
+      engine-check       failed               run=run-flow-hello-cairn--engine-check-78f6c9
+    engine-check: series 'hello-over-budget': this run's estimate $5.00 would exceed the $1.00 cap ($0.00 spent, $0.00 reserved by in-flight runs). Raise the budget or start a new series.
+  → logs      cairn status run-flow-hello-cairn--engine-check-78f6c9 --logs   # leg engine-check
+  → findings  cairn status pl_592c6c850aec40a5 --results
+  ```
+
+  The pipeline file declares that estimate, and the flow itself would cost
+  nothing. The launch is admitted and the leg is refused, so the audit trail has
+  `leg.budget_refused`, with the estimate and the cap, rather than
+  `pipeline.refused`. This pipeline needs the release after cairndev 0.4.0. See
+  [Cost and budgets](/concepts/cost/).
 
 ## Next
 

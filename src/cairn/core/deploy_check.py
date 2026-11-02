@@ -35,7 +35,7 @@ REQUIRED: dict[str, str] = {
     "CADDY_DOMAIN": "TLS domain for Caddy (app.example.com or <ip-dashes>.sslip.io)",
     "POSTGRES_PASSWORD": "app Postgres password (openssl rand -hex 16)",
     "CAIRN_JWT_SECRET": "control-plane JWT secret — auth is ON in prod (#2)",
-    "CAIRN_API_PASSWORD_HASH": "argon2 hash for the API user (cairn remote hash-password)",
+    "CAIRN_API_PASSWORD_HASH": "argon2 hash for the API user (cairn admin hash-password)",
     "CAIRN_PROFILE": "the deployment profile — the engine refuses to start without one "
                    "(docs/runbooks/deployment-profile.md)",
 }
@@ -969,8 +969,8 @@ def check_compute_ssh(
         return [CheckResult(
             name, "fail",
             f"{key} names connection {target!r}, which does not resolve — create "
-            f"it with `cairn connect add` (`cairn connect ls` shows what exists, "
-            f"`cairn connect test {target}` probes it). Every dispatch to this "
+            f"it with `cairn admin connect add` (`cairn admin connect ls` shows what exists, "
+            f"`cairn admin connect test {target}` probes it). Every dispatch to this "
             f"environment fails at submit.",
             category="runtime")]
 
@@ -1057,7 +1057,7 @@ def format_deploy_report(results: list[CheckResult]) -> str:
     for r in results:
         by_cat.setdefault(r.category, []).append(r)
     extra = [c for c in by_cat if c not in _CATEGORY_ORDER]
-    lines: list[str] = ["cairn deploy doctor", ""]
+    lines: list[str] = ["cairn admin deploy doctor", ""]
     for cat in (*_CATEGORY_ORDER, *sorted(extra)):
         rows = by_cat.get(cat)
         if not rows:

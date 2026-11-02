@@ -420,7 +420,7 @@ def build_pipelines_router(dispatcher, pipeline_bridge) -> APIRouter:
         )
         from cairn.core.dispatch.start import explain_pipeline_ref  # noqa: PLC0415 - cycle
         from cairn.core.engine.pipeline_resolve import AmbiguousRefError  # noqa: PLC0415 - cycle
-        from cairn.core.pipeline_presets import PresetNotFoundError  # noqa: PLC0415 - cycle
+        from cairn.core.pipeline_presets import PresetNotFoundError, PresetPathRefusedError  # noqa: PLC0415 - cycle
 
         try:
             return await explain_pipeline_ref(
@@ -428,6 +428,8 @@ def build_pipelines_router(dispatcher, pipeline_bridge) -> APIRouter:
                 workspace_id=current_workspace())
         except (PipelineNotFoundError, PresetNotFoundError) as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
+        except PresetPathRefusedError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
         except AmbiguousRefError as e:  # pragma: no cover — the prefix disambiguates
             raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -633,7 +635,8 @@ def build_pipelines_router(dispatcher, pipeline_bridge) -> APIRouter:
         from cairn.core.dispatch.pipeline_preview import preview_launch  # noqa: PLC0415 - cycle
         from cairn.core.engine.pipeline_resolve import AmbiguousRefError  # noqa: PLC0415
         from cairn.core.pipeline_presets import (  # noqa: PLC0415 - cycle
-            PIPELINE_PREFIX, PresetNotFoundError, resolve_preset,
+            PIPELINE_PREFIX, PresetNotFoundError, PresetPathRefusedError, assert_preset_paths_resolved,
+            resolve_preset,
         )
 
         ref = str(body.get("ref") or "").strip()
@@ -644,13 +647,14 @@ def build_pipelines_router(dispatcher, pipeline_bridge) -> APIRouter:
             preset_inputs: dict[str, Any] = {}
             if (name := str(body.get("preset") or "").strip()):
                 canon = f"{PIPELINE_PREFIX}{d.pack}/{d.name}"
-                rec, _src = await resolve_preset(current_workspace(), canon, name)
+                rec, src = await resolve_preset(current_workspace(), canon, name)
+                assert_preset_paths_resolved(rec, src)
                 preset_inputs = dict(rec.inputs or {})
             return preview_launch(d, inputs=dict(body.get("inputs") or {}),
                                   preset_inputs=preset_inputs)
         except (PipelineNotFoundError, PresetNotFoundError) as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
-        except AmbiguousRefError as e:
+        except (AmbiguousRefError, PresetPathRefusedError) as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
 
     # ── launch presets (#1789, ADR-0071 §6) ──────────────────────────────────

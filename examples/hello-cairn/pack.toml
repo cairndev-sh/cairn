@@ -3,7 +3,8 @@
 #
 # The one pack the public core ships so a fresh install has something governed
 # to run. It needs the engine and the builtin operator packs, and nothing from the
-# platform: four pipelines, one per kind of work (data, agentic, ml, operations).
+# platform: four pipelines, one per kind of work (data, agentic, ml, operations), and
+# `over-budget`, which a budget refuses before its engine starts.
 #
 # A domain pack is DATA plus glue, never operators (ADR-0127 D2): this manifest,
 # `pipelines/*.yaml` (the runnable surface), `flows/` (the components the
@@ -16,7 +17,7 @@
 
 [pack]
 name        = "hello-cairn"
-version     = "0.2.6"
+version     = "0.2.7"
 description = "Example pack: check a dataset, ask its docs, fine-tune a small model and run a nightly job, each behind gates a person or the data answers."
 tags = [
     "domain:example",

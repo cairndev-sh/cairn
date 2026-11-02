@@ -8,6 +8,7 @@ from pathlib import Path
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 import typer
+from typer.testing import CliRunner
 
 import cairn.core.operator as operator_api
 from cairn.cli.commands import run as run_mod
@@ -24,25 +25,10 @@ def _write_inputs(tmp_path: Path, monkeypatch) -> Path:
 
 
 def _invoke_mock_run(template_ref: str, input_path: Path) -> int:
-    try:
-        run_mod.cmd(
-            trigger_file=template_ref,
-            source=None,
-            service=None,
-            environment="dev",
-            input_file=str(input_path),
-            dry_run=False,
-            mock=True,
-            mode="live",
-            interactive=False,
-            detach=False,
-            from_run=None,
-            series=None,
-            set_=None,
-        )
-    except typer.Exit as exc:
-        return exc.exit_code
-    raise AssertionError("the run command did not exit")
+    app = typer.Typer()
+    app.command(name="run")(run_mod.cmd)
+    app.command(name="_second")(lambda: None)  # keeps Typer in group shape
+    return CliRunner().invoke(app, ["run", template_ref, "--input", str(input_path), "--mock"]).exit_code
 
 
 def test_mock_prompt_flow_returns_deterministic_output_without_provider(

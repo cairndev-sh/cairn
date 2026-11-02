@@ -94,6 +94,8 @@ public core (the `cairndev` and `cairn-client` wheels): SUPPORTED (CI TESTED in 
 The console, its MCP surface and `cairn-sdk` are part of cairn-platform (ADR-0135). Remote deployment
 (compose, EC2 script, Helm lint): SUPPORTED for compose (PRODUCTION PROVEN); Helm chart
 IN DEVELOPMENT (ADR-0104 D4).
+The five-command CLI (since 0.4.0, ADR-0165): `cairn setup`, `run`, `status`, `decide`, `pack` and `admin`, with the old names as warned aliases for one minor version: EXPERIMENTAL (CI TESTED in `tests/cli/test_cairn_setup.py`, `test_cairn_run.py`, `test_status_decide.py` and the surface test; driven by hand against a local engine, no production run yet). A background `cairn setup` engine is for one machine, with a fixed login: it is not a deployment.
+
 A pipeline started by another (since 0.3.3): a pipeline's `outputs:` resolved when it ends `done`
 and published on its `emits:` topic (ADR-0161), a `kind: event` trigger that starts a pipeline on it
 and records the publisher on its `trigger`, and the switch that turns a declared trigger on or off

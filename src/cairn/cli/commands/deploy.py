@@ -46,7 +46,8 @@ def doctor(
     ),
     values: Path = typer.Option(
         None, "--values", "-f",
-        help="Validate a HELM VALUES file instead of a .env (ADR-0104 D4). The values "
+        # chart deploy: ADR-0104 D4
+        help="Validate a HELM VALUES file instead of a .env. The values "
              "are rendered into the effective environment and run through the SAME "
              "checks; --env and --profile are ignored.",
     ),
@@ -75,7 +76,7 @@ def doctor(
     # a fresh install is not a deployment, and the doctor has nothing to check yet.
     # A Caddyfile already beside it is still checked (a box whose .env went missing).
     if not env.exists():
-        typer.echo(f"no deploy .env at {env} — `cairn deploy doctor` preflights a "
+        typer.echo(f"no deploy .env at {env} — `cairn admin deploy doctor` preflights a "
                    "deployment's .env before `docker compose up`; a local install needs "
                    "none. Pass --env <file>, or --values <helm values> for the chart.",
                    err=True)

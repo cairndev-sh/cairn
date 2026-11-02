@@ -4,7 +4,7 @@
 started from a terminal and one started from the console were the same governed
 object. ADR-0106 D1 keeps the goal and changes the mechanism: only a DECLARED
 pipeline runs, so the synthesis is gone from every door and this one refuses,
-naming the wrapper to add and pointing at ``cairn pipeline run``.
+naming the wrapper to add.
 
 What survives is the half that was never a governed run at all — the dev loop.
 That is now the command's whole job for a flow ref, which is why the refusal
@@ -14,7 +14,7 @@ These tests pin the door, not the printer:
 
 * ``cairn run <flow> --input …`` refuses, with BOTH ways forward, and leaves no
   pipeline record behind;
-* a ref that names a pipeline is REDIRECTED rather than refused;
+* a ref that names a pipeline goes to the launch door (ADR-0165 D3);
 * ``--interactive``, ``--mock`` and ``--dry-run`` keep the in-process dev path
   and make no pipeline record at all — they are the local loop, and `--help`
   says so.
@@ -152,17 +152,25 @@ def test_a_bare_flow_ref_is_refused_with_both_ways_forward(inputs_file, bridges,
     assert flow_body == [], "and must run nothing"
 
 
-def test_a_pipeline_ref_is_redirected_not_refused(inputs_file, bridges):
-    """The other half of being useful: the intent is fine, the verb is wrong."""
+def test_a_pipeline_ref_goes_to_the_launch_door(inputs_file, bridges, monkeypatch):
+    """`cairn run` is the one door (ADR-0165 D3): a pipeline starts, it is not redirected."""
+    started = []
+    monkeypatch.setattr(
+        "cairn.cli.commands.status.launch_and_follow",
+        lambda ref, inputs, **kw: started.append((ref, inputs)) or 0,
+    )
     r = runner.invoke(app, ["run", PIPELINE, "--input", str(inputs_file)])
-    assert r.exit_code == 2, r.output
-    assert "cairn pipeline run" in r.output
+    assert r.exit_code == 0, r.output
+    assert started == [(PIPELINE, FLOW_INPUTS)]
     assert _records(bridges) == []
 
 
-def test_an_unknown_ref_is_one_refusal_from_the_shared_resolver(inputs_file, bridges):
+def test_an_unknown_ref_is_one_refusal_from_the_shared_resolver(inputs_file, bridges, monkeypatch, tmp_path):
     """`resolve_start_ref` is the resolver here too, so the refusal is the same
-    one `cairn pipeline run` and `POST /start` give."""
+    one `POST /start` gives. No server is configured: a named one may have the ref installed."""
+    monkeypatch.setenv("CAIRN_CONFIG_HOME", str(tmp_path))
+    monkeypatch.delenv("CAIRN_REMOTE_ENDPOINT", raising=False)
+    monkeypatch.setattr("cairn.cli.commands.remote._reachable", lambda ep: False)
     r = runner.invoke(app, ["run", "nope/nope", "--input", str(inputs_file)])
     assert r.exit_code != 0
     assert "no pipeline 'nope/nope' is installed" in r.output

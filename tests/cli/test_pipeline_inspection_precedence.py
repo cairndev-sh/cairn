@@ -49,7 +49,7 @@ def test_shared_ref_inspects_the_pipeline_that_run_resolves(shared_pack, command
     result = runner.invoke(pipeline.app, [command[0], ref, *command[1:]])
     assert result.exit_code == 0, result.output or repr(result.exception)
     if command == ('explain', '--json'):
-        document = json.loads(result.output)
+        document = json.loads(result.stdout)
         assert document['ref'] == f'pipeline:{canonical}'
         assert document['steps'][0]['id'] == 'inspect'
     elif command == ('show',):

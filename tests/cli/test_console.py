@@ -396,3 +396,18 @@ async def test_run_form_validates_then_runs_with_typed_inputs():
         # valid → shells `run <ref> --input <tmp json>`
         app._run_with_contract("training/finetune", contract, {"dataset_path": "s3://d/t.jsonl"})
         assert seen and seen[0][:2] == ["run", "training/finetune"] and "--input" in seen[0]
+
+
+@pytest.mark.parametrize("toks, argv", [
+    (["ls"], ["pack", "ls"]),
+    (["connect", "test", "openai"], ["admin", "connect", "test", "openai"]),
+    (["validate", "."], ["pack", "check", "."]),
+    (["init", "pack", "x"], ["pack", "new", "pack", "x"]),
+    (["lock", "--check"], ["pack", "lock", "--check"]),
+    (["replay", "run-1"], ["status", "run-1", "--replay"]),
+    (["visualize", "template", "a/b"], ["pack", "show", "--graph", "a/b"]),
+    (["run", "a/b"], ["run", "a/b"]),
+    (["ask", "plan", "a/b"], ["ask", "plan", "a/b"]),
+])
+def test_the_command_bar_shells_out_to_the_current_spelling(toks, argv):
+    assert CairnConsole._cli_argv(toks) == argv

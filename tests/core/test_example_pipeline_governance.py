@@ -35,6 +35,8 @@ _PIPELINES = _PACK / "pipelines"
 _FLOWS = _PACK / "flows"
 _PROFILE = _PACK / "profiles" / "hello.toml"
 PIPELINES = ("profile-and-publish", "ask-the-docs", "nightly-ops", "tiny-finetune")
+# Stops at its budget before any gate, on its own series; test_hello_cairn.py proves the refusal.
+OVER_BUDGET = "over-budget"
 
 
 def _pipeline(name: str = "profile-and-publish"):
@@ -71,8 +73,13 @@ def example_loaded(monkeypatch):
 
 # ── every pipeline ──────────────────────────────────────────────────────────
 
-def test_the_example_ships_the_four_pipelines():
-    assert sorted(p.stem for p in _PIPELINES.glob("*.yaml")) == sorted(PIPELINES)
+def test_the_example_ships_its_pipelines():
+    assert sorted(p.stem for p in _PIPELINES.glob("*.yaml")) == sorted((*PIPELINES, OVER_BUDGET))
+
+
+def test_the_over_budget_pipeline_declares_an_estimate_above_its_cap():
+    gov = _pipeline(OVER_BUDGET).governance
+    assert gov["estimated_usd"] > gov["budget"]["usd"] and gov["series"]
 
 
 @pytest.mark.parametrize("name", PIPELINES)
@@ -227,6 +234,17 @@ def test_the_pack_policy_gates_storage_writes_in_hello_prod_only(env, gated):
     assert _applies("storage/put") is gated
     assert not _applies("data/profile") and not _applies("artifact/promote")
     assert spec.rules[0].effect == "require_hitl"
+
+
+def test_the_quickstart_profile_turns_the_audit_trail_on_and_the_default_stays_off():
+    """The Quickstart runs under hello.toml so a first run's log shows its gate decisions;
+    local-dev leaves `audit.sink` unbound (ADR-0028)."""
+    import cairn.profiles
+
+    hello = tomllib.loads((_PACK / "profiles" / "hello.toml").read_text())
+    assert hello["profile"]["bindings"]["audit.sink"] == "audit/store"
+    local_dev = tomllib.loads(cairn.profiles.local_dev_path().read_text())
+    assert "audit.sink" not in local_dev["profile"]["bindings"]
 
 
 @pytest.mark.parametrize("profile", ("hello.toml", "hello-infisical.toml"))

@@ -806,7 +806,7 @@ INVENTORY: list[SettingSpec] = [
     ),
     SettingSpec(
         "api_password_hash", "CAIRN_API_PASSWORD_HASH", None, "auth",
-        "argon2 hash of the API user's password (cairn remote hash-password); wins "
+        "argon2 hash of the API user's password (cairn admin hash-password); wins "
         "over CAIRN_API_PASSWORD.", secret=True,
     ),
     SettingSpec(
@@ -816,7 +816,7 @@ INVENTORY: list[SettingSpec] = [
     ),
     SettingSpec(
         "require_auth", "CAIRN_REQUIRE_AUTH", None, "auth",
-        "Deployment intent that auth is on; cairn deploy doctor warns when it is "
+        "Deployment intent that auth is on; cairn admin deploy doctor warns when it is "
         "explicitly off (#391).",
     ),
     SettingSpec(

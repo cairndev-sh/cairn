@@ -2,7 +2,7 @@
 # The DISTRIBUTION is `cairndev` (ADR-0121 D3, #2429); the import name `cairn` and the
 # `cairn` command do not change.
 name = "cairndev"
-version = "0.3.3"
+version = "0.4.0"
 description = "A governed control plane for AI and ML work: pipelines that fine-tune, evaluate, compress and serve models, with approval, policy, budget and lineage on every step"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -436,7 +436,7 @@ exclude = ["CLAUDE.md", "AGENTS.md"]
 # README, LICENSE, NOTICE). Not process files, internal docs, tests, deploy tooling, the example
 # pack, or the distributions built beside the engine, which have their own sdists (#2405).
 exclude = ["CLAUDE.md", "AGENTS.md", "/.claude", "/.agents", "/.circleci", "/.github", "/docs", "/tests",
-           "/deploy", "/examples", "/packages/cairn-client", "/packages/cairn-operator-dataflow-metaflow",
+           "/benchmark", "/deploy", "/examples", "/packages/cairn-client", "/packages/cairn-operator-dataflow-metaflow",
            "/packages/cairn-operator-dataflow-skypilot", "/packages/*/tests", "/packages/*/README.md",
            "/packages/*/DESIGN.md", "/packages/*/LICENSE", "/packages/*/NOTICE"]
 

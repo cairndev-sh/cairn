@@ -309,10 +309,12 @@ and recorded like training, is in progress.
   matches the profile's `ml_target`
   ([cairn#216](https://github.com/cairndev-sh/cairn/issues/216)). Keep both
   `gpu`.
-- **No audit trail by default:** the `finetune-ssh` profile does not bind an
-  audit sink yet
-  ([cairn-extensions#38](https://github.com/cairndev-sh/cairn-extensions/issues/38)).
-  Approvals and run events are still recorded in the run store.
+- **The audit log is a local file:** the `finetune-ssh` profile binds `audit.sink`
+  to `audit/store`, so the run's gate decisions, box start and stop, spend and
+  promotion go to a hash-chained log
+  ([what a pipeline run writes](/concepts/runs/#what-a-pipeline-run-writes)). The
+  file is `CAIRN_AUDIT_LOG`, or `audit.jsonl` in the engine's working directory
+  when that's unset, so keep it on durable disk.
 - **Token expiry:** the CLI's login expires and is not renewed. A command that
   meets an expired login, a watch included, prints `session expired at HH:MM — run
   cairn remote login` and exits 77; the pipeline keeps running on the server. Log in

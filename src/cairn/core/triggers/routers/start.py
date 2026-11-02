@@ -198,6 +198,8 @@ def build_start_router(dispatcher, pipeline_bridge) -> APIRouter:
                     preset=body.config_preset or "", workspace_id=workspace_id)
             except (PipelineNotFoundError, PresetNotFoundError) as e:  # pragma: no cover
                 raise HTTPException(status_code=404, detail=str(e)) from e
+            except UnknownPresetInputsError as e:
+                raise HTTPException(status_code=400, detail=str(e)) from e
             except AmbiguousRefError as e:  # pragma: no cover — the prefix disambiguates
                 raise HTTPException(status_code=400, detail=str(e)) from e
             return {"kind": PIPELINE, "ref": ref, "mode": mode, "dry_run": True,

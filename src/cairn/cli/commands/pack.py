@@ -1,8 +1,8 @@
-"""cairn pack — pack introspection (#109).
+"""``cairn pack``: for people who build packs (ADR-0165 D6).
 
-``cairn pack schema <ref>`` emits the **UI contract** (input/output JSON Schema
-+ plan + steps + integrations) that every surface renders from — the keystone
-of schema-driven UI: one contract, no per-pack hand-built screens.
+Scaffold (``new``), wire in (``add``, ``sync``), check (``check``, ``test``, ``lock``) and inspect
+(``ls``, ``show``, ``schema``, ``export``). ``schema`` emits the **UI contract** (#109: input/output
+JSON Schema + plan + steps + integrations) that every surface renders from.
 """
 from __future__ import annotations
 from cairn.core.settings import getenv
@@ -10,10 +10,12 @@ from cairn.core.settings import getenv
 import asyncio
 import importlib
 import importlib.util
+import json
 import os
 import sys
 import tomllib
 from pathlib import Path
+from typing import Optional
 
 import typer
 from rich.console import Console
@@ -21,8 +23,18 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
+from cairn.cli.commands import export as _export
+from cairn.cli.commands import flow as _flow
+from cairn.cli.commands import init as _init
+from cairn.cli.commands import lock as _lock
+from cairn.cli.commands import ls as _ls
+from cairn.cli.commands import pipeline as _pipeline
+from cairn.cli.commands import test as _test
+from cairn.cli.commands import validate as _validate
+from cairn.cli.commands import visualize as _visualize
+
 app = typer.Typer(
-    help="Inspect packs: the UI contract behind every surface (#109).",
+    help="Build and check packs.",
     no_args_is_help=True,
 )
 console = Console()
@@ -140,39 +152,16 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - parity wit
     return 0
 
 
-@app.command("check")
-def check_cmd(
-    json_out: bool = typer.Option(
-        False, "--json", help="Emit findings as JSON (for CI).",
-    ),
-) -> None:
-    """Fail on manifest ↔ code drift in operator packs (#1105).
+def _refuse(message: str) -> None:
+    typer.echo(message, err=True)
+    raise typer.Exit(2)
 
-    Every operator is declared twice — in code (`@register_operator` + the
-    Operation class) and in `pack.toml`. They drift, and because the manifest is
-    what governance reads (`risk` decides whether a gate opens), a drifted
-    manifest is a governance-relevant inconsistency rather than cosmetics.
 
-    Exit 0 = clean, 1 = drift found. Made for CI: the two cases this catches both
-    previously surfaced as a log warning nobody acted on.
-    """
-    import json as _json
-
-    from cairn.core.pack.drift import check_installed_operator_drift
-
-    findings = check_installed_operator_drift()
-
-    if json_out:
-        typer.echo(_json.dumps(
-            [{"kind": f.kind, "operator": f.operator, "detail": f.detail} for f in findings],
-            indent=2,
-        ))
-        raise typer.Exit(1 if any(f.is_drift for f in findings) else 0)
-
+def _print_drift(findings: list) -> None:
     real = [f for f in findings if f.is_drift]
     if not findings:
         console.print("[green]✓[/] every operator manifest matches its registered class")
-        raise typer.Exit(0)
+        return
 
     by_kind: dict[str, list] = {}
     for f in findings:
@@ -188,7 +177,65 @@ def check_cmd(
             # [project.entry-points."cairn.operators"] hint.
             console.print(f"  • {f.detail}", markup=False)
         console.print()
-    raise typer.Exit(1 if real else 0)
+
+
+# #1105; the paths and their options are `cairn validate`'s work (ADR-0165 D10)
+@app.command("check")
+def check_cmd(
+    paths: Optional[list[str]] = typer.Argument(
+        None, help="Files or directories to validate offline. None: only the manifest check.",
+    ),
+    strict: bool = typer.Option(False, "--strict", help="With paths: treat warnings as failures."),
+    template_path: Optional[list[str]] = typer.Option(
+        None, "--template-path",
+        help="With paths: extra directory to resolve skill template refs from (repeatable).",
+    ),
+    verbose: bool = typer.Option(False, "-v", "--verbose"),
+    json_out: bool = typer.Option(
+        False, "--json", help="Emit findings as JSON (for CI).",
+    ),
+) -> None:
+    """Validate templates, skills and policies offline, and fail on manifest and code drift.
+
+    Every operator is declared twice — in code (`@register_operator` + the
+    Operation class) and in `pack.toml`. They drift, and because the manifest is
+    what governance reads (`risk` decides whether a gate opens), a drifted
+    manifest is a governance-relevant inconsistency rather than cosmetics.
+
+    Exit 0 = clean, 1 = something failed. No LLM and no backend are needed. Made for CI.
+    """
+    from cairn.core.pack.drift import check_installed_operator_drift
+
+    if not paths and (strict or template_path):
+        _refuse("--strict and --template-path apply to the paths you validate; name some.")
+
+    failed = False
+    reports = None
+    if paths:
+        _validate.strict_local_validation()
+        if json_out:
+            reports = _validate.reports_for(paths, template_path)
+            if not reports:
+                typer.echo("no artifacts found", err=True)
+            warned = strict and any(r.warnings for r in reports)
+            failed = not reports or warned or not all(r.ok for r in reports)
+        else:
+            failed = _validate._run(paths, strict=strict, template_paths=template_path, verbose=verbose) != 0
+
+    findings = check_installed_operator_drift()
+    failed = failed or any(f.is_drift for f in findings)
+    drift = [{"kind": f.kind, "operator": f.operator, "detail": f.detail} for f in findings]
+
+    if json_out:
+        typer.echo(json.dumps(drift if reports is None else {
+            "artifacts": [{"path": r.path, "type": r.artifact_type, "ok": r.ok,
+                           "issues": [{"level": i.level, "message": i.message} for i in r.issues]}
+                          for r in reports],
+            "drift": drift,
+        }, indent=2))
+    else:
+        _print_drift(findings)
+    raise typer.Exit(1 if failed else 0)
 
 
 # ─── `cairn pack add` — the local dev loop (#1545, ADR-0092 principle 4) ─────
@@ -344,6 +391,7 @@ def wire_pack_into_pyproject(text: str, *, member: str, dist: str) -> tuple[str,
     return out, changes
 
 
+# #1545
 @app.command("add")
 def add_cmd(
     pack_dir: str = typer.Argument(
@@ -353,7 +401,7 @@ def add_cmd(
         help="Don't touch pyproject.toml — print the CAIRN_PACK_PATH export "
              "that makes this pack loadable with no install at all."),
 ) -> None:
-    """Make a scaffolded pack discoverable by the engine (#1545).
+    """Make a scaffolded pack discoverable by the engine.
 
     Two modes, and `--dev` is the one to reach for first:
 
@@ -367,7 +415,7 @@ def add_cmd(
     target = Path(pack_dir).expanduser().resolve()
     if not (target / "pack.toml").is_file():
         console.print(f"[red]✗ {target} has no pack.toml[/] — not a pack. "
-                      "Scaffold one with `cairn init pack <name>`.")
+                      "Scaffold one with `cairn pack new pack <name>`.")
         raise typer.Exit(2)
 
     if dev:
@@ -379,7 +427,7 @@ def add_cmd(
             f"export {DEV_PACK_PATH_ENV}=\"{target}\"\n"
             f"[dim]# append to an existing list:[/]\n"
             f"export {DEV_PACK_PATH_ENV}=\"${DEV_PACK_PATH_ENV}:{target}\"",
-            title="zero-install dev loop — export, then `cairn ls`",
+            title="zero-install dev loop — export, then `cairn pack ls`",
             border_style="green"))
         console.print(
             "[dim]The engine scans each listed dir on every start; edits take "
@@ -390,7 +438,7 @@ def add_cmd(
 
     if not (target / "pyproject.toml").is_file():
         console.print(f"[red]✗ {target} has no pyproject.toml[/] — a permanent "
-                      "install needs one (`cairn init pack` writes it). Use "
+                      "install needs one (`cairn pack new pack` writes it). Use "
                       "[bold]--dev[/] for the zero-install loop instead.")
         raise typer.Exit(2)
 
@@ -445,9 +493,10 @@ def add_cmd(
         "[yellow]⚠[/] run it as written. A bare [bold]uv sync[/] REMOVES every "
         "extra not named on the command line — presidio, temporal and auth vanish "
         "silently. That is why this command does not sync for you.")
-    console.print(f"[dim]Then confirm:[/] [bold]cairn ls {dist}[/]")
+    console.print(f"[dim]Then confirm:[/] [bold]cairn pack ls {dist}[/]")
 
 
+# #1254, ADR-0087 (the drift guard: D6)
 def build_cmd(
     target: str = typer.Argument(
         ..., help="Pipeline class: `module:Class` or `path/to/file.py:Class`.",
@@ -457,12 +506,12 @@ def build_cmd(
         help="Pack directory to write (default: ./<pack-name>).",
     ),
 ) -> None:
-    """Compile a ``@pipeline`` class to its pack records (#1254, ADR-0087).
+    """Compile a ``@pipeline`` class to its pack records.
 
     The class is a VIEW — this writes ``pipelines/*.yaml`` + ``flows/*.yaml``,
     and for lifted ``@step`` defs the private-op module plus wheel wiring
     (``pack.toml`` / ``pyproject.toml`` only when absent, never clobbering).
-    Prints the content hash to pin launches with (D6 drift guard).
+    Prints the content hash to pin launches with (the drift guard).
     """
     # optional dependency — cairn-sdk is a sibling workspace member; a bare
     # engine install may not carry it
@@ -524,6 +573,7 @@ def build_cmd(
     _warn_shadowing_authoring_file(compiled, dest)
 
 
+# #1539; the doctor drift check: #1105
 @app.command("sync")
 def sync_cmd(
     pack_dir: str = typer.Argument(
@@ -531,7 +581,7 @@ def sync_cmd(
     check: bool = typer.Option(
         False, "--check", help="Report drift without writing (exit 1 on drift)."),
 ) -> None:
-    """Regenerate operator metadata from the classes (#1539).
+    """Regenerate operator metadata from the classes.
 
     The Operation class is the single source of truth for the whole
     ``[operator."<n>"]`` table — identity, schemas, lifecycle flags, risk,
@@ -539,7 +589,7 @@ def sync_cmd(
     ``sync`` walks the pack's ``src/<package>/``, derives each table, and
     rewrites only the stale/missing blocks (comments between tables
     survive). ``--check`` is the CI form of the same comparison; the doctor
-    drift check (#1105 + governance fields) covers the installed tree.
+    drift check (manifest drift + governance fields) covers the installed tree.
     """
     from cairn.core.operator.manifest_sync import check_pack, sync_pack  # noqa: PLC0415 — heavy walk, load on use
 
@@ -614,3 +664,110 @@ else:
             "install does not include it. `cairn pack --help` lists the commands it has."
         )
         raise typer.Exit(1)
+
+
+# ─── what `cairn pack` took over (ADR-0165 D6, D10): the code stays where it was ──────────────
+
+app.add_typer(_init.app, name="new")
+app.command("test")(_test.cmd)
+app.command("lock")(_lock.cmd)
+
+
+@app.command("ls")
+def ls_cmd(
+    pack: Optional[str] = typer.Argument(
+        None,
+        help="Pack name to restrict the listing to, or the view `operators` "
+             "(one row per registered operator + the kernels and files using it).",
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON instead of the report."),
+    unused: bool = typer.Option(
+        False, "--unused", help="`ls operators` only: show only operators no shipped file references.",
+    ),
+    flows: bool = typer.Option(False, "--flows", help="List flows, all three kinds."),
+    pipelines: bool = typer.Option(False, "--pipelines", help="List pipelines."),
+) -> None:
+    """List what's installed: packs and their contributions, operators, flows or pipelines."""
+    if not (flows or pipelines):
+        _ls.cmd(pack=pack, json=json_out, unused=unused)
+        return
+    if flows and pipelines:
+        _refuse("--flows and --pipelines are separate lists; pick one.")
+    if unused or (pack or "").strip().lower() == "operators":
+        _refuse("--flows and --pipelines do not apply to the operators view.")
+
+    from cairn.core.refs import pack_key  # noqa: PLC0415
+
+    rows = _flow.flow_rows() if flows else _pipeline.pipeline_rows()
+    if pack:
+        rows = [r for r in rows if pack_key(r["ref"].partition("/")[0]) == pack_key(pack)]
+    if json_out:
+        typer.echo(json.dumps(rows, indent=2))
+    elif flows:
+        _flow.print_flow_rows(rows)
+    else:
+        _pipeline.print_pipeline_rows(rows)
+
+
+@app.command("show")
+def show_cmd(
+    ref: str = typer.Argument(..., help="<pack>/<name>: a pipeline; with --split a flow; with --graph a template"),
+    plan: bool = typer.Option(False, "--plan", help="Show a pipeline's execution plan."),
+    split: bool = typer.Option(False, "--split", help="Show how a flow splits at its in-flow approval gates."),
+    graph: bool = typer.Option(False, "--graph", help="Render an agentic template's graph as Mermaid."),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="With --graph: write to this file."),
+    input_: list[str] = typer.Option(
+        None, "--input", "-i", help="With --plan: `key=value` you would launch with; repeatable."),
+    preset: str = _pipeline._PRESET,
+    workspace: str = _pipeline._WORKSPACE,
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON. Not with --graph, which is Mermaid."),
+) -> None:
+    """Show a pipeline's legs, gates and wires; a flow's split at its gates; a template's graph."""
+    if plan + split + graph > 1:
+        _refuse("--plan, --split and --graph are separate views; pick one.")
+    if output and not graph:
+        _refuse("--output applies to --graph.")
+    if graph and json_out:
+        _refuse("--graph prints Mermaid; it has no --json.")
+    if (split or graph) and (input_ or preset):
+        _refuse("--input and --preset apply to --plan.")
+    if split:
+        _flow.split_cmd(ref=ref, json_out=json_out)
+    elif graph:
+        _visualize.cmd(kind="template", name=ref, output=output)
+    else:
+        _pipeline.show_cmd(ref=ref, plan=plan, input_=input_, preset=preset, workspace=workspace, json_out=json_out)
+
+
+#: What `cairn pack export` can write: a pipeline file, or a flow as a native orchestrator's.
+_PIPELINE_TARGET = "pipeline"
+
+
+@app.command("export")
+def export_cmd(
+    ref: str = typer.Argument(..., help="A workflow, e.g. training/finetune; with --to metaflow, a flow."),
+    to: str = typer.Option(
+        _PIPELINE_TARGET, "--to", help=f"Target: {' | '.join((_PIPELINE_TARGET, *_flow.EXPORT_TARGETS))}."),
+    out: Optional[str] = typer.Option(
+        None, "--out", "-o", help="pipeline: the file (default stdout). metaflow: the directory (default .)."),
+    config: Optional[list[str]] = typer.Option(
+        None, "--config", "-c", help="metaflow: key=value feeding $config.* (repeatable)."),
+    stdout: bool = typer.Option(False, "--stdout", help="Print instead of writing."),
+    demo: Optional[str] = typer.Option(
+        None, "--demo",
+        help="pipeline: the demo tier whose inputs become the defaults (default: the first tier "
+             "the pack ships; 'none' to use schema defaults only)."),
+    profile: Optional[str] = typer.Option(
+        None, "--profile", help="pipeline: the execution profile the contract resolves under."),
+) -> None:
+    """Render a workflow as one runnable pipeline file, or a flow as a native orchestrator file."""
+    if to == _PIPELINE_TARGET:
+        if config:
+            _refuse("--config applies to --to metaflow.")
+        if stdout and out:
+            _refuse("--stdout and --out are two destinations; pick one.")
+        _export.cmd(workflow=ref, out=out, demo=demo, profile=profile)
+        return
+    if demo or profile:
+        _refuse("--demo and --profile apply to --to pipeline.")
+    _flow.export_cmd(ref=ref, to=to, out=Path(out or "."), config=config, stdout=stdout)

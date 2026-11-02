@@ -30,7 +30,7 @@ def _explain(*inputs: str) -> dict:
         args += ["-i", i]
     res = CliRunner().invoke(pipeline.app, args)
     assert res.exit_code == 0, res.output
-    return json.loads(res.output)
+    return json.loads(res.stdout)
 
 
 def test_explain_types_a_comma_separated_list_input(dev_packs, scratch_pack):
