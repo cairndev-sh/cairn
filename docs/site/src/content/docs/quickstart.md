@@ -19,7 +19,7 @@ curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_EXTRAS=hello sh
 
 The installer puts `cairn` on your PATH as a [uv](https://docs.astral.sh/uv/)
 tool, installing uv first if it is missing. The `hello` extra adds the example
-pack, `hello-cairn`, with four pipelines to try. Without the script:
+pack, `hello-cairn`, with five pipelines to try. Without the script:
 
 ```bash
 pip install 'cairndev[hello]'   # inside a virtual environment, Python 3.12 or later
@@ -157,6 +157,23 @@ staged and published summaries are under `~/.cairn/artifacts`
 - `--environment hello-prod`: the example pack's policy makes every
   `storage/put` in that environment wait for a person, though the pipeline
   file has no gate there.
+- `cairn run hello-cairn/over-budget --environment sandbox`: a pipeline whose
+  estimate ($5) is above its budget ($1). The flow leg's reservation fails, so
+  its engine never starts, nothing is spent, and the command exits 1:
+
+  ```text
+  pipeline_id=pl_592c6c850aec40a5 status=running
+    failed
+      engine-check       failed               run=run-flow-hello-cairn--engine-check-78f6c9
+    engine-check: series 'hello-over-budget': this run's estimate $5.00 would exceed the $1.00 cap ($0.00 spent, $0.00 reserved by in-flight runs). Raise the budget or start a new series.
+  → logs      cairn status run-flow-hello-cairn--engine-check-78f6c9 --logs   # leg engine-check
+  → findings  cairn status pl_592c6c850aec40a5 --results
+  ```
+
+  The pipeline file declares that estimate, and the flow itself would cost
+  nothing. The launch is admitted and the leg is refused, so the audit trail has
+  `leg.budget_refused`, with the estimate and the cap, rather than
+  `pipeline.refused`. See [Cost and budgets](/concepts/cost/).
 
 ## Next
 

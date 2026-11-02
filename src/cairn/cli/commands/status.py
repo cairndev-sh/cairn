@@ -62,6 +62,11 @@ def _print_overview(pipes: list[dict], runs: list[dict]) -> None:
 # ── one pipeline, one run ─────────────────────────────────────────────────────
 
 
+def _leg_errors(p: dict) -> dict[str, str]:
+    """Why each leg's run ended badly, by step id, from the pipeline's record."""
+    return {sid: str((run or {}).get("error") or "") for sid, run in (p.get("step_runs") or {}).items()}
+
+
 def _print_pipeline(pipeline_id: str, p: dict) -> None:
     typer.secho(f"{p.get('pipeline_name') or ''}  {pipeline_id}  {p.get('status', '')}", bold=True)
     trigger = p.get("trigger") or {}
@@ -69,7 +74,7 @@ def _print_pipeline(pipeline_id: str, p: dict) -> None:
         by = str(trigger["publisher"]).removeprefix("pipeline:")
         typer.echo(f"Started by  {by}" + (f"  ({trigger['topic']})" if trigger.get("topic") else ""))
     typer.echo("")
-    errors = {sid: str((run or {}).get("error") or "") for sid, run in (p.get("step_runs") or {}).items()}
+    errors = _leg_errors(p)
     order = p.get("step_order") or list((p.get("step_state") or {}).keys())
     states = p.get("step_state") or {}
     for sid in order:
@@ -144,6 +149,10 @@ def follow_pipeline(c: Any, pipeline_id: str, *, decision: Optional[str], native
         status = p.get("status")
         if status in remote._TERMINAL:
             if status != "done" and not quiet:  # done: the results say it, and the chain may go on
+                errors = _leg_errors(p)
+                for sid, _run in remote._failed_steps(p):
+                    if errors.get(sid):
+                        typer.secho(f"  {sid}: {errors[sid][:200]}", fg="red")
                 remote._print_pipeline_next(pipeline_id, p)
             return 0 if status == "done" else 1
         waiting = [s for s, st in (p.get("step_state") or {}).items()

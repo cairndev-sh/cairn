@@ -35,6 +35,8 @@ _PIPELINES = _PACK / "pipelines"
 _FLOWS = _PACK / "flows"
 _PROFILE = _PACK / "profiles" / "hello.toml"
 PIPELINES = ("profile-and-publish", "ask-the-docs", "nightly-ops", "tiny-finetune")
+# Stops at its budget before any gate, on its own series; test_hello_cairn.py proves the refusal.
+OVER_BUDGET = "over-budget"
 
 
 def _pipeline(name: str = "profile-and-publish"):
@@ -71,8 +73,13 @@ def example_loaded(monkeypatch):
 
 # ── every pipeline ──────────────────────────────────────────────────────────
 
-def test_the_example_ships_the_four_pipelines():
-    assert sorted(p.stem for p in _PIPELINES.glob("*.yaml")) == sorted(PIPELINES)
+def test_the_example_ships_its_pipelines():
+    assert sorted(p.stem for p in _PIPELINES.glob("*.yaml")) == sorted((*PIPELINES, OVER_BUDGET))
+
+
+def test_the_over_budget_pipeline_declares_an_estimate_above_its_cap():
+    gov = _pipeline(OVER_BUDGET).governance
+    assert gov["estimated_usd"] > gov["budget"]["usd"] and gov["series"]
 
 
 @pytest.mark.parametrize("name", PIPELINES)

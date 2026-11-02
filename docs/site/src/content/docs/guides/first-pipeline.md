@@ -21,6 +21,7 @@ hash, and `cairn pipeline show` prints one pipeline's inputs, legs and gates:
 $ cairn pipeline ls
   hello-cairn/ask-the-docs  3 legs (gate,task,template)  sha256:4d1cf10680a88e38
   hello-cairn/nightly-ops  4 legs (flow,task,template)  sha256:d59da1bb89fa22e6
+  hello-cairn/over-budget  1 legs (flow)  sha256:6564ee0f0d22af39
   hello-cairn/profile-and-publish  9 legs (flow,gate,task)  sha256:52dccf2087b839f5
   hello-cairn/tiny-finetune  9 legs (flow,gate,task)  sha256:1c4102fa7e4528d0
 ```
