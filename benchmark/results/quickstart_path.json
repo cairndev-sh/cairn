@@ -1,0 +1,51 @@
+{
+  "measurement": "quickstart_path",
+  "title": "The quickstart's path on a local engine",
+  "script": "benchmark/quickstart_path.py",
+  "provenance": {
+    "cairndev_version": "0.3.3",
+    "uv_lock_sha256": "43c69f31e9856268c23e1fcde3d18fcf6a60814ffdb8af27e00576ee093cc9b0",
+    "git_sha": "61ce59904cd7d092ef2df8f32e4c4a67ab1ba202",
+    "code_clean": true,
+    "machine": {
+      "os": "Linux",
+      "arch": "x86_64",
+      "cpus": 4,
+      "python": "3.13.13"
+    },
+    "measured_at": "2026-11-02",
+    "ci_run": "https://github.com/cairndev-sh/cairn/actions/runs/41436595497"
+  },
+  "inputs": {
+    "pipeline": "hello-cairn/profile-and-publish",
+    "environment": "sandbox",
+    "sample_sha256": "d2c09d27b2874cee99ccbb1272b0bd50c689220fe47c7058948c86a02cb0a8c8",
+    "repeats": 5
+  },
+  "results": [
+    {
+      "what": "Engine start to answering",
+      "result": "3.2 s"
+    },
+    {
+      "what": "Launch to a pipeline paused at its person gate",
+      "result": "1.9 s (median of 5, after one warm-up run)"
+    },
+    {
+      "what": "Both approvals to a finished pipeline, nobody waiting",
+      "result": "1.0 s (median of 5, after one warm-up run)"
+    },
+    {
+      "what": "Nothing published before the person gate",
+      "result": "held on all 6 runs"
+    },
+    {
+      "what": "A false data gate stops the pipeline before any later step starts",
+      "result": "held"
+    },
+    {
+      "what": "Audit chain verifies at the end",
+      "result": "held (6 rows)"
+    }
+  ]
+}

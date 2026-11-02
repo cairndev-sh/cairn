@@ -436,7 +436,7 @@ exclude = ["CLAUDE.md", "AGENTS.md"]
 # README, LICENSE, NOTICE). Not process files, internal docs, tests, deploy tooling, the example
 # pack, or the distributions built beside the engine, which have their own sdists (#2405).
 exclude = ["CLAUDE.md", "AGENTS.md", "/.claude", "/.agents", "/.circleci", "/.github", "/docs", "/tests",
-           "/deploy", "/examples", "/packages/cairn-client", "/packages/cairn-operator-dataflow-metaflow",
+           "/benchmark", "/deploy", "/examples", "/packages/cairn-client", "/packages/cairn-operator-dataflow-metaflow",
            "/packages/cairn-operator-dataflow-skypilot", "/packages/*/tests", "/packages/*/README.md",
            "/packages/*/DESIGN.md", "/packages/*/LICENSE", "/packages/*/NOTICE"]
 
