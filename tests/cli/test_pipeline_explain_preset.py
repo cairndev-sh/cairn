@@ -61,7 +61,7 @@ def tune_pack(dev_packs, scratch_pack, monkeypatch):
 def _explain(*args: str) -> dict:
     res = CliRunner().invoke(pipeline.app, ["explain", "scratch-tune/tune", "--json", *args])
     assert res.exit_code == 0, res.output
-    return json.loads(res.output)
+    return json.loads(res.stdout)
 
 
 def test_explain_resolves_a_pack_preset_and_shows_each_layer(tune_pack):

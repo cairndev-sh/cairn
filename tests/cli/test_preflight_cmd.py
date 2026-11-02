@@ -74,7 +74,7 @@ def test_preflight_names_a_pipeline_and_points_at_pipeline_explain(example_pack,
         assert _preflight_sync(ref, None, check_connections=False) == 1
         out = capsys.readouterr().out
         assert f"{ref} is a pipeline — preflight checks agentic templates only" in out
-        assert "cairn pipeline explain hello-cairn/profile-and-publish" in out
+        assert "cairn run hello-cairn/profile-and-publish --dry-run" in out
         assert "NOT FOUND" not in out
 
 
@@ -87,7 +87,7 @@ def test_dry_run_names_a_data_flow_and_points_at_pipeline_run(example_pack, tmp_
     out = capsys.readouterr().out
     assert "hello-cairn/engine-check is a data flow — the dev loop" in out
     assert "runs agentic templates only" in out
-    assert "cairn pipeline run <pipeline>" in out
+    assert "cairn run <pipeline>" in out
     assert "NOT FOUND" not in out
 
 

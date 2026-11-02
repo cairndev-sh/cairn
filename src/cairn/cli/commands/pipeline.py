@@ -30,6 +30,7 @@ from __future__ import annotations
 import typer
 from rich.console import Console
 
+from cairn.cli.aliases import renamed
 from cairn.core.engine.pipeline import PipelineDef, plan_pipeline
 from cairn.core.engine.pipeline_resolve import PIPELINE_PREFIX, all_pipeline_defs, resolve_pipeline_ref
 
@@ -197,7 +198,8 @@ def show_cmd(
 
 
 # #1792; the RESOLVED block: #2134 S4; --preset refusals: #231
-@app.command("explain")
+@app.command("explain", hidden=True)
+@renamed("cairn pipeline explain", "cairn run --dry-run")
 def explain_cmd(
     ref: str = typer.Argument(..., help="<pack>/<name> or pipeline:<pack>/<name>"),
     input_: list[str] = typer.Option(
@@ -303,12 +305,18 @@ async def _drive_until_terminal(bridge, pipeline_id: str, *, poll_s: float = 2.0
                               + (f"  [dim]{st.run_id}[/dim]" if st.run_id else ""))
         if rec.status in _TERMINAL:
             return rec
+        # #260 — a person's wait has nobody to answer it here: this process has no prompt and no
+        # server, so polling on would never end.
+        if rec.status == "paused" and any(
+                st.status in ("awaiting_approval", "awaiting_advance") for st in rec.step_state.values()):
+            return rec
         await asyncio.sleep(poll_s)
 
 
 # ref resolution: ADR-0106 D1 (#2134); the dev loop needs no pipeline: ADR-0106 D6;
 # the CLI owns the pipeline it launched: #1702
-@app.command("run")
+@app.command("run", hidden=True)
+@renamed("cairn pipeline run", "cairn run")
 def run_pipeline(
     ref: str = typer.Argument(
         ..., help="`<pack>/<name>` or `pipeline:<pack>/<name>` — a declared pipeline; "
@@ -429,6 +437,13 @@ def run_pipeline(
                       f"server, or rerun without --detach.[/yellow]")
         raise typer.Exit(2)
 
+    if rec.status == "paused":  # #260
+        waiting = ", ".join(s for s, st in rec.step_state.items()
+                            if st.status in ("awaiting_approval", "awaiting_advance"))
+        console.print(f"[yellow]paused at {waiting}: this command has no way to ask you. The record is "
+                      f"kept. To answer gates at a prompt, run it with `cairn run {ref}`.[/yellow]",
+                      soft_wrap=True)
+        raise typer.Exit(2)
     console.print(f"  final: [bold]{rec.status}[/bold]"
                   + (f"   [red]{rec.trigger.get('failure_reason', '')}[/red]"
                      if rec.status == "failed" else ""))

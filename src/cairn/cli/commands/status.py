@@ -125,9 +125,11 @@ def _print_logs(c: Any, target: str, *, after_seq: int, events_only: bool, as_js
 
 
 def follow_pipeline(c: Any, pipeline_id: str, *, decision: Optional[str], native: bool,
-                    timeout: Optional[float], on_timeout: str, dump: Optional[str] = None) -> int:
+                    timeout: Optional[float], on_timeout: str, dump: Optional[str] = None,
+                    interval: float = 2.0, quiet: bool = False) -> int:
     """Stay with a pipeline to the end, asking at each human wait. Returns the exit code: 0 done,
-    1 failed or cancelled, 2 waiting on a person with no way to ask (it says the command)."""
+    1 failed or cancelled, 2 waiting on a person with no way to ask (it says the command).
+    ``quiet`` keeps stdout for the caller's ``--json``: it prints nothing and never prompts."""
     approver = os.environ.get("USER", "cli-user")
     last = ""
     told = False
@@ -135,18 +137,22 @@ def follow_pipeline(c: Any, pipeline_id: str, *, decision: Optional[str], native
     while True:
         p = remote._poll_pipeline(c, pipeline_id)
         render = json.dumps(p.get("step_state"), sort_keys=True)
-        if render != last:
+        if render != last and not quiet:
             typer.echo(f"  {p.get('status')}")
             remote._print_steps(p)
-            last = render
+        last = render
         status = p.get("status")
         if status in remote._TERMINAL:
-            remote._print_pipeline_next(pipeline_id, p)
+            if status != "done" and not quiet:  # done: the results say it, and the chain may go on
+                remote._print_pipeline_next(pipeline_id, p)
             return 0 if status == "done" else 1
         waiting = [s for s, st in (p.get("step_state") or {}).items()
                    if st.get("status") in _HUMAN_WAITS and (s, st.get("awaiting_since")) not in answered]
         if status == "paused" and waiting:
-            remote._print_pipeline_next(pipeline_id, p, approver=approver)
+            if quiet and not decision:
+                return 2
+            if not quiet:
+                remote._print_pipeline_next(pipeline_id, p, approver=approver)
             if dump:
                 with open(dump, "w", encoding="utf-8") as fh:
                     json.dump(p, fh, indent=2)
@@ -170,10 +176,103 @@ def follow_pipeline(c: Any, pipeline_id: str, *, decision: Optional[str], native
                     _call(c.advance_step, pipeline_id, sid, approver=approver)
                 answered.add((sid, p["step_state"][sid].get("awaiting_since")))
                 typer.secho(f"{answer}d {sid}", fg="green")
-        elif status == "paused" and not told and not answered:
+        elif status == "paused" and not told and not answered and not quiet:
             typer.echo("  waiting on a schedule or an event, not a person. Ctrl-C to detach; the pipeline keeps going.")
             told = True
-        time.sleep(2.0)  # also lets the bridge take a decision up before the next read
+        time.sleep(max(0.5, interval))  # also lets the bridge take a decision up before the next read
+
+
+#: How long to look for a pipeline an `emits:` started: the bus delivers at once, so this is short.
+_START_WAIT_S = 10.0
+
+
+def _pipelines_started_by(c: Any, rec: dict, seen: set[str]) -> list[str]:
+    """Pipelines the finished ``rec`` started through its events (#289 names the publisher on the
+    started record's ``trigger``). Only looks when the plan emits something, and gives up after
+    :data:`_START_WAIT_S`: an event with no enabled trigger on it starts nothing, which is normal."""
+    plan = rec.get("plan") or {}
+    if not plan.get("emits") and not any(s.get("emits") for s in plan.get("steps") or []):
+        return []
+    pipeline_id = rec.get("pipeline_id")
+    deadline = time.monotonic() + _START_WAIT_S
+    while True:
+        started = []
+        rows = (_call(c.pipelines) or {}).get("pipelines", [])
+        for row in rows:
+            other = row.get("pipeline_id")
+            if other in seen or str(row.get("created_at") or "") < str(rec.get("created_at") or ""):
+                continue
+            full = _call(c.pipeline, other) or {}
+            if (full.get("trigger") or {}).get("correlation_id") == pipeline_id:
+                started.append(other)
+        if started or time.monotonic() >= deadline:
+            return started
+        time.sleep(1.0)
+
+
+def _print_results(rec: dict) -> None:
+    """A finished pipeline's declared ``outputs:`` (ADR-0161)."""
+    rows = [(k, v) for k, v in (rec.get("outputs") or {}).items() if v is not None]
+    if not rows:
+        return
+    typer.secho(f"  Result of {rec.get('pipeline_name') or rec.get('pipeline_id')}", bold=True)
+    width = max(len(k) for k, _ in rows)
+    for key, value in rows:
+        typer.echo(f"    {remote._safe_line(key):<{width}}  {remote._safe_line(value)}")
+
+
+def follow_chain(c: Any, pipeline_id: str, *, quiet: bool = False, **kw: Any) -> tuple[int, list[dict]]:
+    """Follow a pipeline, then any pipeline its events start, and those they start. Stops at the
+    first that doesn't end ``done``. Returns the exit code and the records, in order."""
+    queue, seen, records = [pipeline_id], {pipeline_id}, []
+    while queue:
+        current = queue.pop(0)
+        code = follow_pipeline(c, current, quiet=quiet, **kw)
+        rec = _call(c.pipeline, current) or {}
+        records.append(rec)
+        if code:
+            return code, records
+        if not quiet:
+            _print_results(rec)
+        started = _pipelines_started_by(c, rec, seen)
+        for other in started:
+            seen.add(other)
+            queue.append(other)
+            if not quiet:
+                typer.secho(f"  → {current} started {other}", fg="cyan")
+    if not quiet:
+        typer.secho(f"  ✓ done: {' → '.join(r.get('pipeline_id', '') for r in records)}", fg="green")
+    return 0, records
+
+
+def launch_and_follow(ref: str, inputs: dict, *, environment: Optional[str], preset: Optional[str],
+                      save_preset: Optional[str], detach: bool, interval: float, timeout: Optional[float],
+                      on_timeout: str, native: bool, dump: Optional[str], json_out: bool,
+                      endpoint: Optional[str], token: Optional[str], profile: Optional[str]) -> int:
+    """``cairn run <pipeline>``: through the launch door, then stay with it (ADR-0165 D3)."""
+    with remote._session(endpoint, token, profile) as (ep, tok, local):
+        if local and detach:
+            typer.secho("ephemeral engine: it stops with this command, so --detach is ignored.", fg="yellow", err=True)
+            detach = False
+        # generous: the in-process engine can stall on a leg's cold start, and a launch is not retryable
+        with remote._api(ep, tok, timeout=300.0) as c:
+            out = _call(c.launch_pipeline, ref, inputs, environment=environment or None, preset=preset) or {}
+            pipeline_id = out.get("pipeline_id")
+            typer.secho(f"pipeline_id={pipeline_id} status={out.get('status')}", fg="green", err=json_out)
+            if save_preset:
+                remote._save_preset(c, ref, preset, inputs, save_preset)
+            if detach:
+                if json_out:
+                    typer.echo(json.dumps(out, indent=2))
+                else:
+                    remote._next("watch", f"cairn status {pipeline_id} --follow")
+                return 0
+            code, records = follow_chain(
+                c, pipeline_id, quiet=json_out, decision=None, native=native, timeout=timeout,
+                on_timeout=on_timeout, dump=dump, interval=interval)
+            if json_out:
+                typer.echo(json.dumps({"pipelines": records}, indent=2))
+            return code
 
 
 # ── the commands ──────────────────────────────────────────────────────────────
@@ -245,8 +344,9 @@ def status_cmd(
             if logs:
                 _print_logs(c, target, after_seq=after_seq, events_only=events_only, as_json=json_out)
             elif follow:
-                raise typer.Exit(follow_pipeline(c, target, decision=decision, native=native, timeout=timeout,
-                                                 on_timeout=on_timeout, dump=dump))
+                code, _records = follow_chain(c, target, decision=decision, native=native, timeout=timeout,
+                                              on_timeout=on_timeout, dump=dump, interval=interval)
+                raise typer.Exit(code)
             elif pipeline:
                 p = _call(c.pipeline, target) or {}
                 if json_out:
