@@ -2,7 +2,7 @@
 
 storage × runtime × bus (all eight cells, ``tests/e2e/conftest.py``) × the example pack's four
 pipelines, each cell a real ``cairn-server`` driven as a user would: ``POST /start``, every
-gate decided through ``cairn remote advance`` (the first cell) or the approve door (the
+gate decided through ``cairn decide`` (the first cell) or the approve door (the
 others) — both record the approver (#2613) — the terminal state read back, then the
 records: one Run per leg, the gate verdicts and approvers, each leg's own output, and the
 feature receipts (``_receipts.py``) the report is built from.
@@ -276,7 +276,7 @@ def check_tiny_finetune(ctx: Ctx) -> None:  # profile → train (ml flow) → ev
     ctx.receipt("train", f"train.lora flow leg done (run {ids['train']}, model {ctx.rec['inputs'].get('base_model')}, "
                 f"held-out eval_loss={ctx.out('eval').get('eval_loss')})")
     ctx.receipt("worker.pull", "no hello-cairn leg is routed to the pull lane (an ML target `worker:<pool>` "
-                "on a remote-job leg) and no cell starts `cairn worker --pull`; only the worker's claim, "
+                "on a remote-job leg) and no cell starts `cairn admin worker --pull`; only the worker's claim, "
                 "its token check and an empty queue are tested", proved=False)
     _cell_receipts(ctx)
 
@@ -323,14 +323,14 @@ def _nightly_env() -> dict:
 
 
 def _nightly_prepare(srv: Server) -> None:
-    """Register the proof sshd as ``hello-ssh`` the way the README does: ``cairn connect add
+    """Register the proof sshd as ``hello-ssh`` the way the README does: ``cairn admin connect add
     ssh`` against the engine's store, the host key pinned in a known_hosts file."""
     host, _, port = SSH.rpartition(":")
     scan = subprocess.run(["ssh-keyscan", "-p", port, host], capture_output=True, text=True, timeout=30)
     assert scan.stdout.strip(), f"ssh-keyscan found no host key at {SSH}: {scan.stderr}"
     known = srv.home / "known_hosts"
     known.write_text(scan.stdout)
-    out = cli(srv, "connect", "add", "ssh", "--name", "hello-ssh", "--set", f"host={host}", "--set", f"port={port}",
+    out = cli(srv, "admin", "connect", "add", "ssh", "--name", "hello-ssh", "--set", f"host={host}", "--set", f"port={port}",
               "--set", f"user={SSH_USER}", "--set", f"known_hosts={known}", "--secret", "PRIVATE_KEY=HELLO_SSH_KEY")
     assert out.returncode == 0, out.stdout + out.stderr
 
@@ -366,7 +366,7 @@ def test_pipeline(cell: Cell, row: Row, server_factory, model_stub) -> None:
         api.wait_step(pid, gate, "awaiting_approval", timeout=180)
         if decided_by == "cli":
             # the first cell decides every gate the way a terminal user does
-            out = cli(srv, "remote", "advance", pid, gate, "--approver", "proof")
+            out = cli(srv, "decide", pid, "approve", "--step", gate, "--approver", "proof")
             assert out.returncode == 0, out.stdout + out.stderr
         else:
             api.approve(pid, gate, approver="proof", rationale="feature proof")
@@ -379,8 +379,8 @@ def test_pipeline(cell: Cell, row: Row, server_factory, model_stub) -> None:
 def test_the_cli_lists_and_explains_the_example(server_factory) -> None:
     """The CLI surface a new user meets first, against the running server's packs."""
     srv = server_factory(FIRST_CELL, "cli")
-    ls = cli(srv, "pipeline", "ls")
+    ls = cli(srv, "pack", "ls", "--pipelines")
     assert ls.returncode == 0 and "hello-cairn" in ls.stdout, ls.stdout + ls.stderr
     for row in ROWS:
-        out = cli(srv, "pipeline", "explain", row.ref)
+        out = cli(srv, "run", "--dry-run", row.ref)
         assert out.returncode == 0, out.stdout + out.stderr

@@ -34,7 +34,7 @@ cairn_engine = ">=0.1.0"
 # `[provides]`, not by operator packs, so naming `data.profile` / `storage.put`
 # here would be a composition conflict on every deployment. The pipeline's
 # task legs are checked against the operator registry at plan time instead
-# (`cairn pipeline explain` names the operator class each leg resolves to).
+# (`cairn run --dry-run` names the operator class each leg resolves to).
 
 # The corpus ask-the-docs retrieves from. Indexed by the engine, not by a leg:
 # with CAIRN_RAG_AUTOINDEX=1 the server indexes every declared corpus at boot into
@@ -44,7 +44,7 @@ corpus = "rag/docs"
 access = "vector_search"
 
 # The MCP server ask-the-docs' assistant template calls (tools/calc_server.py).
-# The profile names it under [profile.mcp_servers]; `cairn doctor` reports a
+# The profile names it under [profile.mcp_servers]; `cairn setup --check` reports a
 # profile that does not.
 [requires.mcp]
 servers = ["hello-calc"]

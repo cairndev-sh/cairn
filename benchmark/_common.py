@@ -93,7 +93,7 @@ def _free_port() -> int:
 
 
 class LocalEngine:
-    """``cairn dev --engine-only`` in a scratch HOME on a free port, with the example pack, under
+    """``cairn setup --foreground --engine-only`` in a scratch HOME on a free port, with the example pack, under
     ``profile`` when one is given."""
 
     def __init__(self, profile: Optional[Path] = None) -> None:
@@ -109,7 +109,7 @@ class LocalEngine:
     def __enter__(self) -> "LocalEngine":
         import httpx  # noqa: PLC0415 — only a real run needs it
 
-        cmd = [cairn_command(), "dev", "--engine-only",
+        cmd = [cairn_command(), "setup", "--foreground", "--engine-only",
                "--port", str(self.port), "--db", str(self.home / "dev.db")]
         env = scrubbed_env()
         env.update({"HOME": str(self.home), "CAIRN_AUDIT_LOG": str(self.audit_log),

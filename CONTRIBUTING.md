@@ -27,22 +27,21 @@ uv sync --extra dev --extra rag --extra rag-sqlite-vec \
 # (`uv run <cmd>` adds what is missing but removes nothing.)
 
 # 2. A local engine on a pinned sqlite config, with demo data
-uv run cairn dev --engine-only --seed
+uv run cairn setup --seed
 
-# 3. In another shell: sign in and drive it
-uv run cairn remote login -u dev -p dev -e http://localhost:8000
-uv run cairn remote launch hello-cairn/profile-and-publish --environment sandbox \
-    -i path=$PWD/examples/hello-cairn/data/sample.jsonl --watch
+# 3. Drive it (step 2 signed you in). It asks at each gate: answer a to approve.
+uv run cairn run hello-cairn/profile-and-publish --environment sandbox \
+    -i path=$PWD/examples/hello-cairn/data/sample.jsonl
 ```
 
-`cairn dev` starts the engine on http://localhost:8000 on a **pinned** sqlite
+`cairn setup` starts the engine in the background on http://localhost:9090 on a **pinned** sqlite
 config (`~/.cairn/dev.db`): a stale `.env` can never redirect your dev session to
-someone's postgres. Sign in with **dev / dev**. From a checkout it adds
-`examples/hello-cairn` to `CAIRN_PACK_PATH`. `--seed` writes deterministic demo
+someone's postgres. It signs you in as **dev / dev**; `cairn setup --stop` stops it.
+With `--seed` it adds `examples/hello-cairn` to `CAIRN_PACK_PATH` from a checkout and writes deterministic demo
 records (three pipelines, one paused at a person gate) into the `demo` workspace;
-`cairn remote` reads the default workspace, so send `X-Cairn-Workspace: demo` to
-the HTTP API to see them. The web console is not part of this repository, so pass
-`--engine-only`. Other flags: `--port`, `--db`.
+`cairn status` reads the default workspace, so send `X-Cairn-Workspace: demo` to
+the HTTP API to see them. The web console is not part of this repository, so
+`cairn setup` starts only the engine. Other flags: `--port`, `--db`.
 
 ## Working on a pack
 
@@ -51,11 +50,11 @@ A pack is discovered through the `cairn.packs` entry-point group, which is an
 until it is installed. Two loops (#1545):
 
 ```bash
-cairn init pack mypack
+cairn pack new pack mypack
 
 # 1. Zero-install loop: the engine scans these dirs on every start.
 export CAIRN_PACK_PATH="$PWD/mypack"     # `cairn pack add --dev mypack` prints this
-cairn ls mypack                          # edits take effect on the next run
+cairn pack ls mypack                     # edits take effect on the next run
 
 # 2. Make it permanent: wires the three root-pyproject.toml points
 #    (workspace member + dependency + [tool.uv.sources]) and prints the sync
@@ -65,10 +64,10 @@ cairn pack add mypack
 
 An **installed** pack always wins a name collision with a `CAIRN_PACK_PATH`
 copy, so a dev pack can never silently shadow a deployed one; a broken dev pack
-is skipped with a warning (`cairn ls` lists load failures) rather than taking
+is skipped with a warning (`cairn pack ls` lists load failures) rather than taking
 the engine down. A pack's `[compat] cairn_engine` range is checked against the
 installed engine at load time — a mismatch warns, in the log and as a
-`pack_compat:<name>` row in `cairn doctor`, and still loads.
+`pack_compat:<name>` row in `cairn setup --check`, and still loads.
 
 ## Running tests
 

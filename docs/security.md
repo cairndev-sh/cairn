@@ -60,7 +60,7 @@ added; with auth off, or on a single-node deployment where everything belongs to
 - **Datasets** resolve within the run's workspace: `dataset:` refs and `@latest` see only
   that workspace's versions.
 - **Pull-lane claims and heartbeats** (`POST /jobs/claim`) need a worker-pool token
-  (`cairn remote worker-token`) or the deployment admin's token; a signed-in user's token
+  (`cairn admin worker-token`) or the deployment admin's token; a signed-in user's token
   gets `403`.
 - **Pack install and uninstall** over the API (`POST /registry/install|uninstall`) are
   deployment-admin only (`CAIRN_API_USER`).

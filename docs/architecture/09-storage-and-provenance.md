@@ -28,7 +28,7 @@ carries only `runs`, `memory`, `rag` (+ lazily-built trigger stores).
 
 ## Provenance chain (OBSERVED)
 ```
-pack content hash      cairn.lock (CI: cairn lock --check)
+pack content hash      cairn.lock (CI: cairn pack lock --check)
 template identity      CompiledTemplate.content_hash (engine/compiled.py:62)
 installed record       workflow_registry.InstalledWorkflow{schema_hash, capabilities, operators}
 run identity           Run.template_ref stamped at admission (dispatcher.py:565..), Run.schema_hash,

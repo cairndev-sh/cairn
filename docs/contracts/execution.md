@@ -23,7 +23,7 @@
   before the done marker, frozen stats on resume). Since #2242 V1-C the nine stages
   `dataset-readiness/readiness` runs are opted in (`operators-and-packs.md`). The door reads a
   kernel's `implements` on the control plane, so a kernel that does not import there would run
-  unchecked: `cairn doctor` (`stage_kernels`) warns for every registered kernel that does not
+  unchecked: `cairn setup --check` (`stage_kernels`) warns for every registered kernel that does not
   load (#2363).
 
 ## What an engine owns

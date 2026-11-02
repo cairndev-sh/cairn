@@ -11,7 +11,7 @@ them.
 ## A model endpoint
 
 Model calls go to an OpenAI-compatible endpoint. Set one of these in the
-**engine's** environment (for `cairn dev`, the shell you start it from; for the
+**engine's** environment (for `cairn setup`, the shell you start it from; for the
 Docker Compose stack, `deploy/light/.env`):
 
 | Setting | Use |
@@ -37,30 +37,30 @@ account (`cairn://secrets#<account>/<conn>-<KEY>`); an environment-variable
 name, `${env:NAME}` and the deployment's secret store resolve to nothing for
 it.
 
-`cairn connect` manages connections in the engine's store, so run it with the
-same `CAIRN_STORAGE` as the engine. When an engine answers at the endpoint `cairn
-remote` uses, `connect add` and `connect rm` compare stores first and refuse with exit 3
+`cairn admin connect` manages connections in the engine's store, so run it with the
+same `CAIRN_STORAGE` as the engine. When an engine answers at the endpoint the CLI
+uses, `connect add` and `connect rm` compare stores first and refuse with exit 3
 if they differ (`--force` writes anyway):
 
 ```bash
-cairn connect providers            # what you can add, and each one's secret keys
-cairn connect add openai           # a connection that reads OPENAI_API_KEY
-cairn connect add openai --name openai-eu --secret API_KEY=OPENAI_EU_KEY
-cairn connect ls                   # names, kinds and secret keys, never values
-cairn connect test openai          # authenticate now and store the result
-cairn connect rm openai-eu         # removes the reference, never the secret
+cairn admin connect providers            # what you can add, and each one's secret keys
+cairn admin connect add openai           # a connection that reads OPENAI_API_KEY
+cairn admin connect add openai --name openai-eu --secret API_KEY=OPENAI_EU_KEY
+cairn admin connect ls                   # names, kinds and secret keys, never values
+cairn admin connect test openai          # authenticate now and store the result
+cairn admin connect rm openai-eu         # removes the reference, never the secret
 ```
 
-`cairn connect` manages the deployment's own connections (the `default`
+`cairn admin connect` manages the deployment's own connections (the `default`
 account). A team account's connections are created by that account; the
 console's integrations page and its API, which do this, are part of
 cairn-platform.
 
-`cairn connect add` saves the connection, then runs its health check once.
-`cairn connect test` exits `0` when the provider answered and `1` when the
-secret is missing or the check failed. `cairn connect presets` lists the
+`cairn admin connect add` saves the connection, then runs its health check once.
+`cairn admin connect test` exits `0` when the provider answered and `1` when the
+secret is missing or the check failed. `cairn admin connect presets` lists the
 shipped MCP connection presets (GitHub, Slack, Notion), added with
-`cairn connect add --preset <name>`.
+`cairn admin connect add --preset <name>`.
 
 ### Example: an SSH host
 
@@ -70,7 +70,7 @@ SSH, through a connection named `hello-ssh`:
 ```bash
 export HELLO_SSH_KEY="$(cat ~/.ssh/id_ed25519)"    # in the ENGINE's environment
 CAIRN_STORAGE=sqlite:///$HOME/.cairn/dev.db \
-cairn connect add ssh --name hello-ssh --set host=<box> --set user=<user> \
+cairn admin connect add ssh --name hello-ssh --set host=<box> --set user=<user> \
   --set known_hosts=$HOME/.ssh/known_hosts --secret PRIVATE_KEY=HELLO_SSH_KEY
 ```
 

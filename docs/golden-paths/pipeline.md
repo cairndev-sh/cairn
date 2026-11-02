@@ -9,13 +9,13 @@ specialisations of it.
 ## Trigger
 - `POST /start {"ref": "<pack>/<pipeline>", "inputs": {...}, "kind": "pipeline"?}` (console launch dialog, `cairn-client`, MCP).
 - `POST /pipelines/launch` (older door, same function).
-- `cairn pipeline run <pack>/<name> --set k=v`.
+- `cairn run <pack>/<name> --set k=v`.
 - Cron/`on:` (`dispatch/scheduler.py:55 fire_scheduled_workflow`), a declared `watch` trigger, or the `monitor/dispatch` operator.
 
 ## Execution diagram
 ```mermaid
 flowchart TD
-  A[POST /start · cairn pipeline run] --> B[resolve_start_ref<br/>dispatch/start.py:179]
+  A[POST /start · cairn run] --> B[resolve_start_ref<br/>dispatch/start.py:179]
   B --> C[launch_pipeline<br/>dispatch/pipeline_launch.py:161]
   C --> C1[resolve_or_raise :66 → PipelineDef]
   C1 --> C2[assert_runnable<br/>engine/pipeline_resolve.py:152]

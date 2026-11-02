@@ -11,8 +11,8 @@ work against a cairn deployment without engine internals.
 ```python
 from cairn_client import CairnClient
 
-c = CairnClient("http://localhost:8000")
-c.login("dev", "dev")                       # cairn dev's seeded login
+c = CairnClient("http://localhost:9090")
+c.login("dev", "dev")                       # cairn setup's seeded login
 c.healthz()
 c.launch_pipeline("training/e2e-finetune", {"dataset": "…"})
 c.advance_step(pid, "promote-model", approver="me")

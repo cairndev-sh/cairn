@@ -288,7 +288,7 @@ class Server:
 
 
 class Api:
-    """The HTTP driver — the same doors the console and ``cairn remote`` use."""
+    """The HTTP driver — the same doors the console and the ``cairn`` CLI use."""
 
     def __init__(self, url: str) -> None:
         self.url = url

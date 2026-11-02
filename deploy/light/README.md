@@ -22,7 +22,7 @@ API answers on **http://localhost:8080**. Check it and drive it with the CLI:
 
 ```bash
 curl -s http://localhost:8080/healthz
-cairn remote ps --endpoint http://localhost:8080
+cairn status --endpoint http://localhost:8080
 ```
 
 Light runs the `secure` profile: every run leaves a hash-chained audit receipt,
@@ -63,7 +63,7 @@ CAIRN_SIGNUP=invite
 ```
 
 and `docker compose up -d`; every API call then needs a token
-(`cairn remote login --endpoint http://localhost:8080`).
+(`cairn setup --server http://localhost:8080`).
 
 To serve it on a domain, set `CADDY_DOMAIN=cairn.example.com` (Caddy then
 provisions TLS; publish port 443 as well) and set `CAIRN_PUBLIC_URL` to the
@@ -78,8 +78,8 @@ CAIRN_PUBLIC_URL=https://cairn.example.com
 `cairn_refresh` sign-in cookie is marked `Secure` only when it is an `https://`
 origin, and refresh and sign-out check the request against it.
 
-A `cairn worker --pull` against this stack needs a worker-pool token
-(`cairn remote worker-token --name <pool>`, run where `CAIRN_JWT_SECRET` is
+A `cairn admin worker --pull` against this stack needs a worker-pool token
+(`cairn admin worker-token --name <pool>`, run where `CAIRN_JWT_SECRET` is
 set) passed as `--token`; a signed-in user's token gets `403` on `/jobs/claim`. For a cluster
 with TLS, backups and the durable runtimes, use the Helm chart in
 [`../helm/cairn`](../helm/cairn/README.md).

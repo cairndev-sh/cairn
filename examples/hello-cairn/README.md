@@ -27,7 +27,7 @@ export CAIRN_PROFILE=examples/hello-cairn/profiles/hello.toml
 ```
 
 `--extra rag` is what lets the engine index the docs corpus at boot (LlamaIndex ingest);
-without it ask-the-docs still runs and retrieves nothing. `auth` is optional: `cairn dev`
+without it ask-the-docs still runs and retrieves nothing. `auth` is optional: `cairn setup`
 signs you in as dev/dev without it.
 
 `cairndev[hello]` installs this pack as the wheel `cairn-pack-hello` plus what its pipelines
@@ -48,14 +48,14 @@ pack declares. It pins no runtime, so `CAIRN_RUNTIME=dbos` selects DBOS.
 ### 2. See what will happen before anything runs
 
 ```bash
-cairn pipeline explain hello-cairn/profile-and-publish -e sandbox
-cairn validate examples/hello-cairn          # with CAIRN_PROFILE set as in step 1
+cairn run --dry-run hello-cairn/profile-and-publish -e sandbox
+cairn pack check examples/hello-cairn          # with CAIRN_PROFILE set as in step 1
 ```
 
-`cairn validate` needs the example's profile: under local-dev the nightly-job template does
+`cairn pack check` needs the example's profile: under local-dev the nightly-job template does
 not compile (no `secrets.store` binding).
 
-`explain` lists every leg with the operator class or flow file it resolves to, the gate that
+`--dry-run` lists every leg with the operator class or flow file it resolves to, the gate that
 answers it, and the budget, series and approvers.
 
 ### 3. Start an engine
@@ -66,8 +66,7 @@ export RAG_EMBED_PROVIDER=openai             # retrieval and memory embed with O
 export CAIRN_RAG_AUTOINDEX=1                 # index rag/docs at boot (needs the `rag` extra)
 export CAIRN_MCP_SERVERS='{"hello-calc": {"transport": "stdio", "command": "python",
   "args": ["examples/hello-cairn/tools/calc_server.py"]}}'
-cairn dev --engine-only --port 8471 &        # sqlite engine, in-process runtime, login dev/dev
-cairn remote login -u dev -p dev -e http://localhost:8471
+cairn setup --port 8471                      # sqlite engine, in-process runtime, signed in as dev/dev
 ```
 
 Any OpenAI-compatible endpoint works in place of a key: `OPENAI_BASE_URL`, or
@@ -81,14 +80,15 @@ uses a deterministic model response; governed pipelines still use the configured
 **profile-and-publish**
 
 ```bash
-cairn remote launch hello-cairn/profile-and-publish --environment sandbox --watch
-cairn remote advance <pipeline_id> review        # the person gate
-cairn remote advance <pipeline_id> promote       # the operator's own gate
+cairn run hello-cairn/profile-and-publish --environment sandbox
+cairn decide <pipeline_id> approve --step review        # the person gate
+cairn decide <pipeline_id> approve --step promote       # the operator's own gate
 ```
 
-The pipeline stops a second time at `promote`: `artifact/promote` declares
+On a terminal, `cairn run` asks at each gate, so answer `a` there; the `cairn decide` lines answer
+from any shell. The pipeline stops a second time at `promote`: `artifact/promote` declares
 `requires_approval`, and a pipeline can add a gate but never remove one an operator declares.
-`cairn remote advance` approves either kind and records the signed-in user as the approver.
+`cairn decide` approves either kind and records the signed-in user as the approver.
 
 The record ends `done`: `data-ok` has verdict `data`, `review` `approved`, `promote` the
 tag `hello-sample@published` on the flow leg's registered artifact, and `audit` a
@@ -102,9 +102,9 @@ stops the pipeline (`gate_blocked`) before any later step starts. Launch with
 **ask-the-docs**
 
 ```bash
-cairn remote launch hello-cairn/ask-the-docs --environment sandbox --watch
-cairn remote advance <pipeline_id> review
-cairn remote findings <pipeline_id>              # hits, answer, answer_stats, remembered
+cairn run hello-cairn/ask-the-docs --environment sandbox
+cairn decide <pipeline_id> approve --step review
+cairn status <pipeline_id> --results              # hits, answer, answer_stats, remembered
 ```
 
 The `assistant` leg (`flows/assistant.md`) searches the `docs` corpus (`rag/docs`, declared
@@ -120,9 +120,9 @@ hits and the model says the docs do not cover the question. Retrieval uses sqlit
 export HELLO_REPORT_TOKEN=...                    # the secret the job checks for
 export HELLO_SSH_KEY="$(cat ~/.ssh/id_ed25519)"  # in the ENGINE's environment
 CAIRN_STORAGE=sqlite:///$HOME/.cairn/dev.db \
-cairn connect add ssh --name hello-ssh --set host=<box> --set user=<user> \
+cairn admin connect add ssh --name hello-ssh --set host=<box> --set user=<user> \
   --set known_hosts=$HOME/.ssh/known_hosts --secret PRIVATE_KEY=HELLO_SSH_KEY
-cairn remote launch hello-cairn/nightly-ops --environment sandbox --watch
+cairn run hello-cairn/nightly-ops --environment sandbox
 ```
 
 The connection goes into the engine's store, hence `CAIRN_STORAGE`; its secret is an env var
@@ -131,7 +131,7 @@ NAME the engine reads. The box needs `sh`, an SFTP subsystem, and `setsid` (Linu
 present (#2606). `job` (`flows/nightly-job.md`) checks the secret through the profile's
 `secrets.store` binding, then runs `command` on the box and reads back `metrics.json`.
 `propose` waits for a person (`monitor/propose` declares `requires_approval`;
-`cairn remote advance <pipeline_id> propose`). With the wheel installed, every settled leg
+`cairn decide <pipeline_id> approve --step propose`). With the wheel installed, every settled leg
 appends a line to `$CAIRN_HOME/hello-cairn/receipts.jsonl` (default `~/.cairn`).
 
 For secrets in Infisical, run the engine with
@@ -146,8 +146,8 @@ box: `cairndev[train]` (torch, transformers, peft, datasets; CPU is enough;
 there is no torch wheel for Intel macOS).
 
 ```bash
-cairn remote launch hello-cairn/tiny-finetune --environment sandbox --watch
-cairn remote launch hello-cairn/tiny-finetune -i base_model=Qwen/Qwen2.5-0.5B --watch
+cairn run hello-cairn/tiny-finetune --environment sandbox
+cairn run hello-cairn/tiny-finetune -i base_model=Qwen/Qwen2.5-0.5B
 ```
 
 `base_model` defaults to the stand-in `sshleifer/tiny-gpt2` (seconds); Qwen2.5-0.5B trains
@@ -219,7 +219,7 @@ start door to its legs, names where governance fires, and lists the proof for ea
 
 ### Seeded demo data
 
-`cairn dev --seed` and `cairn demo` seed three records of profile-and-publish
+`cairn setup --seed` and `cairn admin demo` seed three records of profile-and-publish
 (`cairn/core/demo_seed.py`). The seeder takes the steps from the loaded pipeline's plan, so
 each record carries every step in plan order (`redact`, `promote` and `audit` included):
 the published record has all of them done, the blocked one stops at `data-ok`, and the

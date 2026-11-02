@@ -54,10 +54,10 @@ steps:
 |---|---|---|
 | `name` | string, required | The pipeline's name. Its ref is `<pack>/<name>`. |
 | `kind` | `pipeline` | Marks the file as a pipeline. |
-| `description` | string | Shown in the catalog and in `cairn pipeline show`. |
-| `visibility` | `public` · `internal` · `deprecated` | Default `public`. Curation for catalogs; `cairn pipeline ls` lists every installed pipeline. |
+| `description` | string | Shown in the catalog and in `cairn pack show`. |
+| `visibility` | `public` · `internal` · `deprecated` | Default `public`. Curation for catalogs; `cairn pack ls --pipelines` lists every installed pipeline. |
 | `inputs` | map | The launch inputs: `{name: {type, default, description}}`. See below. |
-| `outputs` | map | This pipeline's results, resolved when it ends `done` and shown on its record (`cairn remote pipeline <id>`): `{name: <step>.<field>}`, or an expression in the `predicate:` grammar over `steps` and `input`, for example `join('', ['dataset:', steps.prepare.findings.dataset_versions[0]])`. A value that does not resolve is `null`, with its reason in `outputs_errors`; it never fails the pipeline. |
+| `outputs` | map | This pipeline's results, resolved when it ends `done` and shown on its record (`cairn status <id> --json`): `{name: <step>.<field>}`, or an expression in the `predicate:` grammar over `steps` and `input`, for example `join('', ['dataset:', steps.prepare.findings.dataset_versions[0]])`. A value that does not resolve is `null`, with its reason in `outputs_errors`; it never fails the pipeline. |
 | `emits` | string | A topic the resolved `outputs` are published on, once, when the pipeline ends `done` (never on `failed` or `cancelled`). Another pipeline starts on it with a `kind: event` trigger and maps `$event.<output name>` to its inputs. A pipeline cannot start on a topic it emits. |
 | `governance` | map | `budget: {usd: N}`, the spending cap for the series; `series`, the series name the budget belongs to; `estimated_usd`, what each flow leg reserves before it starts; `approvers`, who may decide person gates that don't name their own. The deployment's profile can set a default and a ceiling for `budget.usd`; a pipeline can only lower it. See [Cost and budgets](/concepts/cost/). |
 | `triggers` | list | How the pipeline starts without you. See [Triggers](#triggers). |
@@ -69,7 +69,7 @@ steps:
 ### Inputs
 
 Each input is `{type, default, description}`. An input without a default is
-required at launch, and `cairn pipeline run` refuses to start without it.
+required at launch, and `cairn run` refuses to start without it.
 
 Two reserved keys save repeating a flow's own contract:
 
@@ -258,7 +258,7 @@ From the example pack's `flows/summarise.yaml`, with a placeholder added.
 |---|---|
 | `name` | The flow's name. A pipeline references it as `flow: <name>`. |
 | `kind` | `data` (produces a dataset) or `ml` (produces a model). The flow never names an engine; the environment maps each kind to one. |
-| `description` | Shown in `cairn flow ls`. |
+| `description` | Shown in `cairn pack ls --flows`. |
 | `stages` | Required, at least one. Run in order over one working dataset. |
 | `handoff` | `{export: <stage>, ingest: <stage>}`. Needed only when a stage declares `gate:`, so the working dataset can cross the pause. |
 | `checks` | `{<check>: not_applicable}` declares that a known check, such as `decontam`, doesn't apply to what this flow produces. It is recorded on the leg's evidence. |

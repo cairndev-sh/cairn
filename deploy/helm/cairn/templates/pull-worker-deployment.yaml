@@ -1,12 +1,12 @@
 {{- if .Values.pullWorker.enabled }}
 {{/*
-`cairn worker --pull` (#565): a machine that dials OUT. It claims work from the
+`cairn admin worker --pull` (#565): a machine that dials OUT. It claims work from the
 control plane, runs the image, and reports over the job channel. No inbound
 access.
 
 `pullWorker.command` is required and has no default (_helpers.tpl refuses an
-empty one), e.g. ["cairn", "worker", "--pull", "--engine-url", "https://<host>"].
-With auth on, claiming needs a worker-pool token (`cairn remote worker-token
+empty one), e.g. ["cairn", "admin", "worker", "--pull", "--engine-url", "https://<host>"].
+With auth on, claiming needs a worker-pool token (`cairn admin worker-token
 --name <pool>`) in CAIRN_ENGINE_TOKEN. The worker reads it from a Secret of its
 OWN (pullWorker.token, rendered below, or pullWorker.existingSecret). Its other
 settings come from a ConfigMap of its own (an allowlist, plus pullWorker.extraEnv),
