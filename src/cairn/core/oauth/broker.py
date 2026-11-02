@@ -269,7 +269,7 @@ class AuthlibBroker:
         rec = await store.get_token(connection_id)
         if rec is None:
             raise OAuthBrokerError(
-                f"no token for connection {connection_id!r} — authorize first (cairn connect authorize {connection_id})"
+                f"no token for connection {connection_id!r} — authorize first (cairn admin connect authorize {connection_id})"
             )
         if not _token_expired(rec):
             token = rec.get("access_token") or ""

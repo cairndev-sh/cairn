@@ -32,7 +32,7 @@ def test_unresolvable_target_fails_by_name():
     r = rows["compute_target:ml_target"]
     assert r.status == "fail"
     assert "gpu" in r.detail and "ml_target" in r.detail
-    assert "cairn connect add" in r.detail  # the fix is in the message
+    assert "cairn admin connect add" in r.detail  # the fix is in the message
 
 
 def test_hostless_connection_fails_naming_the_field_and_the_target():

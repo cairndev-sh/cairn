@@ -1,4 +1,4 @@
-"""Toad-style interactive terminal console for cairn (`cairn remote console`, #56).
+"""Toad-style interactive terminal console for cairn (`cairn admin console`, #56).
 
 A Textual TUI + Rich rendering over the cairn-server HTTP + SSE control plane.
 Lives behind the optional ``[tui]`` extra (textual + textual-autocomplete) so the

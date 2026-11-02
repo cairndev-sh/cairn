@@ -16,6 +16,16 @@ typer's own single-command convention — so ``cairn <name> <args>`` keeps a pla
 command's shape; any other Typer mounts as a command group (``add_typer``). Providers
 mount in entry-point name order.
 
+A provider names the ``--help`` heading its commands appear under with Typer's own
+``rich_help_panel`` (``typer.Typer(rich_help_panel="Platform commands")``, ADR-0165 D8);
+one that names none, or names a heading the public CLI holds, gets ``<Entry-point name>
+commands``. Moving a command between a provider and the public CLI changes its heading,
+never its spelling.
+
+A pack, operator or contract wheel adds no command (ADR-0165 D8): a provider from a
+distribution named ``cairn-pack-*``, ``cairn-operator-*`` or ``cairn-contracts-*`` is
+skipped before its code is imported.
+
 The public CLI wins every name: a provider command whose name a public command (or an
 earlier provider) already holds is refused with a logged warning. One public name
 yields instead: ``ask``'s hidden stub (``cairn/cli/main.py``) registers AFTER this pass,
@@ -28,6 +38,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import re
 from dataclasses import dataclass
 from importlib.metadata import entry_points
 from typing import Any, Optional
@@ -37,6 +48,13 @@ import typer
 _log = logging.getLogger("cairn.cli.providers")
 
 ENTRY_POINT_GROUP = "cairn.cli"
+
+#: The ``--help`` headings the public CLI holds (ADR-0165 D1).
+MAIN_COMMANDS = "Main commands"
+OTHER_COMMANDS = "All other commands"
+
+#: The distributions that may not add a command (ADR-0165 D8), by normalised name.
+_NO_COMMANDS_FROM = ("cairn-pack-", "cairn-operator-", "cairn-contracts-")
 
 #: Commands refused by the last :func:`mount_cli_providers` pass (a name already taken),
 #: as ``{name, target, error}`` — the shape ``seed_load_failures`` uses.
@@ -66,11 +84,25 @@ def _as_commands(ep_name: str, result: Any) -> Optional[tuple[tuple[str, typer.T
     return None
 
 
+def _refused_distribution(ep: Any) -> Optional[str]:
+    """The distribution behind ``ep`` when it is one that may not add a command."""
+    dist = getattr(ep, "dist", None)
+    name = re.sub(r"[-_.]+", "-", dist.name or "").lower() if dist is not None else ""
+    return name if name.startswith(_NO_COMMANDS_FROM) else None
+
+
 def load_cli_providers() -> list[CliProvider]:
     """Every registered provider, called, in mount order. Never raises."""
     out: list[CliProvider] = []
     seen: dict[str, str] = {}
     for ep in sorted(entry_points(group=ENTRY_POINT_GROUP), key=lambda e: (e.name, e.value)):
+        # before the dedupe below: a refused wheel must not shadow a provider of the same name and value
+        refused = _refused_distribution(ep)
+        if refused:
+            error = f"distribution {refused} is a pack, operator or contract wheel, which adds no command"
+            _log.warning("cli provider %r (%s) skipped: %s", ep.name, ep.value, error)
+            out.append(CliProvider(ep.name, ep.value, error=error))
+            continue
         if seen.get(ep.name) == ep.value:
             continue  # one distribution seen twice on sys.path: the same provider
         seen.setdefault(ep.name, ep.value)
@@ -102,13 +134,25 @@ def command_names(app: typer.Typer) -> set[str]:
     return {n for n in names if isinstance(n, str) and n}
 
 
-def _mount(app: typer.Typer, name: str, sub: typer.Typer) -> None:
+def _heading(provider: str, *named: Any) -> str:
+    """The first heading the provider named, or one from its entry-point name. A heading the
+    public CLI holds is not the provider's to use."""
+    for heading in named:
+        if heading in (MAIN_COMMANDS, OTHER_COMMANDS):
+            _log.warning("cli provider %r: the heading %r belongs to the public CLI", provider, heading)
+        elif heading:
+            return heading
+    return f"{provider.capitalize()} commands"
+
+
+def _mount(app: typer.Typer, provider: str, name: str, sub: typer.Typer) -> None:
     if sub.registered_callback is None and not sub.registered_groups and len(sub.registered_commands) == 1:
         info = copy.copy(sub.registered_commands[0])
         info.name = name
+        info.rich_help_panel = _heading(provider, info.rich_help_panel, sub.info.rich_help_panel)
         app.registered_commands.append(info)
     else:
-        app.add_typer(sub, name=name)
+        app.add_typer(sub, name=name, rich_help_panel=_heading(provider, sub.info.rich_help_panel))
 
 
 def mount_cli_providers(app: typer.Typer) -> list[str]:
@@ -125,7 +169,7 @@ def mount_cli_providers(app: typer.Typer) -> list[str]:
                 _MOUNT_FAILURES.append({"name": name, "target": p.value,
                                         "error": "the name is taken by a public command or an earlier provider"})
                 continue
-            _mount(app, name, sub)
+            _mount(app, p.name, name, sub)
             taken.add(name)
             mounted.append(name)
     return mounted
@@ -137,6 +181,6 @@ def cli_mount_failures() -> list[dict[str, str]]:
 
 
 __all__ = [
-    "ENTRY_POINT_GROUP", "CliProvider", "cli_mount_failures", "command_names",
-    "load_cli_providers", "mount_cli_providers",
+    "ENTRY_POINT_GROUP", "MAIN_COMMANDS", "OTHER_COMMANDS", "CliProvider", "cli_mount_failures",
+    "command_names", "load_cli_providers", "mount_cli_providers",
 ]

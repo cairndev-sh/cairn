@@ -202,7 +202,7 @@ def assert_runnable_whole(flow: "FlowDef", *, site: str) -> None:
             f"{site}: flow {flow.name!r} declares in-flow approval gate(s) "
             f"{gates!r} but is bound to run WHOLE — every stage would execute "
             f"and no one would be asked. Split it into gated segments "
-            f"(`cairn flow split {flow.name}`) and bind the segments with the "
+            f"(`cairn pack show --split {flow.name}`) and bind the segments with the "
             f"approval gate between them (#1079)."
         )
 

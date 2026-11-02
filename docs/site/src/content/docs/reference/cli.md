@@ -29,6 +29,29 @@ set them first when you run outside `cairn setup`:
 | `cairn setup --check` | Checks the environment configuration and whether configured services are reachable. When an engine answers at the endpoint `cairn remote` uses, it also checks that the engine reads the store this CLI writes (`engine_store`). `--strict` fails on warnings. |
 | `cairn ls` | Lists the installed packs and what each contributes; `cairn ls <pack>` for one pack, `--json` for the raw shape. A pack's deployment profiles (`profiles/*.toml`) are listed with their `visibility` and absolute installed path, the value to give `CAIRN_PROFILE`. `cairn ls operators` prints the operator map. |
 
+## What `--help` shows
+
+`cairn --help` leads with the main commands: `setup`, `run`, `status`, `decide` and `pack`. Commands that an installed provider adds come next, under the heading it names, and everything else is under `cairn admin`.
+
+| Old name | New name |
+|---|---|
+| `cairn init` | `cairn pack new` |
+| `cairn ls`, `cairn test`, `cairn lock` | `cairn pack ls`, `cairn pack test`, `cairn pack lock` |
+| `cairn validate` | `cairn pack check` |
+| `cairn export`, `cairn flow export` | `cairn pack export --to pipeline`, `cairn pack export --to metaflow` |
+| `cairn visualize template <ref>` | `cairn pack show <ref> --graph` |
+| `cairn flow ls`, `cairn pipeline ls` | `cairn pack ls --flows`, `cairn pack ls --pipelines` |
+| `cairn flow split`, `cairn pipeline show` | `cairn pack show --split`, `cairn pack show` |
+| `cairn connect`, `audit`, `lineage`, `compute`, `config`, `deploy`, `worker`, `demo` | `cairn admin connect`, and so on |
+| `cairn remote triggers`, `enable-trigger`, `disable-trigger` | `cairn admin trigger ls`, `enable`, `disable` |
+| `cairn remote presets`, `delete-preset` | `cairn admin preset ls`, `rm` |
+| `cairn remote console`, `worker-token`, `hash-password` | `cairn admin console`, `worker-token`, `hash-password` |
+| `cairn pipeline backfill`, `respell-packs` | `cairn admin backfill`, `respell-packs` |
+
+Each old name keeps working for one more minor version, and says its new name on stderr. The sections below still use some of them, until this page moves.
+
+`cairn pack check` with no paths checks the installed operator packs' manifests against their classes. With paths, it also validates those files offline, as `cairn validate` did. `--strict` and `--template-path` apply to the paths. `--json` prints a list of findings with no paths, and `{"artifacts": [...], "drift": [...]}` with them.
+
 ## Pipelines
 
 | Command | What it does |

@@ -27,6 +27,8 @@ the rest: a saved preset is read from this CLI's store, a pack's from the pack.
 """
 from __future__ import annotations
 
+import json
+
 import typer
 from rich.console import Console
 
@@ -52,18 +54,24 @@ _RUNTIME = {
 }
 
 
-@app.command("ls")
+def pipeline_rows() -> list[dict]:
+    """Every pipeline across installed packs, one row each."""
+    return [{"ref": f"{d.pack}/{d.name}", "legs": len(d.steps),
+             "kinds": sorted({s.leg_kind for s in d.steps}), "content_hash": d.content_hash}
+            for d in sorted(all_pipeline_defs(), key=lambda p: (p.pack, p.name))]
+
+
+def print_pipeline_rows(rows: list[dict]) -> None:
+    for row in rows:
+        console.print(f"  [cyan]{row['ref']}[/]  [dim]{row['legs']} legs "
+                      f"({','.join(row['kinds'])})  {row['content_hash']}[/]")
+    if not rows:
+        console.print("[yellow]no pipelines installed[/] — a domain pack ships at least one")
+
+
 def ls_cmd() -> None:
     """List every pipeline across installed packs."""
-    defs = all_pipeline_defs()
-    if not defs:
-        console.print("[yellow]no pipelines installed[/] — a domain pack ships "
-                      "at least one (ADR-0084 D4)")
-        raise typer.Exit(0)
-    for d in sorted(defs, key=lambda p: (p.pack, p.name)):
-        kinds = ",".join(sorted({s.leg_kind for s in d.steps}))
-        console.print(f"  [cyan]{d.pack}/{d.name}[/]  [dim]{len(d.steps)} legs "
-                      f"({kinds})  {d.content_hash}[/]")
+    print_pipeline_rows(pipeline_rows())
 
 
 def render_pipeline(d: PipelineDef) -> str:
@@ -158,7 +166,6 @@ def _inspection_pipeline(ref: str) -> PipelineDef | None:
     return resolve_pipeline_ref(explicit)
 
 
-@app.command("show")
 def show_cmd(
     ref: str = typer.Argument(..., help="<pack>/<name> or pipeline:<pack>/<name>"),
     plan: bool = typer.Option(False, "--plan", help="Show the execution plan instead."),
@@ -166,6 +173,7 @@ def show_cmd(
         None, "--input", "-i", help="with --plan: `key=value` you would launch with; repeatable"),
     preset: str = _PRESET,
     workspace: str = _WORKSPACE,
+    json_out: bool = typer.Option(False, "--json", help="Emit the definition, or with --plan the plan, as JSON."),
 ) -> None:
     """Show a pipeline's legs, gates, wires — and which runtime runs each leg.
 
@@ -181,18 +189,29 @@ def show_cmd(
         console.print(f"[red]unknown pipeline {ref!r}[/] — installed: {known or '(none)'}")
         raise typer.Exit(2)
     if plan:
+        layers: dict = {}
         if preset or input_:
             from cairn.core.engine.pipeline_explain import input_layers  # noqa: PLC0415
 
             layers = input_layers(d, supplied=_parse_inputs(input_), preset_name=preset,
                                   preset_inputs=_preset_inputs(d, preset, workspace))
+        steps = plan_pipeline(d).steps
+        if json_out:
+            typer.echo(json.dumps({"inputs": layers, "steps": [
+                {"id": s.id, "ref": s.ref, "depends_on": list(s.depends_on), "approval": s.approval}
+                for s in steps]}, indent=2, default=str))
+            raise typer.Exit(0)
+        if layers:
             console.print("  inputs (value ← layer)", markup=False)
             for key, layer in layers.items():
                 console.print(f"    {key:24s} {layer['value']!s:32s} ← {layer['source']}",
                               markup=False, highlight=False, soft_wrap=True)
-        for s in plan_pipeline(d).steps:
+        for s in steps:
             console.print(f"  {s.id:16s} ref={s.ref:32s} deps={s.depends_on} "
                           f"approval={s.approval}")
+        raise typer.Exit(0)
+    if json_out:
+        typer.echo(d.model_dump_json(indent=2))
         raise typer.Exit(0)
     console.print(render_pipeline(d), markup=False)
 
@@ -447,7 +466,7 @@ def run_pipeline(
     console.print(f"  final: [bold]{rec.status}[/bold]"
                   + (f"   [red]{rec.trigger.get('failure_reason', '')}[/red]"
                      if rec.status == "failed" else ""))
-    console.print(f"  inspect: [dim]cairn pipeline show {ref}[/dim]")
+    console.print(f"  inspect: [dim]cairn pack show {ref}[/dim]")
     if rec.status == "failed":
         raise typer.Exit(1)
     if rec.status == "cancelled":
@@ -455,7 +474,6 @@ def run_pipeline(
 
 
 # #2527
-@app.command("respell-packs")
 def respell_packs_cmd(
     apply: bool = typer.Option(False, "--apply", help="Write the rewrite. Without it nothing is written."),
     server_stopped: bool = typer.Option(
@@ -518,7 +536,6 @@ def respell_packs_cmd(
 
 # #2128 item C; every run is a leg of a pipeline: ADR-0105 D1, made true at the
 # chokepoint by #2133
-@app.command("backfill")
 def backfill_cmd(
     apply: bool = typer.Option(
         False, "--apply", help="WRITE. Without it this only reports what it would do."),
@@ -617,3 +634,10 @@ def backfill_cmd(
                 console.print(f"    [dim]{run_id}[/]")
     if not apply and rep.wrapped:
         console.print("  [dim]re-run with --apply to write them[/]")
+
+
+# The commands above are `cairn pack`'s and `cairn admin`'s now; these names are their aliases.
+app.command("ls", hidden=True)(renamed("cairn pipeline ls", "cairn pack ls --pipelines")(ls_cmd))
+app.command("show", hidden=True)(renamed("cairn pipeline show", "cairn pack show")(show_cmd))
+app.command("respell-packs", hidden=True)(renamed("cairn pipeline respell-packs", "cairn admin respell-packs")(respell_packs_cmd))
+app.command("backfill", hidden=True)(renamed("cairn pipeline backfill", "cairn admin backfill")(backfill_cmd))

@@ -460,7 +460,7 @@ def cmd(
         return
 
     if unused:
-        typer.echo("--unused applies to `cairn ls operators` only.", err=True)
+        typer.echo("--unused applies to `cairn pack ls operators` only.", err=True)
         raise typer.Exit(code=2)
 
     ensure_loaded()
@@ -493,6 +493,6 @@ def cmd(
             typer.echo(
                 f"\n✗ FAILED TO LOAD: {f['name']} ({f['target']})\n"
                 f"    {f['error']}\n"
-                f"    fix the pack (try `cairn validate` on its files) and reinstall",
+                f"    fix the pack (try `cairn pack check` on its files) and reinstall",
                 err=True,
             )

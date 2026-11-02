@@ -55,7 +55,7 @@ def pages() -> dict[str, str]:
 
 
 def test_the_walk_reaches_nested_commands(pages) -> None:
-    assert "cairn" in pages and "cairn run" in pages and "cairn audit verify" in pages
+    assert "cairn" in pages and "cairn run" in pages and "cairn admin audit verify" in pages
 
 
 def test_no_help_page_carries_an_internal_reference(pages) -> None:

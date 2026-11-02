@@ -212,7 +212,7 @@ async def test_pull_worker_door_refuses_a_flow_leg_pipeline_and_creates_no_recor
 
     msg = str(e.value)
     assert "pull-worker door" in msg
-    assert "cairn worker --pull" in msg  # the door's own remedy, not a new one
+    assert "cairn admin worker --pull" in msg  # the door's own remedy, not a new one
     assert bridge.calls == []
 
 

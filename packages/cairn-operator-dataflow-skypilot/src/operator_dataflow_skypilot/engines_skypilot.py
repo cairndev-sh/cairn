@@ -403,7 +403,7 @@ async def resolve_target(name: str, *, home: Optional[Path] = None,
     if conn is None:
         raise EngineError(
             f"compute connection {target!r} does not resolve — create it "
-            "(cairn connect) or point the target at one that exists"
+            "(cairn admin connect) or point the target at one that exists"
         )
     cfg = dict(getattr(conn, "config", None) or {})
     secrets = dict(getattr(conn, "secrets", None) or {})
