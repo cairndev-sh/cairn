@@ -21,7 +21,7 @@ that file or run `render.py`; pass `--out DIR` to keep your result separate.
 | Script | What it measures | Takes |
 |---|---|---|
 | [`quickstart_path.py`](./quickstart_path.py) | The quickstart's pipeline on a local engine: time to the paused gate, approvals to done, the gates holding, each person's decision in the audit log, the audit chain verifying | a minute or two |
-| [`crash_matrix.py`](./crash_matrix.py) | What happens when the server is killed: which crash cells passed, for each storage, runtime and bus. It runs no new checks and needs Postgres; see [below](#what-happens-when-the-server-is-killed) | about 7 min 15 s for all of `tests/e2e` in the `public-e2e` job, measured once; the script reads that run rather than repeating it |
+| [`crash_matrix.py`](./crash_matrix.py) | What happens when the server is killed: what each crash cell saw, for each storage, runtime and bus. It adds no checks and needs Postgres; see [below](#what-happens-when-the-server-is-killed) | 3 min 33 s for the 20 crash cells, four at a time, measured once on the author's 8-CPU Intel Mac; other machines differ. In CI the script reads the `public-e2e` run instead of repeating it |
 | [`audit_tamper.py`](./audit_tamper.py) | Alterations to a real audit log: the ones `cairn admin audit verify` detects and the row it names, the ones it can't detect, and what a saved head adds and misses | 3 min 45 s, measured once on the author's 8-CPU Intel Mac; other machines differ |
 
 ## Where the published numbers come from
@@ -55,6 +55,9 @@ A cell counts only if its case passed in that run's junit and it left a receipt.
 skipped or didn't run, the script prints the table with that cell as it was, exits non-zero and writes no
 result. A skipped cell therefore never reads as passed, and a run without Postgres publishes nothing.
 
+A passing cell doesn't mean the work survived. Its entry in the table says what happened, and **only the
+template leg on DBOS resumes**.
+
 To run it on your machine, start Postgres on the port the cells expect, then run the script:
 
 ```bash
@@ -75,21 +78,55 @@ There are eight setups (SQLite or Postgres storage × in-process or DBOS runtime
 bus), and three columns. The third exists only on the four DBOS setups, because only DBOS owns a template run
 this way; the others read `n/a`. That makes 20 cells.
 
-| Column | What is killed | When | What ADR-0125 requires afterwards |
-|---|---|---|---|
-| Killed at a person gate | The server process, with SIGKILL, running the `hello-crash/slow-publish` pipeline. | While the `review` person gate waits for a decision, after the three legs before it have finished. | The gate is still waiting after the restart and no finished leg runs again: a step waiting for approval has no process to lose, so ADR-0125 D3 leaves it out of the liveness check. Approving it finishes the pipeline with one run per leg and one published artifact. |
-| Killed inside a flow leg | The server process, with SIGKILL, running the `hello-crash/slow-publish` pipeline. The leg's engine subprocess isn't killed and outlives the server, as in a real crash. | About a second into the `slow` flow leg on the builtin engine, after the leg's engine handle is saved. | Right after the restart the leg is still `running` on the same run: the dead owner's lock has been found free only once, which ADR-0125 D3 calls undetermined. A second check more than 15 s later says the owner is dead, and the leg is re-attached under a new owner (D4). The builtin engine lost its job table with the old process, so the leg settles `failed` and the pipeline fails. The work isn't resumed: the leg isn't submitted again, the `stage` and `publish` legs after it never start, and no artifact is staged or published. |
-| Killed inside a template leg on DBOS | The server process, with SIGKILL, running the `hello-cairn/ask-the-docs` pipeline. | While the `assistant` template leg, a DBOS workflow, waits on its model call. | A run on a durable runtime names no in-process owner, so ADR-0125 D1 leaves its recovery to the runtime. At the next boot DBOS runs the workflow again from its last checkpoint: the model is called again, the same run finishes `done`, and the pipeline reaches its person gate. Approving it finishes the pipeline with one run per leg. |
+### Killed at a person gate
 
-[ADR-0125](../docs/decisions/ADR-0125-in-process-leg-liveness.md) sets these outcomes.
+Table entry: `still waiting, then finishes`.
 
-**Not covered.** No cell tests these. Some have tests under `tests/core`, which drive the code in one process
-and don't kill a real server.
+- **What is killed:** The server process, with SIGKILL, running the `hello-crash/slow-publish` pipeline.
+- **When:** While the `review` person gate waits for a decision, after the three legs before it have finished.
+- **What the cell requires afterwards:** The gate is still waiting after the restart and no finished leg has a new run. Approving it finishes the pipeline with one run per leg and one published artifact.
+- **How it works, which the cell doesn't assert:** A step waiting for approval has no process to lose, so ADR-0125 D3 leaves it out of the liveness check.
+
+### Killed inside a flow leg
+
+Table entry: `fails closed, not resumed`.
+
+- **What is killed:** The server process, with SIGKILL, running the `hello-crash/slow-publish` pipeline.
+- **When:** About a second into the `slow` flow leg on the builtin engine, after the leg's engine handle is saved.
+- **What the cell requires afterwards:** Right after the restart the leg is still `running` on the same run. Within 90 s it settles `failed` on that run, with an engine error saying the job was lost and a new owner recorded. The pipeline fails, the leg gets no new run, the `stage` and `publish` legs after it never start, and no artifact is staged or published. The work isn't resumed.
+- **How it works, which the cell doesn't assert:** ADR-0125 D3 calls a dead owner's lock found free once undetermined, and a second check more than one re-acquire interval later says the owner is dead; D4 then re-attaches the leg. Settling `failed` comes from the builtin engine, whose job table died with the old process, and isn't an ADR-0125 outcome. The harness signals only the server process, so the leg's engine subprocess isn't killed with it.
+
+### Killed inside a template leg on DBOS
+
+Table entry: `resumes, then finishes`.
+
+- **What is killed:** The server process, with SIGKILL, running the `hello-cairn/ask-the-docs` pipeline.
+- **When:** While the `assistant` template leg, a DBOS workflow, waits on its model call.
+- **What the cell requires afterwards:** Before the kill the run names no in-process owner and its workflow is `PENDING`. After the restart the model is called again, the same run finishes `done`, its workflow reads `SUCCESS`, and the pipeline reaches its person gate. Approving it finishes the pipeline with one run per leg.
+- **How it works, which the cell doesn't assert:** ADR-0125 D1 leaves a durable runtime's liveness to that runtime, so this recovery isn't an ADR-0125 outcome. DBOS runs a `PENDING` workflow again at boot, and the LangGraph checkpointer decides where the graph picks up.
+
+### Where this holds
+
+The result names the machine it ran on and the packs installed. CI runs the cells on Linux x86_64 with
+Postgres 16. All 20 have also passed once on an Intel Mac with Postgres 18.
+
+The cells need the locked install above, because a pack's policy can apply to every pipeline. If a pack requires
+a person for every high-risk operator, the DBOS cell fails at its 180 s limit: DBOS recovers the run, then the
+run stops at `memory/write` for an approval the cell never gives. That is the policy working, not a failed
+recovery.
+
+### Not covered
+
+No cell tests these. Some have tests under `tests/core`, which drive the code in one process and don't kill a
+real server.
 
 - The Temporal runtime. No cell runs it: the cells run on the in-process runtime and on DBOS.
+- Whether a node's side effects repeat. A node running at the kill runs again, which the DBOS integration leaves to operator idempotency. No cell shows that side effects aren't repeated or that earlier nodes are skipped.
 - A kill inside a task leg, or inside a template leg on the in-process runtime.
+- A kill while a template run is parked on its own approval (on DBOS, at `recv`).
 - A kill inside a flow leg before its engine handle is saved.
 - A flow leg on an engine whose jobs outlive the server, such as Metaflow or SkyPilot. Every cell uses the builtin engine, so no cell shows a re-attached leg finishing.
+- What the leg's engine subprocess goes on to do after its leg is marked `failed`.
 - A kill while a scheduled or event step fires, while a finalizer runs, after a cancel, or while a pipeline starts. A cell tests only the moment its column names.
 - A second kill during recovery.
 - More than one server: a second replica, or a server on another host.
@@ -100,6 +137,7 @@ and don't kill a real server.
 
 1. Add `benchmark/<name>.py`. Use `LocalEngine` from `_common.py`, and drive the engine through
    `cairn-client` rather than CLI commands, so a renamed command can't change the result.
+   `crash_matrix.py` is the exception: it starts no engine, because it reads what the crash cells did.
 2. Check the claim as well as timing it, and raise on any failure before calling `write_result`.
 3. Add it to the table above and to the `public` job in `.github/workflows/ci.yml` (`public-e2e` if it
    reads that job's cells).

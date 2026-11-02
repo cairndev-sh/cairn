@@ -27,6 +27,7 @@ def matrix(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.syspath_prepend(str(render.REPO / "benchmark"))
     module = importlib.import_module("crash_matrix")
     monkeypatch.setattr(module, "_uncommitted_cells", lambda: "")
+    monkeypatch.setattr(module, "_head_committed_at", lambda: datetime.now(timezone.utc) - timedelta(hours=1))
     monkeypatch.setattr(sys.modules["_common"], "provenance", lambda: {
         "cairndev_version": "1.2.3", "uv_lock_sha256": "a" * 64, "git_sha": "b" * 40, "code_clean": True,
         "machine": {"os": "Linux", "arch": "x86_64", "cpus": 4, "python": "3.13.1"},
@@ -103,28 +104,41 @@ def test_a_run_where_every_cell_passed_is_published(run: _Run) -> None:
     assert len(result["results"]) == len(CELLS) == 8
     assert {c["state"] for c in result["cells"]} == {"passed"} and len(result["cells"]) == ALL_CASES
     assert any(c["evidence"] == f"evidence of {GATE_SQLITE}" for c in result["cells"])
+    assert "hello-cairn" in result["inputs"]["installed_packs"]
 
 
-def test_the_published_result_renders_as_a_table_with_its_words(run: _Run) -> None:
+def test_the_table_says_what_happened_and_not_that_a_cell_passed(run: _Run) -> None:
+    """"passed" under "Killed inside a flow leg" reads as the leg surviving; it fails."""
     assert run.report() == 0
     block = render.render_block(render.load_results(run.out, render.REPO))
     assert "| Storage | Runtime | Bus | Killed at a person gate | Killed inside a flow leg |" in block
     assert "|---|---|---|---|---|---|" in block
-    assert "| SQLite | in-process | in-process | passed | passed | n/a |" in block
-    assert "| Postgres | DBOS | Postgres | passed | passed | passed |" in block
-    assert block.count("| n/a |") == 4, "only the setups with no DBOS have no DBOS cell"
-    assert "**Not covered.**" in block and "The Temporal runtime." in block
-    for scenario in ("Killed at a person gate.", "Killed inside a flow leg.", "Killed inside a template leg on DBOS."):
-        assert f"**{scenario}**" in block
+    gate, flow, dbos = "still waiting, then finishes", "fails closed, not resumed", "resumes, then finishes"
+    assert f"| SQLite | in-process | in-process | {gate} | {flow} | n/a |" in block
+    assert f"| Postgres | DBOS | Postgres | {gate} | {flow} | {dbos} |" in block
+    assert block.count(f"| {dbos} |") == 4 and block.count("| n/a |") == 4
+    assert "| passed |" not in block
 
 
-@pytest.mark.parametrize("outcome, shown", [("failed", "failed"), ("error", "error"), ("skipped", "skipped")])
+def test_the_root_readme_gets_the_table_and_a_link_and_not_the_words(run: _Run, matrix) -> None:
+    assert run.report() == 0
+    block = render.render_block(render.load_results(run.out, render.REPO))
+    assert "./benchmark/README.md#what-happens-when-the-server-is-killed" in block
+    assert "Only the template leg on DBOS resumes" in block
+    assert "The Temporal runtime" not in block
+    assert all(s.required not in block and s.how not in block for s in matrix.SCENARIOS.values())
+    result = json.loads((run.out / "crash_matrix.json").read_text())
+    assert result["not_covered"] == list(matrix.NOT_COVERED)
+    assert all(result["scenarios"][f]["required"] == s.required for f, s in matrix.SCENARIOS.items())
+
+
+@pytest.mark.parametrize("outcome, shown", [("failed", "cell failed"), ("error", "cell error"), ("skipped", "cell skipped")])
 def test_a_cell_that_did_not_pass_fails_and_writes_nothing(run: _Run, capsys, outcome: str, shown: str) -> None:
     run.set_outcome(GATE_SQLITE, outcome, "the reason it did not pass")
     assert run.report() == 1
     assert not run.written
     out = capsys.readouterr()
-    assert f"| SQLite | in-process | in-process | {shown} | passed | n/a |" in out.out
+    assert f"| SQLite | in-process | in-process | {shown} | fails closed, not resumed | n/a |" in out.out
     assert GATE_SQLITE in out.err and "the reason it did not pass" in out.err
 
 
@@ -133,7 +147,8 @@ def test_a_cell_that_did_not_run_shows_as_not_run(run: _Run, capsys) -> None:
     assert run.report() == 1
     assert not run.written
     out = capsys.readouterr()
-    assert "| Postgres | DBOS | Postgres | passed | passed | not run |" in out.out
+    assert ("| Postgres | DBOS | Postgres | still waiting, then finishes | fails closed, not resumed | cell not run |"
+            in out.out)
     assert RESUME_PG in out.err
 
 
@@ -141,7 +156,9 @@ def test_receipts_without_a_junit_prove_nothing(run: _Run, matrix, capsys) -> No
     _write_receipts(run.receipts, run.rows)
     assert matrix._report(run.junit, run.receipts, run.out) == 1
     assert not run.written
-    assert "passed" not in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert out.count("cell not run") == ALL_CASES
+    assert not any(s.outcome in out for s in matrix.SCENARIOS.values())
 
 
 def test_a_passed_case_with_no_receipt_fails(run: _Run) -> None:
@@ -174,14 +191,20 @@ def test_receipts_from_two_runs_fail(run: _Run, capsys) -> None:
 
 
 def test_a_case_that_passed_and_then_errored_at_teardown_did_not_pass(run: _Run, capsys) -> None:
-    """junit can list one case twice; the receipt was recorded before the teardown failed."""
-    run.cases = [*run.cases, (GATE_SQLITE, "error", "the server would not stop")]
+    """pytest writes both in one <testcase> with an <error>; the receipt was recorded before the teardown failed."""
+    run.set_outcome(GATE_SQLITE, "error", "the server would not stop")
     assert run.report() == 1
     assert not run.written
     assert "the server would not stop" in capsys.readouterr().err
 
 
-def test_the_receipt_rule_reads_that_case_as_not_passed(tmp_path: Path) -> None:
+def test_a_case_listed_twice_passed_only_if_both_entries_did(run: _Run) -> None:
+    run.cases = [*run.cases, (GATE_SQLITE, "error", "the server would not stop")]
+    assert run.report() == 1
+    assert not run.written
+
+
+def test_the_receipt_rule_reads_a_case_listed_twice_as_not_passed(tmp_path: Path) -> None:
     junit = _write_junit(tmp_path / "junit.xml", [(GATE_SQLITE, "passed", ""), (GATE_SQLITE, "error", "teardown"),
                                                   (RESUME_PG, "passed", "")])
     assert passed_cases(_load_junit(junit)) == {RESUME_PG}
@@ -192,6 +215,13 @@ def test_a_junit_from_another_run_fails(run: _Run, capsys) -> None:
     assert run.report() == 1
     assert not run.written
     assert "too old" in capsys.readouterr().err
+
+
+def test_a_junit_from_before_this_commit_fails(run: _Run, matrix, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    monkeypatch.setattr(matrix, "_head_committed_at", lambda: datetime.now(timezone.utc) + timedelta(hours=1))
+    assert run.report() == 1
+    assert not run.written
+    assert "before this commit" in capsys.readouterr().err
 
 
 def test_a_junit_that_does_not_say_when_it_ran_fails(run: _Run, capsys) -> None:
@@ -267,6 +297,14 @@ def test_a_pytest_that_exits_non_zero_fails_even_if_every_case_reads_passed(
     assert "pytest exited 3" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("field", ["measurement", "title", "script", "provenance", "inputs", "results"])
+def test_extra_fields_cannot_replace_a_core_one(matrix, tmp_path: Path, field: str) -> None:
+    common = sys.modules["_common"]
+    with pytest.raises(ValueError, match=f"extra can't replace {field}"):
+        common.write_result(tmp_path / "out", "m", title="M", inputs={}, results=[], extra={field: "forged"})
+    assert not (tmp_path / "out").exists()
+
+
 def test_junit_and_receipts_go_together(matrix, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("sys.argv", ["crash_matrix.py", "--junit", "j.xml"])
     with pytest.raises(SystemExit):
@@ -295,10 +333,11 @@ def test_the_benchmark_readme_says_what_the_script_says(matrix) -> None:
     readme = (render.REPO / "benchmark" / "README.md").read_text(encoding="utf-8")
     assert "[`crash_matrix.py`](./crash_matrix.py)" in readme
     for scenario in matrix.SCENARIOS.values():
-        for words in (scenario.column, scenario.crashed, scenario.when, scenario.required):
+        for words in (scenario.column, scenario.outcome, scenario.crashed, scenario.when, scenario.required,
+                      scenario.how):
             assert words in readme, words
-    for item in matrix.NOT_COVERED:
-        assert item in readme, item
+    listed = readme.split("### Not covered", 1)[1].split("\n## ", 1)[0]
+    assert [line[2:] for line in listed.splitlines() if line.startswith("- ")] == list(matrix.NOT_COVERED)
 
 
 def _e2e_steps() -> list[dict]:

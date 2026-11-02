@@ -1,19 +1,23 @@
 """What happens when the server is killed: the crash cells of ``tests/e2e/hello/test_crash.py`` as a table.
 
 This script proves nothing itself. Each cell SIGKILLs a real server, starts a new one on the same
-stores and checks the outcome ADR-0125 requires; this script publishes which cells passed. A cell
-counts only when its case passed in that run's junit and it left a receipt
+stores and checks what that cell requires afterwards; this script publishes which cells passed. A
+cell counts only when its case passed in that run's junit and it left a receipt
 (``tests/e2e/hello/_receipts.py``). Any cell that failed, was skipped or didn't run is shown as
 such, exits non-zero and writes no result.
 
+A passing cell doesn't mean the work survived. Its table entry says what happened: only the
+template leg on DBOS resumes.
+
     # run the cells, then write the result; the Postgres cells need CAIRN_PROOF_PG_DSN answering
     .venv/bin/python benchmark/crash_matrix.py [--out benchmark/results]
-    # read a run that already happened, as the public-e2e CI job does
+    # read a run that already happened on this commit, as the public-e2e CI job does
     .venv/bin/python benchmark/crash_matrix.py --junit public-e2e.xml --receipts receipts.jsonl --out DIR
 """
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import os
 import subprocess
 import sys
@@ -49,50 +53,65 @@ PLACES = {"storage": "Storage", "runtime": "Runtime", "bus": "Bus"}
 @dataclass(frozen=True)
 class Scenario:
     column: str
+    #: the table's entry when the cell passed: what happened, because "passed" reads as "survived"
+    outcome: str
     crashed: str
     when: str
+    #: only what the cell asserts
     required: str
+    #: why it comes out that way, which the cell doesn't assert
+    how: str
 
 
 #: One per ``CRASH_TESTS`` key, and ``benchmark/README.md`` repeats these words (a test holds both to it).
 SCENARIOS = {
     "crash.gate": Scenario(
         column="Killed at a person gate",
+        outcome="still waiting, then finishes",
         crashed="The server process, with SIGKILL, running the `hello-crash/slow-publish` pipeline.",
         when="While the `review` person gate waits for a decision, after the three legs before it have finished.",
-        required="The gate is still waiting after the restart and no finished leg runs again: a step waiting for "
-                 "approval has no process to lose, so ADR-0125 D3 leaves it out of the liveness check. Approving it "
+        required="The gate is still waiting after the restart and no finished leg has a new run. Approving it "
                  "finishes the pipeline with one run per leg and one published artifact.",
+        how="A step waiting for approval has no process to lose, so ADR-0125 D3 leaves it out of the liveness check.",
     ),
     "crash.mid-leg": Scenario(
         column="Killed inside a flow leg",
-        crashed="The server process, with SIGKILL, running the `hello-crash/slow-publish` pipeline. The leg's engine "
-                "subprocess isn't killed and outlives the server, as in a real crash.",
+        outcome="fails closed, not resumed",
+        crashed="The server process, with SIGKILL, running the `hello-crash/slow-publish` pipeline.",
         when="About a second into the `slow` flow leg on the builtin engine, after the leg's engine handle is saved.",
-        required="Right after the restart the leg is still `running` on the same run: the dead owner's lock has been "
-                 "found free only once, which ADR-0125 D3 calls undetermined. A second check more than 15 s later "
-                 "says the owner is dead, and the leg is re-attached under a new owner (D4). The builtin engine lost "
-                 "its job table with the old process, so the leg settles `failed` and the pipeline fails. The work "
-                 "isn't resumed: the leg isn't submitted again, the `stage` and `publish` legs after it never start, "
-                 "and no artifact is staged or published.",
+        required="Right after the restart the leg is still `running` on the same run. Within 90 s it settles `failed` "
+                 "on that run, with an engine error saying the job was lost and a new owner recorded. The pipeline "
+                 "fails, the leg gets no new run, the `stage` and `publish` legs after it never start, and no "
+                 "artifact is staged or published. The work isn't resumed.",
+        how="ADR-0125 D3 calls a dead owner's lock found free once undetermined, and a second check more than one "
+            "re-acquire interval later says the owner is dead; D4 then re-attaches the leg. Settling `failed` comes "
+            "from the builtin engine, whose job table died with the old process, and isn't an ADR-0125 outcome. The "
+            "harness signals only the server process, so the leg's engine subprocess isn't killed with it.",
     ),
     "crash.dbos-resume": Scenario(
         column="Killed inside a template leg on DBOS",
+        outcome="resumes, then finishes",
         crashed="The server process, with SIGKILL, running the `hello-cairn/ask-the-docs` pipeline.",
         when="While the `assistant` template leg, a DBOS workflow, waits on its model call.",
-        required="A run on a durable runtime names no in-process owner, so ADR-0125 D1 leaves its recovery to the "
-                 "runtime. At the next boot DBOS runs the workflow again from its last checkpoint: the model is "
-                 "called again, the same run finishes `done`, and the pipeline reaches its person gate. Approving "
-                 "it finishes the pipeline with one run per leg.",
+        required="Before the kill the run names no in-process owner and its workflow is `PENDING`. After the restart "
+                 "the model is called again, the same run finishes `done`, its workflow reads `SUCCESS`, and the "
+                 "pipeline reaches its person gate. Approving it finishes the pipeline with one run per leg.",
+        how="ADR-0125 D1 leaves a durable runtime's liveness to that runtime, so this recovery isn't an ADR-0125 "
+            "outcome. DBOS runs a `PENDING` workflow again at boot, and the LangGraph checkpointer decides where the "
+            "graph picks up.",
     ),
 }
 
 NOT_COVERED = (
     "The Temporal runtime. No cell runs it: the cells run on the in-process runtime and on DBOS.",
+    "Whether a node's side effects repeat. A node running at the kill runs again, which the DBOS integration leaves "
+    "to operator idempotency. No cell shows that side effects aren't repeated or that earlier nodes are skipped.",
     "A kill inside a task leg, or inside a template leg on the in-process runtime.",
+    "A kill while a template run is parked on its own approval (on DBOS, at `recv`).",
     "A kill inside a flow leg before its engine handle is saved.",
     "A flow leg on an engine whose jobs outlive the server, such as Metaflow or SkyPilot. Every cell uses the builtin "
     "engine, so no cell shows a re-attached leg finishing.",
+    "What the leg's engine subprocess goes on to do after its leg is marked `failed`.",
     "A kill while a scheduled or event step fires, while a finalizer runs, after a cancel, or while a pipeline starts. "
     "A cell tests only the moment its column names.",
     "A second kill during recovery.",
@@ -132,9 +151,9 @@ def judge(cases: list[dict], receipts: list[dict]) -> list[dict]:
                 bad = next(c for c in mine if c["outcome"] != "passed")
                 state, detail = bad["outcome"], bad["message"]
             elif not found:
-                state, detail = "no receipt", "its case passed but recorded no receipt"
+                state, detail = "unproved", "its case passed but recorded no receipt"
             elif len(found) > 1:
-                state, detail = "no receipt", f"{len(found)} receipts for one case: the file spans more than one run"
+                state, detail = "unproved", f"{len(found)} receipts for one case: the file spans more than one run"
             else:
                 evidence = found[0]["evidence"]
             verdicts.append({"cell": cell.id, "feature": feature, "test": name, "state": state, "detail": detail,
@@ -142,12 +161,17 @@ def judge(cases: list[dict], receipts: list[dict]) -> list[dict]:
     return verdicts
 
 
+def _entry(state: str, scenario: Scenario) -> str:
+    return scenario.outcome if state == "passed" else f"cell {state}"
+
+
 def table_rows(verdicts: list[dict]) -> list[dict[str, str]]:
-    """Storage, runtime, bus and each scenario's real state, whatever it was. ``n/a`` is only
-    for a cell that doesn't exist in that setup."""
+    """Storage, runtime, bus and what happened in each scenario. A cell that didn't pass says
+    so instead. ``n/a`` is only for a cell that doesn't exist in that setup."""
     states = {(v["cell"], v["feature"]): v["state"] for v in verdicts}
     return [{"storage": LABELS[c.storage], "runtime": LABELS[c.runtime], "bus": LABELS[c.bus],
-             **{f: states.get((c.id, f), "not run") if _applies(f, c) else NOT_APPLICABLE for f in SCENARIOS}}
+             **{f: _entry(states.get((c.id, f), "not run"), s) if _applies(f, c) else NOT_APPLICABLE
+                for f, s in SCENARIOS.items()}}
             for c in CELLS]
 
 
@@ -156,16 +180,10 @@ def columns() -> dict[str, str]:
 
 
 def notes() -> list[str]:
-    """The words beside the table: what each column did and what it can't say."""
-    return [
-        "Each row is one setup: where records are stored, which runtime owns a run, and which bus carries events. "
-        "Each cell kills the real server, starts a new one on the same stores, and checks what the records say "
-        "afterwards. `passed` means that cell's test passed in this run. `n/a` means the cell doesn't exist in that "
-        "setup: only DBOS owns a template run this way.",
-        *(f"**{s.column}.** {s.when} {s.required}" for s in SCENARIOS.values()),
-        "**Not covered.** No cell tests these. Some have tests under `tests/core`, which drive the code in one "
-        "process and don't kill a real server.\n\n" + "\n".join(f"- {item}" for item in NOT_COVERED),
-    ]
+    """What the root README carries beside the table; the full words are in ``benchmark/README.md``."""
+    return ["Each entry is what that cell's test required and saw in this run. Only the template leg on DBOS resumes; "
+            "a flow leg killed on the builtin engine fails, and so does its pipeline. What each cell checks, where this holds, and what no cell "
+            "tests: [What happens when the server is killed](./benchmark/README.md#what-happens-when-the-server-is-killed)."]
 
 
 def _junit_ran_at(junit: Path) -> Optional[datetime]:
@@ -173,6 +191,10 @@ def _junit_ran_at(junit: Path) -> Optional[datetime]:
     suite = root if root.tag == "testsuite" else root.find("testsuite")
     stamp = suite.get("timestamp") if suite is not None else None
     return datetime.fromisoformat(stamp).astimezone(timezone.utc) if stamp else None
+
+
+def _head_committed_at() -> datetime:
+    return datetime.fromisoformat(_git("log", "-1", "--format=%cI"))
 
 
 def _uncommitted_cells() -> str:
@@ -193,6 +215,8 @@ def refusals(junit: Path, cases: list[dict], verdicts: list[dict], *, now: Optio
             problems.append(f"{junit} doesn't say when it ran")
         elif (now or datetime.now(timezone.utc)) - ran_at > MAX_JUNIT_AGE:
             problems.append(f"{junit} is from {ran_at.isoformat()}, too old to be this run's")
+        elif ran_at < _head_committed_at():
+            problems.append(f"{junit} is from {ran_at.isoformat()}, before this commit, so it ran on other code")
     dirty = _uncommitted_cells()
     if dirty:
         problems.append(f"the cells under tests/e2e have uncommitted changes:\n{dirty}")
@@ -220,13 +244,15 @@ def _print_table(rows: list[dict[str, str]]) -> None:
 
 
 def _publish(out: Path, verdicts: list[dict]) -> Path:
-    inputs: dict[str, Any] = {"cells": str(CELLS_FILE.relative_to(REPO)), "cells_sha256": sha256_file(CELLS_FILE)}
+    # a pack's policy can gate an operator a cell runs, so this says what the result held with
+    inputs: dict[str, Any] = {"cells": str(CELLS_FILE.relative_to(REPO)), "cells_sha256": sha256_file(CELLS_FILE),
+                              "installed_packs": sorted(e.name for e in importlib.metadata.entry_points(group="cairn.packs"))}
     return write_result(out, "crash_matrix", title="What happens when the server is killed", inputs=inputs,
                         results=table_rows(verdicts), extra={
                             "columns": columns(),
                             "notes": notes(),
-                            "scenarios": {f: {"column": s.column, "crashed": s.crashed, "when": s.when,
-                                              "required": s.required} for f, s in SCENARIOS.items()},
+                            "scenarios": {f: {"column": s.column, "outcome": s.outcome, "crashed": s.crashed, "when": s.when,
+                                              "required": s.required, "how": s.how} for f, s in SCENARIOS.items()},
                             "not_covered": list(NOT_COVERED),
                             "cells": [{k: v[k] for k in ("cell", "feature", "test", "state", "evidence")}
                                       for v in verdicts],
@@ -252,7 +278,8 @@ def _report(junit: Path, receipts: Path, out: Path, *, exit_code: int = 0) -> in
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--junit", type=Path, help="the junit of a run that already happened; needs --receipts")
+    parser.add_argument("--junit", type=Path, help="the junit of a run that already happened; needs --receipts. It's refused if older than "
+                             "this commit, but a junit holds no commit, so a newer one from other code isn't caught")
     parser.add_argument("--receipts", type=Path, help="that run's CAIRN_PROOF_RECEIPTS file")
     parser.add_argument("--out", type=Path, default=RESULTS)
     args = parser.parse_args()

@@ -142,8 +142,9 @@ def passed_cases(cases: list[dict]) -> set[str]:
     """The case names a receipt can count for: a receipt proves its feature only when the
     case that recorded it PASSED in this junit. No junit (the run died before writing it),
     a stale one, or a case that failed after recording all leave the row unproved (PR #2656
-    review). junit can list a case twice, its call and then a teardown error: it passed
-    only if every entry did."""
+    review). A case that passed and then errored at teardown reads ``error``, because pytest
+    writes both in one ``<testcase>``. If a junit ever lists a name twice, it passed only if
+    every entry did."""
     not_passed = {c["id"].rsplit("::", 1)[-1] for c in cases if c["outcome"] != "passed"}
     return {c["id"].rsplit("::", 1)[-1] for c in cases if c["outcome"] == "passed"} - not_passed
 
