@@ -12,7 +12,9 @@ import os
 
 os.environ.setdefault("OPENAI_API_KEY", "sk-test-dummy")
 
-from cairn.cli.commands import replay
+import pytest
+
+from cairn.cli.commands import remote, replay
 from cairn.core.engine.schema import TriggerEvent
 import cairn.core.storage as storage_mod
 from cairn.core.storage import Run, SqliteRunStore
@@ -57,7 +59,7 @@ def test_db_replay_missing_run_is_clean_error(tmp_path, monkeypatch, capsys):
     assert rc == 1
     err = capsys.readouterr().err
     assert "no such run in the DB store" in err
-    assert "cairn remote status nope" in err  # #2536 — a server's run is read over the API
+    assert "the engine is asked too" in err  # #2536, #369 — a server's run is read over the API
 
 
 # ─── end-to-end via the real env-driven path (no default_store monkeypatch) ──
@@ -112,3 +114,92 @@ def test_db_replay_auto_falls_back_to_db_store_via_env(tmp_path, monkeypatch, ca
     rc = replay._run("run-auto", json=False, source="auto")
     assert rc == 0
     assert "status:      done" in capsys.readouterr().out
+
+
+# ─── #369: a run the CLI's own environment doesn't name a store for ──
+# The real engine and CLI are in tests/e2e/hello/test_status_replay_local.py; these pin the choices
+# between the sources, which that test can only take one way each.
+
+
+class _Engine:
+    """What `cairn-client` returns for a task leg, as the engine does."""
+
+    def __init__(self):
+        self.seen = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def run(self, run_id):
+        self.seen.append(run_id)
+        return {"id": run_id, "status": "done", "environment": "sandbox", "template_ref": "task:data/profile",
+                "inputs": {"source": "/data.jsonl"}, "resolved_operators": []}
+
+    def run_events(self, run_id):
+        return {"events": [{"seq": 1, "ts": "2026-11-02T10:00:00+00:00", "type": "done", "data": {"leg": "x"}}]}
+
+
+@pytest.fixture
+def no_store(tmp_path, monkeypatch):
+    """A HOME with nothing in it and a process with no store configured; booting an engine fails."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CAIRN_CONFIG_HOME", str(tmp_path / ".cairn"))
+    monkeypatch.chdir(tmp_path)
+    for name in ("STORAGE", "RUN_DB", "REMOTE_ENDPOINT", "REMOTE_TOKEN"):
+        monkeypatch.delenv(f"CAIRN_{name}", raising=False)
+        monkeypatch.delenv(f"OBS_{name}", raising=False)
+    monkeypatch.setattr(remote.subprocess, "Popen", lambda *a, **k: pytest.fail("this command boots no engine"))
+    return tmp_path
+
+
+def test_a_run_only_the_engine_has_is_read_from_the_engine(no_store, monkeypatch, capsys):
+    engine = _Engine()
+    monkeypatch.setattr(remote, "_reachable", lambda ep: True)
+    monkeypatch.setattr(remote, "_api", lambda ep, tok: engine)
+    assert replay._run("run-1", json=False) == 0
+    out = capsys.readouterr().out
+    assert engine.seen == ["run-1"]
+    assert "operators:   data/profile" in out and "source = /data.jsonl" in out and "environment: sandbox" in out
+
+
+def test_the_endpoint_named_on_the_command_is_the_one_asked(no_store, monkeypatch, capsys):
+    asked = []
+    monkeypatch.setattr(remote, "_reachable", lambda ep: asked.append(ep) or True)
+    monkeypatch.setattr(remote, "_api", lambda ep, tok: _Engine())
+    assert replay._run("run-1", json=True, endpoint="http://there:1") == 0
+    assert asked == ["http://there:1"]
+
+
+def test_no_engine_reads_the_local_store_and_says_so_and_boots_nothing(no_store, monkeypatch, capsys):
+    (no_store / ".cairn").mkdir()
+    db = no_store / ".cairn" / "dev.db"
+    monkeypatch.setenv("CAIRN_STORAGE", f"sqlite:///{db}")
+    _seed_via_env(db, "run-1", with_result=False)
+    monkeypatch.delenv("CAIRN_STORAGE")
+    monkeypatch.setattr(remote, "_reachable", lambda ep: False)
+    assert replay._run("run-1", json=True) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["meta"]["status"] == "done"
+    assert str(db) in captured.err
+
+
+def test_nowhere_says_where_it_looked(no_store, monkeypatch, capsys):
+    monkeypatch.setattr(remote, "_reachable", lambda ep: False)
+    assert replay._run("run-1", json=False) == 1
+    err = capsys.readouterr().err
+    assert "no such run: run-1" in err and "no engine answers at" in err
+    assert not (no_store / ".cairn" / "dev.db").exists(), "looking creates no store"
+
+
+def test_the_operators_are_what_the_record_names():
+    events = [{"type": "parameters", "data": {"operator": "llm/complete"}},
+              {"type": "parameters", "data": {"operator": "llm/complete"}},
+              {"type": "parameters", "data": {"operator": "flow:p/f"}},
+              {"type": "done", "data": {"operator": "not-this"}}]
+    assert replay._operators({"template_ref": "t", "resolved_operators": [{"operator": "a/b"}]}, events) == \
+        ["a/b", "llm/complete"]
+    assert replay._operators({"template_ref": "task:data/profile"}, []) == ["data/profile"]
+    assert replay._operators({"template_ref": "flow:p/f"}, []) == []
