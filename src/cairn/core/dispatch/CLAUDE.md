@@ -36,9 +36,9 @@ lazy ones in `scheduler.py` are debt).
 implement the same advancement durably; shared leg side-channels live in `leg_hooks.py`.
 A change to leg semantics in the bridge that is not in the activities is a bug.
 
-**Testing.** `tests/core/test_pipeline_*.py` (34), `test_leg_executor.py`,
-`test_dispatcher*.py`, `test_run_template_ref.py`, `test_target_concurrency.py`,
-`test_temporal_owner_*.py`, `test_pipeline_governance_wiring.py`. A new door or gate needs
+**Testing.** `tests/core/test_pipeline_*.py`, `test_leg_*.py`,
+`test_dispatcher*.py`, `test_target_concurrency.py`,
+`test_temporal_owner_*.py`. A new door or gate needs
 a test that proves it can REFUSE.
 
 **Common mistakes.** Reading `getattr(rec, "field", None) or {}` for a field that does not
