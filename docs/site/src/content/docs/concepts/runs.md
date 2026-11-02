@@ -30,7 +30,10 @@ Each launch writes one pipeline record (`pl_…`). It holds:
 
 A paused pipeline is stored, not held in memory. After a restart cairn picks up
 the running and paused pipelines again; a gate that was waiting is still
-waiting.
+waiting. A leg that was running doesn't always resume: the
+[crash and resume matrix](https://github.com/cairndev-sh/cairn/blob/main/benchmark/README.md#what-happens-when-the-server-is-killed)
+says what happens when the server is killed at each moment it tests, and which
+moments it doesn't test.
 
 ## Leg runs
 

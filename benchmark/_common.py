@@ -59,9 +59,9 @@ def provenance() -> dict[str, Any]:
 
 
 def write_result(out: Path, measurement: str, *, title: str, inputs: dict[str, Any],
-                 results: list[dict[str, str]]) -> Path:
+                 results: list[dict[str, str]], extra: Optional[dict[str, Any]] = None) -> Path:
     """One result file. A runner calls this only after every check held, so a failed run
-    publishes nothing."""
+    publishes nothing. ``extra`` adds fields, such as the ``columns`` and ``notes`` ``render.py`` reads."""
     out.mkdir(parents=True, exist_ok=True)
     path = out / f"{measurement}.json"
     path.write_text(json.dumps({
@@ -71,6 +71,7 @@ def write_result(out: Path, measurement: str, *, title: str, inputs: dict[str, A
         "provenance": provenance(),
         "inputs": inputs,
         "results": results,
+        **(extra or {}),
     }, indent=2) + "\n", encoding="utf-8")
     return path
 

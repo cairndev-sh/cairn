@@ -138,6 +138,16 @@ def _load_junit(path: Path) -> list[dict]:
     return out
 
 
+def passed_cases(cases: list[dict]) -> set[str]:
+    """The case names a receipt can count for: a receipt proves its feature only when the
+    case that recorded it PASSED in this junit. No junit (the run died before writing it),
+    a stale one, or a case that failed after recording all leave the row unproved (PR #2656
+    review). junit can list a case twice, its call and then a teardown error: it passed
+    only if every entry did."""
+    not_passed = {c["id"].rsplit("::", 1)[-1] for c in cases if c["outcome"] != "passed"}
+    return {c["id"].rsplit("::", 1)[-1] for c in cases if c["outcome"] == "passed"} - not_passed
+
+
 def _cases_for(key: str, pipeline: str, cases: list[dict]) -> list[dict]:
     """The junit cases that prove ``key``: the crash test, or ``test_pipeline`` for its
     pipeline — only in the cells that can prove it (:data:`CELL_SCOPE`)."""
@@ -162,10 +172,7 @@ def feature_status(junit: Path, receipts: Path) -> dict[str, dict]:
     matrix (scripts/oss/feature_matrix.py, #2667) both read."""
     cases = _load_junit(junit)
     rows = _load_receipts(receipts)
-    # a receipt proves its feature only when the case that recorded it PASSED in this
-    # junit: no junit (the run died before writing it), a stale one, or a case that
-    # failed after recording all leave the row unproved (PR #2656 review)
-    passed = {c["id"].rsplit("::", 1)[-1] for c in cases if c["outcome"] == "passed"}
+    passed = passed_cases(cases)
     by_feature: dict[str, list[dict]] = {}
     owed: dict[str, set[str]] = {}
     for r in rows:

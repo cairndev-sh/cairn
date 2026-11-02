@@ -90,8 +90,13 @@ jobs:
         --extra runtime-postgres --extra runtime-dbos --extra hello $(grep -q '^train = ' pyproject.toml && echo --extra train)
     - name: Every matrix and crash cell of the feature proof (tests/e2e/hello), four at a time
       # each cell has its own server, port, HOME and Postgres database (tests/e2e/conftest.py)
-      run: env -u OBS_STORAGE -u CAIRN_STORAGE .venv/bin/pytest -q --no-header -p no:cacheprovider -rs -n 4 --dist load -m e2e
-        --junitxml=/tmp/test-results/public-e2e.xml tests/e2e
+      env:
+        CAIRN_PROOF_RECEIPTS: /tmp/test-results/receipts.jsonl
+      run: mkdir -p /tmp/test-results && env -u OBS_STORAGE -u CAIRN_STORAGE .venv/bin/pytest -q --no-header -p no:cacheprovider
+        -rs -n 4 --dist load -m e2e --junitxml=/tmp/test-results/public-e2e.xml tests/e2e
+    - name: The crash cells that just passed, as a table (benchmark/README.md)
+      run: env -u OBS_STORAGE -u CAIRN_STORAGE .venv/bin/python benchmark/crash_matrix.py --junit /tmp/test-results/public-e2e.xml
+        --receipts /tmp/test-results/receipts.jsonl --out /tmp/test-results/benchmark
     - if: always()
       uses: actions/upload-artifact@v7
       with:

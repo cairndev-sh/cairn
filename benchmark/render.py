@@ -21,6 +21,11 @@ _PROVENANCE = ("cairndev_version", "uv_lock_sha256", "git_sha", "code_clean", "m
 _MACHINE = ("os", "arch", "cpus", "python")
 
 
+def _columns(result: dict) -> dict[str, str]:
+    """Row key → column heading. A result names its own to show a table with more than two."""
+    return result.get("columns") or {"what": "Measured", "result": "Result"}
+
+
 def load_results(results: Path = RESULTS, repo: Path = REPO) -> list[dict]:
     """Every result, refusing one that does not say where it came from."""
     loaded = []
@@ -37,6 +42,9 @@ def load_results(results: Path = RESULTS, repo: Path = REPO) -> list[dict]:
             raise ValueError(f"{path.name} names a script that does not exist: {result['script']}")
         if not result.get("results"):
             raise ValueError(f"{path.name} has no results")
+        lacking = [k for row in result["results"] for k in _columns(result) if k not in row]
+        if lacking:
+            raise ValueError(f"{path.name} has a row with no {lacking[0]}")
         loaded.append(result)
     if not loaded:
         raise ValueError(f"no results in {results}")
@@ -48,9 +56,12 @@ def render_block(results: list[dict]) -> str:
     for result in results:
         where = result["provenance"]
         machine = where["machine"]
+        columns = _columns(result)
         lines += ["", f"**{result['title']}** ([reproduce](./{result['script']}))", "",
-                  "| Measured | Result |", "|---|---|"]
-        lines += [f"| {row['what']} | {row['result']} |" for row in result["results"]]
+                  f"| {' | '.join(columns.values())} |", f"|{'---|' * len(columns)}"]
+        lines += [f"| {' | '.join(row[k] for k in columns)} |" for row in result["results"]]
+        for note in result.get("notes", []):
+            lines += ["", note]
         lines += ["", f"cairndev {where['cairndev_version']}, `uv.lock` `{where['uv_lock_sha256'][:12]}`, "
                       f"{machine['os']} {machine['arch']} with {machine['cpus']} CPUs and Python {machine['python']}, "
                       f"{where['measured_at']}."]
