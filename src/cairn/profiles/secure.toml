@@ -19,6 +19,9 @@ extends = "local-dev.toml"
 # PII + secret redaction before anything leaves to an LLM vendor
 # (builtin cairn-operator-redact-regex; swap for cairn-operator-redact-presidio later).
 "redact.text" = "redact/text"
-# Tamper-evident hash-chained audit log of every model call, tool call,
-# and action (builtin cairn-operator-audit-store; CAIRN_AUDIT_LOG sets the path).
+# Tamper-evident hash-chained audit log: direct model completions, MCP tool
+# calls through mcp/call, approvals and every governed pipeline step (builtin
+# cairn-operator-audit-store; CAIRN_AUDIT_LOG sets the path). Model calls a
+# template's prompt and agent nodes make through build_chat_model are not
+# written yet.
 "audit.sink" = "audit/store"
