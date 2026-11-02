@@ -75,6 +75,12 @@ with the gate `awaiting_approval`. From the same pipeline:
   pipeline's `governance.approvers`.
 - **The pause is durable.** The gate's state lives in the pipeline's record, so
   a restart of the server resumes the pipeline at the same pause.
+- **The evidence is on the record.** The step's `gate_context` holds the `show:`
+  fields, the approvers, the spend against the budget cap, the cost estimate and
+  the admission decision. `cairn remote launch --watch` and `cairn remote advance`
+  print them at each pause, and `cairn remote pipeline <id>` includes them. They
+  stay on the step after the decision, so the record says what was shown. Under
+  the Temporal owner, a gate carries no evidence yet.
 - **Approving** releases the gate and records who approved, when, and any
   rationale: `cairn remote advance <pipeline_id> <gate>`, or
   `POST /pipelines/<pipeline_id>/steps/<gate>/approve`.

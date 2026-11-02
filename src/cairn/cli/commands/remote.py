@@ -1038,11 +1038,45 @@ def _failed_steps(p: dict) -> list[tuple[str, str]]:
             if str(st.get("status", "")) == "failed"]
 
 
+def _safe_line(value: Any) -> str:
+    """One line for a person's terminal. A gate's values can come from a model's output, so a
+    newline or an escape sequence must not forge a row on the screen someone approves from."""
+    text = "".join(c if c.isprintable() else f"\\x{ord(c):02x}" for c in str(value))
+    return text if len(text) <= 100 else text[:97] + "..."
+
+
+def _print_gate_evidence(p: dict) -> None:
+    """#258 — what the person at each waiting gate is deciding on: the gate's ``show:``
+    fields, spend against the cap, the cost estimate and the admission decision, read
+    from the step. A gate with no context (a manual wait) prints nothing."""
+    for sid, st in (p.get("step_state") or {}).items():
+        ctx = st.get("gate_context") if str(st.get("status", "")) == "awaiting_approval" else None
+        if not ctx:
+            continue
+        who = ctx.get("approvers")
+        typer.secho(f"  gate {sid}" + (f"  (approvers: {_safe_line(who)})" if who else ""), bold=True)
+        ev = ctx.get("evidence") or {}
+        rows = [(str(k), v) for k, v in (ctx.get("fields") or {}).items()]
+        if "cost_usd" in ev:
+            cap = ev.get("cost_cap_usd")
+            rows.append(("spent", f"${ev['cost_usd']:.2f}" + (f" of ${cap:.2f} cap" if cap else "")))
+        if "estimate_usd" in ev or ev.get("estimate_basis"):
+            usd = f"${ev['estimate_usd']:.2f} " if "estimate_usd" in ev else ""
+            rows.append(("estimate", f"{usd}({ev.get('estimate_basis', '')})"))
+        verdict = (ctx.get("admission") or {}).get("verdict")
+        if verdict:
+            rows.append(("admission", verdict))
+        width = max((len(k) for k, _ in rows), default=0)
+        for key, value in rows:
+            typer.echo(f"    {_safe_line(key):<{width}}  {_safe_line(value)}")
+
+
 def _print_pipeline_next(pipeline_id: str, p: dict, *, approver: str = "") -> None:
     """The next command for whatever state this pipeline just reached."""
     status = str(p.get("status") or "")
     who = f" --approver {approver}" if approver else ""
     if status == "paused":
+        _print_gate_evidence(p)
         for sid in _waiting_steps(p) or ["<step>"]:
             _next("approve", f"cairn remote advance {pipeline_id} {sid}{who}")
     for sid, run_id in _failed_steps(p):
