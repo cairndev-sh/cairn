@@ -21,7 +21,7 @@ that file or run `render.py`; pass `--out DIR` to keep your result separate.
 | Script | What it measures | Takes |
 |---|---|---|
 | [`quickstart_path.py`](./quickstart_path.py) | The quickstart's pipeline on a local engine: time to the paused gate, approvals to done, the gates holding, each person's decision in the audit log, the audit chain verifying | a minute or two |
-| [`crash_matrix.py`](./crash_matrix.py) | What happens when the server is killed: which crash cells passed, for each storage, runtime and bus. It runs no new checks and needs Postgres; see [below](#what-happens-when-the-server-is-killed) | not yet timed; the `public-e2e` job does this along with its other cells |
+| [`crash_matrix.py`](./crash_matrix.py) | What happens when the server is killed: which crash cells passed, for each storage, runtime and bus. It runs no new checks and needs Postgres; see [below](#what-happens-when-the-server-is-killed) | about 7 min 15 s for all of `tests/e2e` in the `public-e2e` job, measured once; the script reads that run rather than repeating it |
 | [`audit_tamper.py`](./audit_tamper.py) | Alterations to a real audit log: the ones `cairn admin audit verify` detects and the row it names, the ones it can't detect, and what a saved head adds and misses | 3 min 45 s, measured once on the author's 8-CPU Intel Mac; other machines differ |
 
 ## Where the published numbers come from
