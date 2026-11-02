@@ -82,14 +82,13 @@ completeness gate — is not memoised. There is no switch to disable the memo.
 `plan_pipeline`; Temporal worker `build_registry` compiles every template at boot.
 
 ## Tests
-`tests/core/test_template_*`, `test_subgraph_*`, `test_engine*`, `test_pipeline_*` (34
-files), `test_flatten_finetune.py`, `test_wire_finetune_remote_compile.py`,
-`test_examples_bundle.py`, `tests/core/test_template_content_hash.py`.
+`tests/core/test_template_*`, `test_subgraph_*`, `test_engine*`, `test_pipeline_*`,
+`test_flatten*.py`, `tests/core/test_template_content_hash.py`.
 
 ## Invariants touching the engine
 - D8 "the compiler is amended, never replaced" (ADR-0084) — DOCUMENTED; `compile_template` is the only template compile entry (CONFIRMED by grep: no second compiler).
 - `agent_loop` retired — CONFIRMED: `compiler.py:163` raises on `flow.type: agent_loop`. The compiler docstring still says "three flow types" and lists two.
-- LangGraph is confined to agentic legs — CONFIRMED (`test_leg_executor.py`).
+- LangGraph is confined to agentic legs — OBSERVED: importing `dispatch/leg_executor.py` loads no `langgraph` module. No test in this repository asserts it for a data leg; `test_pipeline_durability.py` asserts it for resume planning only.
 
 ## Known hotspots (see 15-architecture-risks.md)
 `_compile_bt` (703 lines), `compiler.py` (1947).

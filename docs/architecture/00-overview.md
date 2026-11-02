@@ -11,7 +11,7 @@ before related changes; the CURRENT implementation described below is not silent
 
 > **Read this first.** It is the entry point of the developer knowledge system under
 > `docs/architecture/` and `docs/golden-paths/`. Every statement is tagged:
-> **OBSERVED** (confirmed in source at HEAD `81d876ae`, 2026-09-10) ·
+> **OBSERVED** (confirmed in source when written; `path:line` anchors drift) ·
 > **DOCUMENTED** (stated by an existing doc/ADR) · **INFERRED** (our interpretation) ·
 > **CONFLICT** (doc and code disagree). Unmarked table rows are OBSERVED.
 
@@ -25,24 +25,22 @@ of every step that spends money, touches sensitive data or changes production
 
 Concretely it is:
 
-- one Python distribution, `cairn` (`pyproject.toml`), containing the **engine**
+- one Python distribution, `cairndev` (`pyproject.toml`), containing the **engine**
   (`src/cairn/core/`), core-adjacent **services** (`src/cairn/services/`), the **CLI**
-  (`src/cairn/cli/`) and nine **domain packs** (`cairn/packs/`);
-- **37 operator packs** on disk under `cairn/operators/{builtins,official}/` (14 + 23), each
-  its own wheel in a uv workspace (all 37 are workspace members; `redteam` joined in #2289,
-  `rag_parse` was retired in #2413, `remote` became a builtin in #2427, `secrets_infisical` in
-  ADR-0127 D3, `train_local` joined
-  with ADR-0127 D4, OBSERVED);
-  113 operator entry points, all discoverable in a normal install (full inventory:
-  16-capability-catalog.md);
-- three satellite wheels: `client/` (`cairn-client`, typed API client; public), `ask/`
-  (`cairn-ask`, the NL copilot) and `sdk/` (`cairn-sdk`, authoring projection) — the last
-  two are the platform's (ADR-0127 D7, ADR-0135);
-- a React/Vite **console** (`console/`, 209 TS files) bound to the engine through a
-  committed OpenAPI contract (`console/openapi.json`, 207 paths).
+  (`src/cairn/cli/`), and the builtin operator packs and core contracts below;
+- **16 operator packs** under `packages/cairn-operator-*`. Fourteen are built into the
+  `cairndev` wheel; `cairn-operator-dataflow-metaflow` and `cairn-operator-dataflow-skypilot`
+  are separate wheels, installed by the `metaflow` and `skypilot` extras;
+- the **core contracts** under `packages/cairn-contracts-*`;
+- one satellite wheel, `packages/cairn-client` (`cairn-client`, the typed API client);
+- one **domain pack**, `examples/hello-cairn` (`cairn-pack-hello`, the `hello` extra);
+- the user docs, `docs/site`.
 
-Scale: ~96k lines in `src/cairn/core` (340 files), ~63k in operator packs, ~11k CLI, ~44k
-console TypeScript, 5,046 test functions under `tests/` plus 1,520 inside operator packs.
+**Outside this repository:** first-party public extensions, each released on its own, are in
+[cairn-extensions](https://github.com/cairndev-sh/cairn-extensions). The web console, the
+other domain packs, the official operator packs, `cairn-ask` (the NL copilot) and `cairn-sdk`
+(authoring projection) are part of cairn-platform. Where this tree of documents names one of
+them, it is describing how the engine is used, not a path you can open here.
 
 ## 2. Mental model (VERIFIED against source; the constitution in the root `CLAUDE.md` carries the same ladder)
 
@@ -91,17 +89,17 @@ leg path calls.*
 
 | Boundary | Where | One-line purpose | Detail |
 |---|---|---|---|
-| Entry surfaces | `src/cairn/cli/`, `src/cairn/core/triggers/` (HTTP; MCP at `triggers/mcp.py`), `console/` | how a human or agent reaches the engine | [01-system-map.md](01-system-map.md) |
+| Entry surfaces | `src/cairn/cli/`, `src/cairn/core/triggers/` (HTTP; MCP at `triggers/mcp.py`); the console is outside this repository | how a human or agent reaches the engine | [01-system-map.md](01-system-map.md) |
 | Dispatch | `src/cairn/core/dispatch/` | the start door, run admission, pipeline advancement, leg execution | [13-pipelines.md](13-pipelines.md) |
 | Engine (compiler) | `src/cairn/core/engine/` | template → LangGraph graph; `pipelines/*.yaml` → `PipelinePlan`; one expression language | [04-engine.md](04-engine.md) |
-| Operator substrate | `src/cairn/core/operator/` + `cairn/operators/` | the `Operation` contract, registry, invocation chokepoint, remote jobs | [05-operators.md](05-operators.md) |
-| Pack system | `src/cairn/core/pack/` + `cairn/packs/` | `Pack` contract, `pack.toml` manifest, entry-point discovery, profiles | [06-packs.md](06-packs.md) |
+| Operator substrate | `src/cairn/core/operator/` + `packages/cairn-operator-*` | the `Operation` contract, registry, invocation chokepoint, remote jobs | [05-operators.md](05-operators.md) |
+| Pack system | `src/cairn/core/pack/` + `examples/hello-cairn` | `Pack` contract, `pack.toml` manifest, entry-point discovery, profiles | [06-packs.md](06-packs.md) |
 | Runtime | `src/cairn/core/runtime/` | how a compiled graph executes: in-process, DBOS, Temporal; checkpointer; reconciler | [07-runtime.md](07-runtime.md) |
 | Dataflow contract | `src/cairn/core/dataflow/` | engine-neutral `DataflowSpec`; `DataflowEngine` protocol; engine selection | [07-runtime.md](07-runtime.md), [13-pipelines.md](13-pipelines.md) |
 | Governance | `src/cairn/core/approval/`, `policy/`, `obs/`, `budget_reservations.py`, the admission "doors" | approval gate, policy, budget, redaction, audit | [08-governance.md](08-governance.md) |
 | Storage & provenance | `src/cairn/core/storage/` + ~20 store modules at `src/cairn/core/*.py` | runs, events, artifacts, pipeline records, registries | [09-storage-and-provenance.md](09-storage-and-provenance.md) |
 | Services | `src/cairn/services/` | LLM gateway/factory, MCP, memory, RAG (core-adjacent) | [02-dependency-model.md](02-dependency-model.md) |
-| Domains | `cairn/packs/{training,dataset_readiness,serving,…}` | the runnable business units | 10 · 11 · 12 |
+| Domains | `examples/hello-cairn`; the rest are outside this repository (§6) | the runnable business units | [06-packs.md](06-packs.md) |
 
 ## 4. How the boundaries depend on each other
 
@@ -109,9 +107,9 @@ leg path calls.*
 flowchart TD
     CLI[cairn CLI] --> DISPATCH
     HTTP[HTTP control plane<br/>core/triggers] --> DISPATCH
-    CONSOLE[console SPA] -->|OpenAPI contract| HTTP
+    CONSOLE[console SPA<br/>outside this repository] -->|OpenAPI contract| HTTP
     CLIENT[cairn-client] -->|HTTP only| HTTP
-    ASK[cairn-ask] --> CLIENT
+    ASK[cairn-ask<br/>outside this repository] --> CLIENT
     DISPATCH[core/dispatch<br/>start · launch · bridge · leg_executor] --> ENGINE[core/engine<br/>compiler · pipeline plan]
     DISPATCH --> GOV[governance<br/>approval · policy · budget · obs]
     DISPATCH --> RUNTIME[core/runtime]
@@ -121,8 +119,8 @@ flowchart TD
     ENGINE --> RUNTIME
     DISPATCH --> STORAGE[core/storage]
     ENGINE --> PACKREG[core/pack registry]
-    PACKS[domain packs<br/>cairn/packs] -->|entry-point cairn.packs| PACKREG
-    OPPACKS[operator packs<br/>cairn/operators/*] -->|entry-point cairn.operators| OPSUB
+    PACKS[domain packs<br/>examples/hello-cairn, installed wheels] -->|entry-point cairn.packs| PACKREG
+    OPPACKS[operator packs<br/>packages/cairn-operator-*] -->|entry-point cairn.operators| OPSUB
     OPPACKS -->|entry-point cairn.dataflow_engines / cairn.flow_stages| DATAFLOW
     SERVICES[src/cairn/services] <-.lazy, bidirectional.-> ENGINE
     classDef gov fill:#fde68a,stroke:#b45309;
@@ -156,16 +154,13 @@ exceptions). The dotted edge is the one documented bidirectional coupling.
    `RunEvent`s, content-addressed artifacts (`storage/artifacts.py`), the pipeline record
    (`storage/pipeline_store.py`), optional hash-chained audit via a bound operator.
 
-## 6. Major domain packs (OBSERVED in `cairn/packs/` and `pyproject.toml` entry points)
+## 6. Domain packs
 
-| Pack | Pipelines dir | Notes |
+| Pack | Where | Notes |
 |---|---|---|
-| `training` | 13 pipelines, 17 flows | fine-tune, DPO, continual learning, verifiable-finetune |
-| `dataset-readiness` | 5 pipelines | import, readiness loop, pull/api ingestion, watch |
-| `serving` | 3 pipelines | serve, batch-inference, export-model |
-| `compress`, `compute`, `eval` | yes | quantize/re-eval; GPU pricing; eval as a run |
-| `incident` | yes | the original flagship (RCA, blast radius); needs `cairn_platform.integrations.observability` (the platform, #2497) |
-| `security-triage`, `security-kb` | yes / knowledge only | knowledge packs are corpora, exempt from pipelines |
+| `hello-cairn` | `examples/hello-cairn`, the `cairn-pack-hello` wheel | four pipelines: `profile-and-publish`, `ask-the-docs`, `tiny-finetune`, `nightly-ops` |
+| `finetune`, `dataset-prep` | [cairn-extensions](https://github.com/cairndev-sh/cairn-extensions), the `cairn-pack-finetune` and `cairn-pack-dataset-prep` wheels | public, released on their own |
+| other domain packs | outside this repository, part of cairn-platform | discovered the same way, through the `cairn.packs` entry point |
 
 ## 7. Engine vs Pack vs Operator vs Runtime
 
@@ -186,8 +181,8 @@ exceptions). The dotted edge is the one documented bidirectional coupling.
 5. `src/cairn/core/operator/runtime.py:888 invoke_operator` — the operator chokepoint.
 6. `src/cairn/core/approval/enforce.py` — the approval gate.
 7. `src/cairn/core/pack/loader.py` and `src/cairn/core/operator/loader.py` — discovery.
-8. One pack end to end: `cairn/packs/training/pipelines/verifiable-finetune.yaml`,
-   `cairn/packs/training/flows/finetune.yaml`, `cairn/operators/official/training/`.
+8. One pack end to end: `examples/hello-cairn/pipelines/profile-and-publish.yaml`,
+   `examples/hello-cairn/flows/engine-check.yaml`, `packages/cairn-operator-data-profile/`.
 
 Then the golden paths: [pipeline](../golden-paths/pipeline.md) ·
 [operator](../golden-paths/operator.md) · training ·

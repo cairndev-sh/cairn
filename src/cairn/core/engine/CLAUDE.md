@@ -25,8 +25,7 @@ compiler is **amended, never replaced** (ADR-0084 D8): gate enforcement, durabil
 `cli/commands/{run,validate,visualize,pipeline}.py`, `runtime/temporal/worker.py:build_registry`.
 
 **Testing.** `tests/core/test_template_*`, `test_subgraph_*`, `test_pipeline_*`,
-`test_engine*`, `test_flatten_finetune.py`, `test_examples_bundle.py`,
-`test_template_content_hash.py`. Any change to node compilation must keep
+`test_engine*`, `test_flatten*.py`, `test_template_content_hash.py`. Any change to node compilation must keep
 `test_approval_chokepoint.py` / `test_approval_gate_e2e.py` green.
 
 **Common mistakes.** A new node type that skips `resolve_runtime_gate`; changing state
