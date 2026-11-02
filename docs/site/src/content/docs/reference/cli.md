@@ -134,7 +134,7 @@ anyway. When no engine answers, the write goes ahead and the line names the stor
 
 | Command | What it does |
 |---|---|
-| `cairn replay <run-id>` | Replays a past run's recorded event trace as a timeline. `--json` for the raw events. |
+| `cairn replay <run-id>` | Prints what a past run recorded: its inputs, what it ran and its events. Nothing runs again. It reads the local trace, then the configured store, then the engine, then, when a local engine is down, the local dev store; `--json` names the source as `meta.source`. A down engine elsewhere is an error, and `cairn status <run-id> --replay --endpoint <url>` reads only that engine. |
 | `cairn audit verify` | Checks the audit log's hash chain without writing anything. Reads `--audit-log`, else `CAIRN_AUDIT_LOG`, else `./audit.jsonl`. Prints the row count, the first and last timestamp, the head hash and, if the chain is broken, the first broken row and why (`hash`, `prev_hash` or `corrupt line`). `--json` prints the same as `{path, rows, first_ts, last_ts, head_hash, ok, broken}`. Exit 0: verified (an empty log verifies). Exit 2: broken or a corrupt line. Exit 1: no log, or it cannot be read. |
 | `cairn lineage [subject]` | Shows provenance records from the audit log, matched on a subject such as a model name, and checks the hash chain as it reads. Omit the subject to list them all. `--expect-head <hash>` also checks that the log ends at a receipt you quoted earlier, which shows rows missing from its end. The operator that writes lineage records is part of cairn-platform. |
 

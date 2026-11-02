@@ -95,11 +95,22 @@ def test_a_local_run_reads_back_with_no_environment_variable_and_nothing_runs(tm
         assert body["meta"]["inputs"]["source"] == sample
         assert body["meta"]["operators"] == ["data/profile"]
         assert [e["type"] for e in body["events"]] == ["done"]
+        assert body["meta"]["source"] == "engine"
+        assert url in raw.stderr, "it says where it read from"
 
         alias = _cairn(home, "replay", run_id)
         assert alias.returncode == 0, alias.stderr
         assert alias.stdout == shown.stdout
         assert "is now `cairn status <run> --replay`" in alias.stderr
+
+        # A flow leg, on the same engine: the record names the flow, and has no stage operators to show.
+        flow_run = before["step_state"]["engine-check"]["run_id"]
+        flow = _cairn(home, "status", flow_run, "--replay")
+        assert flow.returncode == 0, flow.stderr
+        assert "ran:         flow:hello-cairn/engine-check" in flow.stdout
+        assert "operators:   (none recorded)" in flow.stdout
+        assert "register = hello-sample" in flow.stdout, "the recorded inputs"
+        assert "timeline (2 event(s)):" in flow.stdout and '"leg": "flow:hello-cairn/engine-check"' in flow.stdout
 
         # A pipeline id says where its runs are.
         refused = _cairn(home, "status", pipeline_id, "--replay")
@@ -119,6 +130,12 @@ def test_a_local_run_reads_back_with_no_environment_variable_and_nothing_runs(tm
         assert stopped.returncode == 0, stopped.stderr
         assert "operators:   data/profile" in stopped.stdout
         assert str(home / ".cairn" / "dev.db") in stopped.stderr
+        stopped_raw = json.loads(_cairn(home, "status", run_id, "--replay", "--json").stdout)
+        assert stopped_raw["meta"]["source"] == "dev-db"
+
+        # Naming the engine that stopped is a failure, though its record is on this machine.
+        named = _cairn(home, "status", run_id, "--replay", "--endpoint", url)
+        assert named.returncode == 1 and named.stdout == "" and url in named.stderr
     finally:
         try:
             os.killpg(proc.pid, signal.SIGKILL)
