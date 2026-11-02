@@ -35,6 +35,7 @@ from cairn.cli.commands import remote
 from cairn.cli.commands.dev import dev_env
 from cairn.cli.runs import read_events, read_meta, resolve_run_dir
 from cairn.cli.runs.reader import run_dir_exists
+from cairn.core.settings import redacted_url
 
 
 # ─── rendering ──────────────────────────────────────────────────────
@@ -211,12 +212,10 @@ def _run_from_db(run_id: str, *, json: bool) -> int:
 
 
 def _is_loopback(endpoint: str) -> bool:
-    host = urlsplit(endpoint).hostname or ""
-    if host == "localhost":
-        return True
     try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
+        host = urlsplit(endpoint).hostname or ""
+        return host == "localhost" or ipaddress.ip_address(host).is_loopback
+    except ValueError:  # a malformed URL, or a host that isn't an address
         return False
 
 
@@ -228,7 +227,7 @@ def _read_engine(run_id: str, ep: str, tok: Optional[str], *, json: bool) -> int
     with remote._api(ep, tok) as c:
         record = remote._call(c.run, run_id) or {}
         events = (remote._call(c.run_events, run_id) or {}).get("events", [])
-    _note(f"read from the engine at {ep}")
+    _note(f"read from the engine at {redacted_url(ep)}")
     return _print_record(run_id, record, events, json=json, source="engine")
 
 
@@ -237,7 +236,7 @@ def _run_named_engine(run_id: str, *, json: bool, endpoint: str, token: Optional
     """``--endpoint``: that engine or nothing, loopback included. Naming it means that one."""
     ep, tok = remote._resolve(endpoint, token, profile)
     if not remote._reachable(ep):
-        _note(f"no engine answers at {ep}")
+        _note(f"no engine answers at {redacted_url(ep)}")
         return 1
     return _read_engine(run_id, ep, tok, json=json)
 
@@ -256,7 +255,7 @@ def _run_anywhere(run_id: str, *, json: bool, token: Optional[str], profile: Opt
     if remote._reachable(ep):
         return _read_engine(run_id, ep, tok, json=json)
     if not _is_loopback(ep):
-        _note(f"no engine answers at {ep}")
+        _note(f"no engine answers at {redacted_url(ep)}")
         return 1
     db = Path(dev_env(0)["CAIRN_STORAGE"].removeprefix("sqlite:///"))
     if db.exists():
@@ -265,10 +264,10 @@ def _run_anywhere(run_id: str, *, json: bool, token: Optional[str], profile: Opt
         found = _read_store(SqliteRunStore(str(db)), run_id)
     if found is None:
         _note(f"no such run: {run_id}")
-        _note(f"  no engine answers at {ep}, and the local store {db} doesn't have it")
+        _note(f"  no engine answers at {redacted_url(ep)}, and the local store {db} doesn't have it")
         _note("  start the engine it ran on: cairn setup")
         return 1
-    _note(f"no engine answers at {ep}; read from the local store {db}")
+    _note(f"no engine answers at {redacted_url(ep)}; read from the local store {db}")
     return _print_record(run_id, *found, json=json, source="dev-db")
 
 

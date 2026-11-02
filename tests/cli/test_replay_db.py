@@ -333,3 +333,33 @@ def test_nowhere_offers_no_option_the_command_does_not_have(no_store, monkeypatc
 def test_both_spellings_point_a_pipeline_at_its_runs(no_store, command):
     r = CliRunner().invoke(app, command)
     assert r.exit_code == 1 and "cairn status pl_abc --logs" in r.stderr
+
+
+@pytest.mark.parametrize("endpoint, loopback", [
+    ("http://localhost:8000", True),
+    ("http://LOCALHOST:8000", True),
+    ("http://127.0.0.1:8000", True),
+    ("http://127.1.2.3:8000", True),
+    ("http://[::1]:8000", True),
+    ("http://evil.example@localhost:8000", True),   # the host really is localhost
+    ("http://localhost.evil.example:8000", False),
+    ("http://127.0.0.1.evil.example:8000", False),
+    ("http://localhost@evil.example:8000", False),
+    ("http://evil.example/localhost", False),
+    ("http://evil.example#@localhost", False),
+    ("http://0.0.0.0:8000", False),
+    ("http://[::1", False),                          # malformed: fails closed, no traceback
+    ("localhost:8000", False),
+])
+def test_only_a_host_that_is_this_machine_counts_as_loopback(endpoint, loopback):
+    """The local store stands in only for a local engine, so a look-alike must not pass (#369)."""
+    assert replay._is_loopback(endpoint) is loopback
+
+
+def test_a_password_in_the_endpoint_is_never_printed(no_store, monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    r = CliRunner().invoke(
+        app, ["status", "run-x", "--replay", "--endpoint", "http://user:hunter2@prod.example.invalid:1"])
+    assert r.exit_code == 1
+    assert "hunter2" not in r.output and "user:" not in r.output
+    assert "prod.example.invalid" in r.output
