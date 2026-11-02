@@ -114,24 +114,21 @@ Drive a deployed cairn from your terminal. Log in once; the token is stored in
 your profile (`~/.cairn/config.toml`, written with mode 0600). The token is not renewed:
 a command that meets an expired session, `--watch` and `--follow` included, prints
 `session expired at HH:MM — run cairn remote login` and exits 77. A watched pipeline keeps
-running on the server; log in again and re-attach with `cairn remote pipeline <id>`.
+running on the server; log in again and re-attach with `cairn status <id> --follow`.
 
 | Command | What it does |
 |---|---|
+| `cairn status` | What's running and what just finished. `--status`, `--limit`, `--watch` (`-n` sets the interval). |
+| `cairn status <id>` | One pipeline (`pl_…`) or run: its state, who decided what, and what started it. `--results` for every step's findings, `--logs` for the event log (`--after-seq`, `--events-only`), `--follow` to stay attached and answer each gate (`--decision`, `--timeout`, `--on-timeout`, `--native`, `--dump`), `--replay` for a run's persisted trace (`--source`), `--json` for the raw form. Following exits 0 when done, 1 when failed or cancelled, and 2 when it's waiting on a person with no terminal to ask on. |
+| `cairn decide <id> approve\|reject\|cancel` | Decides what a pipeline or run is waiting on, or cancels it. The id picks the route. `--step` names the gate when a pipeline waits at more than one, `--reason` is required to reject a pipeline gate, and `--approver` is recorded when sign-in is off. |
 | `cairn remote login -e <url>` | Signs in and stores the token. |
-| `cairn remote pipelines` | Lists the pipelines on the server. |
 | `cairn remote launch <ref>` | Launches a pipeline. `-i key=value`, `--preset` to start from a saved input set, `--watch` to follow it. |
-| `cairn remote pipeline <id>` | One pipeline's full record: its plan and the state of every step, with what each gate shows its approver (`gate_context`). |
-| `cairn remote advance <id> <step>` | Approves a step waiting on a person: a gate, or a leg whose operator or policy asks for approval. Under sign-in the server records your identity. |
-| `cairn remote findings <id>` | A run's findings, or every step's findings for a pipeline. |
-| `cairn remote cancel-pipeline <id>` | Cancels a pipeline and its running legs. |
 | `cairn remote triggers` | Lists this workspace's stored triggers (event and webhook), whether each is on, and which pipeline declared it. |
 | `cairn remote enable-trigger <id>` / `disable-trigger <id>` | Turns a stored trigger on or pauses it. A trigger a pipeline declares starts paused; an event trigger applies to the next event, a webhook trigger at the next server start. |
-| `cairn remote ps` / `status` / `logs` | Lists runs, shows one run, prints or follows its event log. |
-| `cairn remote approve <run-id>` / `reject <run-id>` | Decides a run paused at an approval inside a flow. |
-| `cairn remote reject <id> <step> --reason TEXT` | Rejects a pipeline gate waiting on a person. `--reason` is required; `--approver` is recorded when sign-in is off, and under sign-in the server records your identity. The pipeline ends `failed` and the step's verdict is `rejected`. A single `pl_…` argument is refused: name the gate step. A 404, 403 or 409 is printed as such. |
 
-Every `remote` command takes `--endpoint` / `-e`, `--token` and `--profile`.
+`cairn status`, `cairn decide` and every `remote` command take `--endpoint`, `--token` and `--profile` (`remote` also takes `-e` for `--endpoint`).
+
+The older names `cairn replay`, and `cairn remote pipelines`, `pipeline`, `ps`, `status`, `watch`, `findings`, `logs`, `advance`, `approve`, `reject`, `cancel` and `cancel-pipeline`, still work for one minor version. They print the new spelling on stderr.
 
 ## Deploy and workers
 

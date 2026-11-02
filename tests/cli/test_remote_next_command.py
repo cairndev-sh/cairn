@@ -82,8 +82,8 @@ def test_launch_ends_with_the_watch_line(wire):
     wire([])
     r = cli.invoke(remote.app, ["launch", "training/retrain-cycle"])
     assert r.exit_code == 0
-    assert "cairn remote pipeline pl_test01" in r.output
-    assert "cairn remote findings pl_test01" in r.output
+    assert "cairn status pl_test01 --follow" in r.output
+    assert "cairn status pl_test01 --results" in r.output
     # the watch line is LAST — it is the one that keeps you attached
     assert r.output.strip().splitlines()[-1].startswith("→ watch")
 
@@ -99,10 +99,10 @@ def test_a_pause_prints_an_advance_line_for_every_waiting_step(wire):
     })])
     r = cli.invoke(remote.app, ["launch", "training/retrain-cycle", "--watch"])
     assert r.exit_code == 2
-    assert "cairn remote advance pl_test01 serve-challenger --approver" in r.output
-    assert "cairn remote advance pl_test01 promote-adapter --approver" in r.output
+    assert "cairn decide pl_test01 approve --step serve-challenger --approver" in r.output
+    assert "cairn decide pl_test01 approve --step promote-adapter --approver" in r.output
     # …and the way to see what the approver is being asked about
-    assert "cairn remote findings pl_test01" in r.output
+    assert "cairn status pl_test01 --results" in r.output
 
 
 def test_the_pause_line_survives_with_no_identifiable_step(wire):
@@ -110,7 +110,7 @@ def test_the_pause_line_survives_with_no_identifiable_step(wire):
     one; that placeholder stays rather than silently dropping the line."""
     wire([_record("paused", {"a": {"status": "running", "run_id": "r1"}})])
     r = cli.invoke(remote.app, ["launch", "x/y", "--watch"])
-    assert "cairn remote advance pl_test01 <step>" in r.output
+    assert "cairn decide pl_test01 approve --step <step>" in r.output
 
 
 # ─── failure ─────────────────────────────────────────────────────────────
@@ -123,9 +123,9 @@ def test_a_failed_leg_prints_the_logs_line_for_its_run(wire):
     })])
     r = cli.invoke(remote.app, ["launch", "training/retrain-cycle", "--watch"])
     assert r.exit_code == 1
-    assert "cairn remote logs run_train_9" in r.output
+    assert "cairn status run_train_9 --logs" in r.output
     assert "# leg train" in r.output
-    assert "cairn remote findings pl_test01" in r.output
+    assert "cairn status pl_test01 --results" in r.output
     # nothing to keep watching — a terminal pipeline must NOT offer a watch line
     assert "→ watch" not in r.output
 
@@ -142,7 +142,7 @@ def test_advance_names_the_next_gate(wire):
                                 "--approver", "ops-lead"])
     assert r.exit_code == 0
     assert c.advanced == [("pl_test01", "serve-challenger", {"approver": "ops-lead"})]
-    assert "cairn remote advance pl_test01 promote-adapter --approver ops-lead" in r.output
+    assert "cairn decide pl_test01 approve --step promote-adapter --approver ops-lead" in r.output
 
 
 def test_helpers_read_the_bridges_own_status_vocabulary():
@@ -176,7 +176,7 @@ def test_a_pause_prints_the_gates_evidence(wire):
     for shown in ("gate approve-run", "ml-owners", "input.base_model", "SmolLM2-135M", "train.loss",
                   "$1.50 of $5.00 cap", "$2.25 (train: $0.66/h x 3h)", "admitted"):
         assert shown in out, out
-    assert out.index("gate approve-run") < out.index("cairn remote advance pl_test01 approve-run")
+    assert out.index("gate approve-run") < out.index("cairn decide pl_test01 approve --step approve-run")
 
 
 def test_a_gate_with_no_cap_or_estimate_prints_only_what_it_has(wire):

@@ -24,6 +24,7 @@ from cairn.core.provider_settings import load_env
 
 load_env()
 
+from cairn.cli.aliases import renamed
 from cairn.cli.commands import audit as _audit
 from cairn.cli.commands import compute as _compute
 from cairn.cli.commands import config as _config
@@ -42,6 +43,7 @@ from cairn.cli.commands import ls as _ls
 from cairn.cli.commands import pack as _pack
 from cairn.cli.commands import remote as _remote
 from cairn.cli.commands import replay as _replay
+from cairn.cli.commands import status as _status
 from cairn.cli.commands import gate as _gate
 from cairn.cli.commands import run as _run
 from cairn.cli.commands import test as _test
@@ -94,7 +96,10 @@ app.command(name="preflight")(_run.preflight_cmd)
 # workflow read-only, emit a JSON verdict + a blocking exit code so a PR/pipeline
 # fails on a bad dataset/model. CI-agnostic; see examples/ci/.
 app.command(name="gate")(_gate.cmd)
-app.command(name="replay")(_replay.cmd)
+app.command(name="replay", hidden=True)(renamed("cairn replay", "cairn status <run> --replay")(_replay.cmd))
+# ADR-0165 D4, D5 — one door to look, one door to decide.
+app.command(name="status")(_status.status_cmd)
+app.command(name="decide")(_status.decide_cmd)
 app.command(name="lineage")(_lineage.cmd)
 app.command(name="test")(_test.cmd)
 app.command(name="lock")(_lock.cmd)
