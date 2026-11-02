@@ -50,6 +50,8 @@ jobs:
         CAIRN_PACK_PATH=examples/hello-cairn .venv/bin/cairn pipeline explain hello-cairn/profile-and-publish > /dev/null
     - name: The published measurements run on the public core (benchmark/README.md)
       run: env -u OBS_STORAGE -u CAIRN_STORAGE .venv/bin/python benchmark/quickstart_path.py --out /tmp/test-results/benchmark
+    - name: The audit log catches what it says it catches, and no more (benchmark/README.md)
+      run: env -u OBS_STORAGE -u CAIRN_STORAGE .venv/bin/python benchmark/audit_tamper.py --out /tmp/test-results/benchmark
     - name: The built wheels (ADR-0137) — five, and cairndev carries the builtins and the core contracts
       run: env -u OBS_STORAGE -u CAIRN_STORAGE .venv/bin/python scripts/check_folded_wheels.py
     - if: always()
