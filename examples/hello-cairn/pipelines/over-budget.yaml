@@ -5,7 +5,7 @@
 # Before a flow leg starts its engine, it reserves the pipeline's `estimated_usd`
 # against the `series` cap (docs/site/.../concepts/cost.md). This file declares an
 # estimate above its cap, so the reservation fails and the leg ends with the
-# refusal. This is the same reservation every capped flow leg takes: nothing here
+# refusal. This is the same reservation every flow leg under a `series` takes: nothing here
 # is special-cased.
 #
 # The estimate is a figure this file declares, as any pipeline's `estimated_usd`

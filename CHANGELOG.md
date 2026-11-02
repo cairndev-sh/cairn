@@ -3,6 +3,9 @@
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+### Added
+- The example pack's `over-budget` pipeline shows a budget refusing a run before its engine starts, with no key and no spend, and `cairn run` now prints why a leg failed (#368).
+
 
 ## [0.4.0] - 2026-11-02
 

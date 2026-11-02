@@ -173,7 +173,8 @@ staged and published summaries are under `~/.cairn/artifacts`
   The pipeline file declares that estimate, and the flow itself would cost
   nothing. The launch is admitted and the leg is refused, so the audit trail has
   `leg.budget_refused`, with the estimate and the cap, rather than
-  `pipeline.refused`. See [Cost and budgets](/concepts/cost/).
+  `pipeline.refused`. This pipeline needs the release after cairndev 0.4.0. See
+  [Cost and budgets](/concepts/cost/).
 
 ## Next
 

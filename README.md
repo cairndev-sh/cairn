@@ -193,9 +193,10 @@ pipeline_id=pl_592c6c850aec40a5 status=running
 → findings  cairn status pl_592c6c850aec40a5 --results
 ```
 
-The flow leg's reservation failed, so its engine never started. The pipeline file declares
-that estimate; the refusal is the one every capped flow leg goes through. See
-[Cost and budgets](https://docs.cairndev.sh/concepts/cost/).
+The flow leg's reservation failed, so its engine never started, and the command exits 1. The
+$5 is a figure the pipeline file declares, not a measured price, and the flow itself would cost
+nothing. The refusal is the real one every flow leg under a `series` goes through. This pipeline
+needs the release after cairndev 0.4.0. See [Cost and budgets](https://docs.cairndev.sh/concepts/cost/).
 
 From source:
 
