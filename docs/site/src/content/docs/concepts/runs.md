@@ -133,8 +133,7 @@ It does not mean the log can't be rewritten. The chain has no key and nothing
 outside the file to compare with, so anyone who can write the file can recompute
 the hashes. These all exit 0 from `cairn admin audit verify`:
 
-- a forged row appended at the end, linked correctly to the last row, which is the
-  cheapest forgery of all
+- a forged row appended at the end, linked correctly to the last row
 - the last rows cut off, or the whole file emptied (an empty log verifies)
 - a row changed and every hash after it recomputed
 - the whole file rewritten, with every hash recomputed

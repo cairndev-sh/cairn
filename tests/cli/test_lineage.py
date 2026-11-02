@@ -233,3 +233,19 @@ async def test_a_head_mismatch_on_a_log_that_only_grew_does_not_say_rows_are_mis
     assert (f"the log's last row is not the expected head {head!r}. This does not show why: rows may have been "
             "added, cut or rewritten since that head was saved.") in err
     assert "missing" not in err and "NOT trustworthy" not in err
+
+
+async def test_a_broken_chain_does_not_say_why(tmp_path, monkeypatch, capsys):
+    """A last line cut mid-write, as a crash leaves it, breaks the chain with nobody altering
+    anything, so the message states what was found and no cause (#327)."""
+    log = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("OBS_AUDIT_LOG", str(log))
+    await _write_non_lineage_log(log)
+    text = log.read_text().rstrip("\n")
+    log.write_text(text[:-20] + "\n")
+    capsys.readouterr()
+
+    assert lineage_cmd.main(["--audit-log", str(log)]) == 2
+    err = capsys.readouterr().err
+    assert "audit chain broken at row(s) [2]; provenance is NOT trustworthy." in err
+    assert "altered" not in err
