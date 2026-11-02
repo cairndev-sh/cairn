@@ -30,6 +30,7 @@ from typing import Optional
 
 import typer
 
+from cairn.cli.aliases import renamed
 from cairn.core import settings as _settings
 
 # ADR-0085 D5
@@ -41,7 +42,7 @@ app = typer.Typer(help="One-command sqlite dev environment.", no_args_is_help=Fa
 _PINNED_EMPTY = ("CAIRN_BUS", "CAIRN_CHECKPOINTER", "CAIRN_CONNECTIONS_DB", "RAG_VECTOR_STORE")
 
 
-def dev_env(port: int, db_path: Optional[str] = None) -> dict[str, str]:
+def dev_env(port: int, db_path: Optional[str] = None, *, example_pack: bool = True) -> dict[str, str]:
     """The pinned child-process environment — pure, unit-testable.
 
     Starts from the CURRENT process env (a real OPENAI_API_KEY etc. passes
@@ -58,6 +59,9 @@ def dev_env(port: int, db_path: Optional[str] = None) -> dict[str, str]:
         "CAIRN_API_USER": "dev",
         "CAIRN_API_PASSWORD": "dev",
     })
+    # This login and secret are public, and auth being on makes the engine bind every interface by default.
+    if not (_settings.getenv("CAIRN_TRIGGER_HOST", "", environ=env) or "").strip():
+        env["CAIRN_TRIGGER_HOST"] = "127.0.0.1"
     for k in _PINNED_EMPTY:
         env[k] = ""
         if k.startswith(_settings.ENV_PREFIX):  # an OBS_* spelling would otherwise fill it (ADR-0122)
@@ -66,7 +70,7 @@ def dev_env(port: int, db_path: Optional[str] = None) -> dict[str, str]:
         import cairn.profiles as profiles_pkg
 
         env["CAIRN_PROFILE"] = str(Path(profiles_pkg.__file__).parent / "local-dev.toml")
-    example = _example_pack_dir()
+    example = _example_pack_dir() if example_pack else None
     if example is not None:  # #2418 — the seed and the engine both see the example pack
         from cairn.core.pack.loader import DEV_PACK_PATH_ENV  # noqa: PLC0415 - keep `cairn --help` light
 
@@ -120,6 +124,7 @@ def _seed(env: dict[str, str]) -> None:
 
 
 @app.callback(invoke_without_command=True)
+@renamed("cairn dev", "cairn setup --foreground")
 def dev_cmd(
     port: int = typer.Option(8000, "--port", help="Engine port (vite proxies to it)."),
     engine_only: bool = typer.Option(False, "--engine-only", help="Start only the engine."),
@@ -132,11 +137,17 @@ def dev_cmd(
     ),
 ) -> None:
     """Start the engine + console on a pinned sqlite dev config. Ctrl-C stops both."""
+    run_attached(port=port, engine_only=engine_only, web_only=web_only, db=db, seed=seed, example_pack=True)
+
+
+def run_attached(*, port: int, engine_only: bool, web_only: bool, db: Optional[str], seed: bool,
+                 example_pack: bool) -> None:
+    """The engine and the console, attached to this terminal until Ctrl-C."""
     if engine_only and web_only:
         typer.secho("--engine-only and --web-only are mutually exclusive.", fg=typer.colors.RED)
         raise typer.Exit(2)
 
-    env = dev_env(port, db)
+    env = dev_env(port, db, example_pack=example_pack)
     if seed:
         _seed(env)
     procs: list[subprocess.Popen] = []
@@ -159,7 +170,7 @@ def dev_cmd(
             typer.secho(
                 "no web console here: it is not part of the public core (the cairn "
                 "platform ships it). Running the engine only; use the CLI "
-                "(`cairn remote login`, `cairn remote ps`) or the HTTP API. Pass "
+                "(`cairn setup`, `cairn status`) or the HTTP API. Pass "
                 "--engine-only to skip this check.",
                 fg=typer.colors.YELLOW,
             )

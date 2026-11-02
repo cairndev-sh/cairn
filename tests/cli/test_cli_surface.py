@@ -30,10 +30,10 @@ def d1_block() -> dict[str, dict[str, str]]:
     out: dict[str, dict[str, str]] = {}
     heading = ""
     for line in block.splitlines():
-        if line.endswith(":"):
-            heading = line[:-1]
+        if line and not line.startswith(" "):
+            heading = line.split(":", 1)[0]
             out[heading] = {}
-        elif heading and line.strip():
+        elif heading and line.strip() and heading != "Platform commands":  # names only, and only when installed
             name, text = line.split(maxsplit=1)
             out[heading][name] = text.strip()
     return out

@@ -145,13 +145,13 @@ def _session_ended(token: Optional[str], *, then: str = ""):
     """The one line a session the server refused ends on, and its exit code. With no
     token at all there is no session: the plain 401 message, exit 1, as before."""
     if not token:
-        _fail("401 Unauthorized — run `cairn remote login` (or set CAIRN_REMOTE_TOKEN).")
+        _fail("401 Unauthorized — run `cairn setup`, or `cairn setup --server <url>` (or set CAIRN_REMOTE_TOKEN).")
     exp = _token_exp(token)
     if exp is not None and exp <= time.time():
         line = f"session expired at {time.strftime('%H:%M', time.localtime(exp))}"
     else:
         line = "session refused by the server (401)"
-    typer.secho(f"{line} — run `cairn remote login`{then}", fg="red", err=True)
+    typer.secho(f"{line} — run `cairn setup`, or `cairn setup --server <url>`{then}", fg="red", err=True)
     raise typer.Exit(EXIT_SESSION_EXPIRED)
 
 
@@ -261,7 +261,7 @@ def _ephemeral():
         while not _reachable(ep):
             if proc.poll() is not None:
                 _fail("ephemeral engine exited during startup — "
-                      "run `cairn dev --engine-only` to see why.")
+                      "run `cairn setup --foreground --engine-only` to see why.")
             if time.monotonic() > deadline:
                 _fail("ephemeral engine did not become healthy within 30s.")
             time.sleep(0.3)
@@ -430,7 +430,8 @@ _TOK = typer.Option(None, "--token", help="bearer token (overrides profile/env)"
 _PROF = typer.Option(None, "--profile", help="config profile name")
 
 
-@app.command()
+@app.command(hidden=True)
+@renamed("cairn remote login", "cairn setup --server <url>")
 def login(
     username: Optional[str] = typer.Option(None, "--username", "-u", help="admin username"),
     password: Optional[str] = typer.Option(None, "--password", "-p", help="prompted if omitted"),
@@ -441,16 +442,23 @@ def login(
     ep, _ = _resolve(endpoint, None, profile)
     username = username or typer.prompt("Username", default="admin")
     password = password or typer.prompt("Password", hide_input=True)
+    _sign_in(ep, username, password, profile or _load_config().get("default_profile") or "default")
+
+
+def _sign_in(ep: str, username: str, password: str, prof_name: str, *, make_default: bool = False) -> Optional[str]:
+    """POST /token and store the JWT under this config profile. Returns the token."""
     with _api(ep, None) as c:
         token = _call(c.login, username, password)
     cfg = _load_config()
-    prof_name = profile or cfg.get("default_profile") or "default"
     cfg.setdefault("profiles", {}).setdefault(prof_name, {})
     cfg["profiles"][prof_name]["endpoint"] = ep
     cfg["profiles"][prof_name]["token"] = token
+    if make_default:
+        cfg["default_profile"] = prof_name
     cfg.setdefault("default_profile", prof_name)
     _save_config(cfg)
     typer.secho(f"logged in to {ep} (profile '{prof_name}'); token saved to {_config_path()}", fg="green")
+    return token
 
 
 @app.command(hidden=True)

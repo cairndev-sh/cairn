@@ -93,7 +93,7 @@ def _guard_store(force: bool) -> None:
         f"[red]✗ not written:[/] this CLI writes {escape(mine)}, but the engine at {ep} "
         "reads a different store, so it would never see this. Run the CLI on the "
         "engine's store (set CAIRN_STORAGE to what the engine was started with; "
-        "`cairn dev --db PATH` is sqlite:///PATH), or pass --force to write here anyway.")
+        "`cairn setup --db PATH` is sqlite:///PATH), or pass --force to write here anyway.")
     raise typer.Exit(EXIT_STORE_MISMATCH)
 
 

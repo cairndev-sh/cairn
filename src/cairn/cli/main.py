@@ -36,6 +36,7 @@ from cairn.cli.commands import connect as _connect
 from cairn.cli.commands import demo as _demo
 from cairn.cli.commands import deploy as _deploy
 from cairn.cli.commands import doctor as _doctor
+from cairn.cli.commands import setup as _setup
 from cairn.cli.commands import export as _export
 from cairn.cli.commands import init as _init
 from cairn.cli.commands import lock as _lock
@@ -85,7 +86,7 @@ def _root(
 
 # ADR-0165 D1 — `--help` leads with these. Typer lists a heading where it first meets it, and
 # a group after every plain command, so `admin` is moved behind the providers' below.
-app.command(name="doctor")(_doctor.cmd)
+app.command(name="setup", short_help="Start or connect to an engine", rich_help_panel=MAIN_COMMANDS)(_setup.cmd)
 app.command(name="run", short_help="Run a pipeline and follow it", rich_help_panel=MAIN_COMMANDS)(_run.cmd)
 # ADR-0165 D4, D5 — one door to look, one door to decide.
 app.command(name="status", short_help="See what's running, or one run's results",
@@ -95,11 +96,12 @@ app.add_typer(_pack.app, name="pack", rich_help_panel=MAIN_COMMANDS)
 app.add_typer(_admin.app, name="admin", rich_help_panel=OTHER_COMMANDS)
 # `dev` — one-command sqlite dev environment (#1188, ADR-0085 D5): engine + vite
 # on a pinned config the repo .env can't poison; login dev/dev.
-app.add_typer(_dev.app, name="dev")
+app.add_typer(_dev.app, name="dev", hidden=True)
 
 # ADR-0165 D12 — the old names, hidden, for one minor version. Each says its new spelling on
 # stderr and runs the same code.
 for _old, _new, _cmd in (
+    ("doctor", "cairn setup --check", _doctor.cmd),
     ("preflight", "cairn run --dry-run", _run.preflight_cmd),
     ("gate", "cairn run --check", _gate.cmd),
     ("replay", "cairn status <run> --replay", _replay.cmd),

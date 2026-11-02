@@ -17,11 +17,13 @@ sudo. Choose extras or pin a version with environment variables:
 ```bash
 curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_EXTRAS=hello,rag sh
 curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_VERSION=0.3.3 sh
+curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_PACKS="finetune[laptop] dataset-prep" sh
 ```
 
 | Variable | Default | |
 |---|---|---|
 | `CAIRN_EXTRAS` | none | comma-separated extras, from the table below |
+| `CAIRN_PACKS` | none | space-separated packs to install beside it: `finetune[laptop]` is the distribution `cairn-pack-finetune` with its `laptop` extra. An unknown name fails the install |
 | `CAIRN_VERSION` | the latest release | an exact version |
 | `CAIRN_PYTHON` | `3.13` | the Python uv provisions for the tool |
 | `CAIRN_RELEASE` | unset (PyPI only) | also look for cairn's wheels in this GitHub Release and pin `cairndev` and `cairn-client` to it (unless `CAIRN_VERSION` is set); versions before 0.1.3 are only there, e.g. `CAIRN_RELEASE=0.1.2` |
