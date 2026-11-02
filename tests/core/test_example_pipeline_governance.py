@@ -229,6 +229,17 @@ def test_the_pack_policy_gates_storage_writes_in_hello_prod_only(env, gated):
     assert spec.rules[0].effect == "require_hitl"
 
 
+def test_the_quickstart_profile_turns_the_audit_trail_on_and_the_default_stays_off():
+    """The Quickstart runs under hello.toml so a first run's log shows its gate decisions;
+    local-dev leaves `audit.sink` unbound (ADR-0028)."""
+    import cairn.profiles
+
+    hello = tomllib.loads((_PACK / "profiles" / "hello.toml").read_text())
+    assert hello["profile"]["bindings"]["audit.sink"] == "audit/store"
+    local_dev = tomllib.loads(cairn.profiles.local_dev_path().read_text())
+    assert "audit.sink" not in local_dev["profile"]["bindings"]
+
+
 @pytest.mark.parametrize("profile", ("hello.toml", "hello-infisical.toml"))
 def test_the_example_profiles_pin_no_runtime(profile):
     """A profile's `durable_runtime` beats CAIRN_RUNTIME (cairn/core/settings.py runtime()),

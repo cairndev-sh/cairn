@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from benchmark import render
+from cairn.core.obs.audit import GENESIS_HASH, chain_hash
 
 
 def _result(tmp_path: Path, **changes) -> Path:
@@ -140,7 +141,45 @@ def test_a_broken_audit_chain_fails_the_measurement(quickstart_path, tmp_path: P
     log.write_text('{"not": "a chained row"}\n', encoding="utf-8")
     engine = SimpleNamespace(audit_log=log)
     with pytest.raises(RuntimeError, match="does not verify"):
-        quickstart_path._audit_rows(engine)
+        quickstart_path._audit_rows(engine, [])
+
+
+def _chained(tmp_path: Path, rows: list[dict]) -> SimpleNamespace:
+    prev, lines = GENESIS_HASH, []
+    for row in rows:
+        digest = chain_hash(prev, row)
+        lines.append(json.dumps({**row, "prev_hash": prev, "hash": digest}))
+        prev = digest
+    log = tmp_path / "audit.jsonl"
+    log.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return SimpleNamespace(audit_log=log)
+
+
+def _gate_row(step: str, actor: str = "dev") -> dict:
+    return {"action": "pipeline.gate_approved", "actor": actor, "target": f"pl_x/{step}"}
+
+
+def test_every_gate_logged_with_the_signed_in_user_passes(quickstart_path, tmp_path: Path) -> None:
+    engine = _chained(tmp_path, [_gate_row("review"), _gate_row("promote")])
+    assert quickstart_path._audit_rows(engine, ["pl_x"]) == 2
+
+
+def test_a_stopped_pipeline_missing_from_the_log_fails_the_measurement(quickstart_path, tmp_path: Path) -> None:
+    admitted = {"action": "pipeline.admitted", "target": "pl_y"}
+    finished = {"action": "pipeline.finished", "target": "pl_y"}
+    assert quickstart_path._audit_rows(_chained(tmp_path, [admitted, finished]), [], "pl_y") == 2
+    with pytest.raises(RuntimeError, match="launch and end"):
+        quickstart_path._audit_rows(_chained(tmp_path, [admitted]), [], "pl_y")
+
+
+@pytest.mark.parametrize("rows", [
+    [{"action": "hello.dataset.published", "actor": "data-owners", "target": "file:///x"}],
+    [_gate_row("review")],
+    [_gate_row("review"), _gate_row("promote", actor="data-owners")],
+])
+def test_a_gate_decision_missing_from_the_log_fails_the_measurement(quickstart_path, tmp_path: Path, rows) -> None:
+    with pytest.raises(RuntimeError, match="no audit row"):
+        quickstart_path._audit_rows(_chained(tmp_path, rows), ["pl_x"])
 
 
 def test_uncommitted_measured_code_is_recorded(quickstart_path, monkeypatch: pytest.MonkeyPatch) -> None:

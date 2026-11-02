@@ -54,13 +54,15 @@ dataset version always points at one exact file.
 With the audit trail on, cairn appends security-relevant events to a log in
 which every row carries `sha256(previous hash + row)`. Changing or deleting a
 row breaks every hash after it. The log records operator approvals inside
-flows, model calls and actions, and every governed step of a pipeline run, listed
-below. The pipeline record and the run events stay the place to replay a run; the
+flows, `llm_complete` model calls, `mcp/call` tool calls, actions, and every governed
+step of a pipeline run, listed below. A template's own prompt and agent nodes write
+no row yet. The pipeline record and the run events stay the place to replay a run; the
 log is the part that is tamper-evident.
 
 The audit trail is part of the environment: it is on when the profile binds
 `audit.sink` to the `audit/store` operator. The `secure` profile does, and so
-does the Docker Compose stack; `sandbox` and `local-dev` do not. A pipeline
+do the Docker Compose stack and the example's `hello.toml`, which the Quickstart
+uses; `sandbox` and `local-dev` do not. A pipeline
 can also write an audit row as a leg of its own, as the example's
 `profile-and-publish` does with `task: audit/store`. The log file is
 `CAIRN_AUDIT_LOG` (`./audit.jsonl` when unset).

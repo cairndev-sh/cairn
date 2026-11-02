@@ -24,6 +24,7 @@ from typing import Callable, Optional
 
 import pytest
 
+from cairn.core.obs.audit import verify_chain
 from tests.e2e.conftest import (
     HELLO,
     SSH,
@@ -197,6 +198,11 @@ def check_profile_and_publish(ctx: Ctx) -> None:
     rows = _audit_rows(ctx.srv)
     assert audit.get("ok") and audit.get("hash") and any(audit["hash"] in json.dumps(r) for r in rows), (audit, rows[-1:])
     ctx.receipt("audit", f"{len(rows)} row(s) at CAIRN_AUDIT_LOG; the audit leg's hash {audit['hash'][:12]}… among them")
+    # the profile's audit.sink wrote the governed trail into the same chain as the leg's row
+    actions = {r.get("action") for r in rows}
+    assert {"pipeline.admitted", "pipeline.gate_approved", "leg.finished"} <= actions, actions
+    report = verify_chain(ctx.srv.audit_log.read_text(encoding="utf-8").splitlines())
+    assert report.ok, report.broken
     # the budget is on the record
     budget = (ctx.rec.get("governance") or {}).get("budget") or {}
     assert float(budget.get("usd", 0)) == 1.0, ctx.rec.get("governance")

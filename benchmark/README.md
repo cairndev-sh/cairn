@@ -20,7 +20,7 @@ that file or run `render.py`; pass `--out DIR` to keep your result separate.
 
 | Script | What it measures | Takes |
 |---|---|---|
-| [`quickstart_path.py`](./quickstart_path.py) | The quickstart's pipeline on a local engine: time to the paused gate, approvals to done, the gates holding, the audit chain verifying | a minute or two |
+| [`quickstart_path.py`](./quickstart_path.py) | The quickstart's pipeline on a local engine: time to the paused gate, approvals to done, the gates holding, each person's decision in the audit log, the audit chain verifying | a minute or two |
 
 ## Where the published numbers come from
 
