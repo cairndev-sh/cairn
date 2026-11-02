@@ -30,27 +30,30 @@ set them first when you run outside `cairn dev`:
 | Command | What it does |
 |---|---|
 | `cairn pipeline ls` | Lists every installed pipeline with its legs and content hash, internal ones included. |
+| `cairn run <ref>` | Starts a pipeline through the launch door and stays with it: it asks at each gate, follows any pipeline its events start, and ends with the results. `-i key=value` or `-i @file.json` (repeatable; values are parsed as JSON when possible, and a `list` input also takes a comma-separated string), `-p` a saved input set, `--save-preset`, `-e` the environment, `--detach` returns at once, `--json` prints the records. With no ref, it lists what can run. |
+| `cairn run <ref> --dry-run` | What will happen before anything spends: each input and where its value comes from, each leg and what triggers it, the gates and the budget. Nothing runs. On a flow, it is the dev loop's plan. |
+| `cairn run <ref> --check` | Runs a read-only check and exits on its verdict, for CI. `--fail-on warn` also fails on warnings. |
+| `cairn run <skill> --skill` | Submits a skill to the server. `--wait` blocks until it is done, `--service` names the service. |
 | `cairn pipeline show <ref>` | A pipeline's inputs, legs, gates and wiring. `--plan` shows the execution plan instead; with `--plan`, `--preset <name>` and `-i key=value` first list each input's value and the layer it comes from (`← preset 'name'`). |
-| `cairn pipeline explain <ref>` | What will happen before anything spends: each input and where its value comes from, each leg and what triggers it, the gates and the budget. `-i key=value` shows the effect of a launch input, typed as the launch types it (a `list` input takes JSON or a comma-separated string, `-i report_to=mlflow,wandb`), `-e` resolves for an environment, `--json` prints the raw result. `--preset <name>` starts from a saved or pack-shipped input set, as `cairn remote launch --preset` does: the same lookup, `-i` keys win over the preset's, and an unknown preset or a preset key the pipeline no longer declares is refused (exit 2). Saved presets are read from this CLI's store; `-w` names the workspace. |
-| `cairn pipeline run <ref>` | Launches a pipeline and follows it to the end. `-i key=value` (repeatable; values are parsed as JSON when possible, and a `list` input also takes a comma-separated string), `-e` the environment, `--detach` returns at once. |
 
 A **ref** is `<pack>/<name>`, for example `hello-cairn/profile-and-publish`.
-When a flow has the same name as a pipeline, `show`, `explain` and `run` all
+When a flow has the same name as a pipeline, `show` and `run` both
 resolve the bare name to the declared pipeline (ADR-0106 D1).
 The explicit spelling `pipeline:<pack>/<name>` works too.
 
 Only declared pipelines run. A ref that names a flow, not a pipeline, is
 refused: a flow runs as a leg of a pipeline.
 
-`cairn pipeline run` exits with:
+`cairn run <ref>` exits with:
 
 | Code | Meaning |
 |---|---|
-| `0` | the pipeline completed |
-| `1` | it failed or was cancelled, or the ref is unknown, ambiguous or missing required inputs |
-| `2` | the ref names a flow, not a pipeline; or `--detach` under the in-process runtime, which would leave nothing driving the pipeline |
-| `3` | refused before it started: a policy denied the launch, admission refused it, or the runtime cannot run one of its steps (under `CAIRN_RUNTIME=temporal`, a `task:` leg or a `finalizer:` step) |
-| `130` | interrupted with Ctrl-C |
+| `0` | the pipeline completed, and any pipeline its events started |
+| `1` | one failed or was cancelled, or the launch was refused: the ref is unknown, an input is missing, a policy denied it |
+| `2` | a pipeline is waiting on a person and there is no terminal to ask on (it prints the `cairn decide` command); or the command line is wrong: a bad input, a flag that doesn't apply, a ref that names a flow |
+| `77` | the session expired; run `cairn remote login` |
+
+The old names keep working for one more minor version, and each says its new name on stderr: `cairn pipeline run` and `cairn remote launch` are now `cairn run`, `cairn pipeline explain` and `cairn preflight` are `cairn run --dry-run`, `cairn gate` is `cairn run --check`, and `cairn remote submit` is `cairn run --skill`. They keep their own exit codes: `cairn pipeline run` still exits `3` on a refused launch and `130` on Ctrl-C, and now `2` at a human gate it has no way to ask about.
 
 ## Flows
 
@@ -122,7 +125,6 @@ running on the server; log in again and re-attach with `cairn status <id> --foll
 | `cairn status <id>` | One pipeline (`pl_…`) or run: its state, who decided what, and what started it. `--results` for every step's findings, `--logs` for the event log (`--after-seq`, `--events-only`), `--follow` to stay attached and answer each gate (`--decision`, `--timeout`, `--on-timeout`, `--native`, `--dump`), `--replay` for a run's persisted trace (`--source`), `--json` for the raw form. Following exits 0 when done, 1 when failed or cancelled, and 2 when it's waiting on a person with no terminal to ask on. |
 | `cairn decide <id> approve\|reject\|cancel` | Decides what a pipeline or run is waiting on, or cancels it. The id picks the route. `--step` names the gate when a pipeline waits at more than one, `--reason` is required to reject a pipeline gate, and `--approver` is recorded when sign-in is off. |
 | `cairn remote login -e <url>` | Signs in and stores the token. |
-| `cairn remote launch <ref>` | Launches a pipeline. `-i key=value`, `--preset` to start from a saved input set, `--watch` to follow it. |
 | `cairn remote triggers` | Lists this workspace's stored triggers (event and webhook), whether each is on, and which pipeline declared it. |
 | `cairn remote enable-trigger <id>` / `disable-trigger <id>` | Turns a stored trigger on or pauses it. A trigger a pipeline declares starts paused; an event trigger applies to the next event, a webhook trigger at the next server start. |
 

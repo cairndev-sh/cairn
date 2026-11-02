@@ -30,6 +30,7 @@ from __future__ import annotations
 import typer
 from rich.console import Console
 
+from cairn.cli.aliases import renamed
 from cairn.core.engine.pipeline import PipelineDef, plan_pipeline
 from cairn.core.engine.pipeline_resolve import PIPELINE_PREFIX, all_pipeline_defs, resolve_pipeline_ref
 
@@ -143,7 +144,7 @@ def _preset_inputs(d: PipelineDef, preset: str, workspace: str) -> dict:
 
 _PRESET = typer.Option(
     "", "--preset", "-p", help="layer a saved or pack-shipped input set under --input, "
-    "as `cairn remote launch --preset` does")
+    "as `cairn run --preset` does")
 # the `workspace` layer of the resolved view: ADR-0101 D2
 _WORKSPACE = typer.Option(
     "default", "--workspace", "-w", help="whose variables answer the "
@@ -172,7 +173,7 @@ def show_cmd(
     input's value and the layer it comes from, as the launch would resolve them."""
     if (preset or input_) and not plan:
         console.print("[red]--preset and --input apply to --plan[/] — add --plan, or use "
-                      "`cairn pipeline explain` for the full dry run.")
+                      "`cairn run <ref> --dry-run` for the full dry run.")
         raise typer.Exit(2)
     d = _inspection_pipeline(ref)
     if d is None:
@@ -197,7 +198,8 @@ def show_cmd(
 
 
 # #1792; the RESOLVED block: #2134 S4; --preset refusals: #231
-@app.command("explain")
+@app.command("explain", hidden=True)
+@renamed("cairn pipeline explain", "cairn run --dry-run")
 def explain_cmd(
     ref: str = typer.Argument(..., help="<pack>/<name> or pipeline:<pack>/<name>"),
     input_: list[str] = typer.Option(
@@ -225,7 +227,7 @@ def explain_cmd(
     opening four of them.
 
     ``--preset NAME`` layers a saved or pack-shipped input set under ``-i`` exactly
-    as ``cairn remote launch --preset`` does, and refuses what that launch refuses
+    as ``cairn run --preset`` does, and refuses what that launch refuses
     (an unknown name, a key the pipeline no longer declares).
 
     Offline: installed packs + the environment's selection plane + the
@@ -265,10 +267,10 @@ def explain_cmd(
     # next-command discipline (#1792): the verb that acts on what was just read.
     if preset:
         flags = "".join(f" -i {p}" for p in input_ or [])
-        console.print(f"\n  launch: cairn remote launch {d.pack}/{d.name} --preset {preset}{flags}",
+        console.print(f"\n  launch: cairn run {d.pack}/{d.name} --preset {preset}{flags}",
                       markup=False, soft_wrap=True)
         return
-    console.print(f"\n  launch: cairn remote launch {d.pack}/{d.name} -i key=value"
+    console.print(f"\n  launch: cairn run {d.pack}/{d.name} -i key=value"
                   f"   (add --preset <name> to launch from a saved set)",
                   markup=False, soft_wrap=True)
 
@@ -303,12 +305,18 @@ async def _drive_until_terminal(bridge, pipeline_id: str, *, poll_s: float = 2.0
                               + (f"  [dim]{st.run_id}[/dim]" if st.run_id else ""))
         if rec.status in _TERMINAL:
             return rec
+        # #260 — a person's wait has nobody to answer it here: this process has no prompt and no
+        # server, so polling on would never end.
+        if rec.status == "paused" and any(
+                st.status in ("awaiting_approval", "awaiting_advance") for st in rec.step_state.values()):
+            return rec
         await asyncio.sleep(poll_s)
 
 
 # ref resolution: ADR-0106 D1 (#2134); the dev loop needs no pipeline: ADR-0106 D6;
 # the CLI owns the pipeline it launched: #1702
-@app.command("run")
+@app.command("run", hidden=True)
+@renamed("cairn pipeline run", "cairn run")
 def run_pipeline(
     ref: str = typer.Argument(
         ..., help="`<pack>/<name>` or `pipeline:<pack>/<name>` — a declared pipeline; "
@@ -429,6 +437,13 @@ def run_pipeline(
                       f"server, or rerun without --detach.[/yellow]")
         raise typer.Exit(2)
 
+    waiting = ", ".join(s for s, st in rec.step_state.items()
+                        if st.status in ("awaiting_approval", "awaiting_advance"))
+    if rec.status == "paused" and waiting:  # #260
+        console.print(f"[yellow]paused at {waiting}: this command has no way to ask you. The record is "
+                      f"kept. To answer gates at a prompt, run it with `cairn run {ref}`.[/yellow]",
+                      soft_wrap=True)
+        raise typer.Exit(2)
     console.print(f"  final: [bold]{rec.status}[/bold]"
                   + (f"   [red]{rec.trigger.get('failure_reason', '')}[/red]"
                      if rec.status == "failed" else ""))

@@ -453,7 +453,8 @@ def login(
     typer.secho(f"logged in to {ep} (profile '{prof_name}'); token saved to {_config_path()}", fg="green")
 
 
-@app.command()
+@app.command(hidden=True)
+@renamed("cairn remote submit", "cairn run --skill <name>")
 def submit(
     skill: str = typer.Argument(..., help="skill name to fire"),
     input_: list[str] = typer.Option([], "--input", "-i", help="payload key=value (repeatable)"),
@@ -465,8 +466,14 @@ def submit(
     profile: Optional[str] = _PROF,
 ):
     """Submit a run by skill name. Async by default (returns a run_id immediately)."""
+    _submit_skill(skill, _parse_kv(input_), follow=follow, wait=wait, service=service,
+                  endpoint=endpoint, token=token, profile=profile)
+
+
+def _submit_skill(skill: str, payload: dict, *, follow: bool, wait: bool, service: Optional[str],
+                  endpoint, token, profile) -> None:
     ep, tok = _resolve(endpoint, token, profile)
-    body = {"skill_name": skill, "service": service, "payload": _parse_kv(input_), "wait": wait}
+    body = {"skill_name": skill, "service": service, "payload": payload, "wait": wait}
     with _api(ep, tok, timeout=None if wait else 30.0) as c:
         out = _call(c.trigger_manual, body)
     run_id = out.get("run_id")
@@ -679,7 +686,7 @@ def _decide(*, decision_opt, native, timeout, on_timeout) -> Optional[str]:
     if not _is_interactive():
         typer.secho(
             "non-interactive (no TTY) — not prompting. Decide with "
-            "`cairn decide <id> approve|reject`, or pass --decision.",
+            "`cairn decide <id> approve|reject`, or follow it with `cairn status <id> --follow --decision approve`.",
             fg="yellow", err=True,
         )
         return None
@@ -1206,7 +1213,23 @@ def disable_trigger_cmd(
     _set_trigger(trigger_id, False, endpoint, token, profile)
 
 
-@app.command()
+def _save_preset(c, ref: str, preset: Optional[str], overrides: dict, name: str, *, err: bool = False) -> None:
+    """#1789 criterion 3 — save from a launch that WORKED, so a preset can only ever be a set of
+    inputs the door already accepted. Saved AFTER the launch for exactly that reason. The saved set
+    is the merge the server used: the chosen preset's inputs with these inputs on top (read back
+    from the server rather than rebuilt here, so the CLI is not re-deriving the merge rule)."""
+    inputs = dict(overrides)
+    if preset:
+        listed = _call(c.pipeline_presets, ref) or {}
+        base = next((p for p in listed.get("presets", []) if p.get("name") == preset), None)
+        if base:
+            inputs = {**(base.get("inputs") or {}), **overrides}
+    saved = _call(c.save_pipeline_preset, ref, name, inputs)
+    typer.secho(f"saved preset {name!r} ({(saved or {}).get('input_count', 0)} inputs)", fg="green", err=err)
+
+
+@app.command(hidden=True)
+@renamed("cairn remote launch", "cairn run")
 def launch(
     ref: str = typer.Argument(..., help="installed pipeline ref, e.g. training/e2e-finetune"),
     input_: list[str] = typer.Option([], "--input", "-i", help="pipeline input key=value (repeatable)"),
@@ -1241,22 +1264,7 @@ def launch(
             pid = (out or {}).get("pipeline_id")
             typer.secho(f"pipeline_id={pid} status={(out or {}).get('status')}", fg="green")
             if save_preset:
-                # #1789 criterion 3 — save from a launch that WORKED, so a preset
-                # can only ever be a set of inputs the door already accepted.
-                # Saved AFTER the launch for exactly that reason. The saved set is
-                # the merge the server used: the chosen preset's inputs with these
-                # --input keys on top (read back from the server rather than
-                # rebuilt here, so the CLI is not re-deriving the merge rule).
-                inputs = dict(overrides)
-                if preset:
-                    listed = _call(c.pipeline_presets, ref) or {}
-                    base = next((p for p in listed.get("presets", [])
-                                 if p.get("name") == preset), None)
-                    if base:
-                        inputs = {**(base.get("inputs") or {}), **overrides}
-                saved = _call(c.save_pipeline_preset, ref, save_preset, inputs)
-                typer.secho(f"saved preset {save_preset!r} "
-                            f"({(saved or {}).get('input_count', 0)} inputs)", fg="green")
+                _save_preset(c, ref, preset, overrides, save_preset)
             if not (watch and pid):
                 # #1792 — a launch that returns immediately must still say how
                 # to follow it; this is the line whose absence sent the flagship

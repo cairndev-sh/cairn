@@ -91,11 +91,11 @@ app.command(name="run")(_run.cmd)
 # `preflight` is the CLI face of the ADR-0072 dry-run verdict (#800): the same
 # side-effect-free ready/blocked composition the console Run tab + `cairn ask`
 # render. `cairn run --dry-run` prints it too.
-app.command(name="preflight")(_run.preflight_cmd)
+app.command(name="preflight", hidden=True)(renamed("cairn preflight", "cairn run --dry-run")(_run.preflight_cmd))
 # `gate` (#990, ADR-0076 D2) is the CI/CD face of the gate primitive: run a check
 # workflow read-only, emit a JSON verdict + a blocking exit code so a PR/pipeline
 # fails on a bad dataset/model. CI-agnostic; see examples/ci/.
-app.command(name="gate")(_gate.cmd)
+app.command(name="gate", hidden=True)(renamed("cairn gate", "cairn run --check")(_gate.cmd))
 app.command(name="replay", hidden=True)(renamed("cairn replay", "cairn status <run> --replay")(_replay.cmd))
 # ADR-0165 D4, D5 — one door to look, one door to decide.
 app.command(name="status")(_status.status_cmd)
