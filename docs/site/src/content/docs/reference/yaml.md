@@ -279,3 +279,22 @@ Each stage:
 - [Write a pipeline](/guides/write-a-pipeline/)
 - [Write a flow](/guides/write-a-flow/)
 - [CLI](/reference/cli/)
+
+## Presets
+
+A pack can ship named sets of inputs for its own pipelines, as `presets/*.yaml`:
+
+```yaml
+pipeline: dataset-prep/prepare
+presets:
+  - name: laptop-demo
+    description: The bundled sample, split for a small run.
+    inputs:
+      path: $pack/data/sample.jsonl
+      val_ratio: 0.1
+```
+
+`cairn run <pipeline> --preset <name>` starts from one, and `-i key=value` overrides a key. A value that
+starts with `$pack/` names a file inside the pack, wherever the pack is installed. The launch refuses a
+preset whose `$pack/` path leaves the pack or names nothing in it. A preset you save yourself with
+`--save-preset` shadows a pack's preset of the same name.

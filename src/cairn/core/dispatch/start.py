@@ -443,7 +443,7 @@ async def explain_pipeline_ref(
     from cairn.core.dispatch.pipeline_launch import resolve_or_raise  # noqa: PLC0415 - cycle
     from cairn.core.engine.pipeline_explain import explain_pipeline  # noqa: PLC0415 - cycle
     from cairn.core.engine.pipeline_resolve import PIPELINE_PREFIX  # noqa: PLC0415 - cycle
-    from cairn.core.pipeline_presets import resolve_preset  # noqa: PLC0415 - cycle
+    from cairn.core.pipeline_presets import assert_preset_paths_resolved, resolve_preset  # noqa: PLC0415 - cycle
 
     bare = ref[len(PIPELINE_PREFIX):] if ref.startswith(PIPELINE_PREFIX) else ref
     canon = f"{PIPELINE_PREFIX}{bare}"
@@ -452,7 +452,8 @@ async def explain_pipeline_ref(
     d = resolve_or_raise(canon)
     preset_inputs: dict[str, Any] = {}
     if preset:
-        rec, _src = await resolve_preset(workspace_id, canon, preset)
+        rec, src = await resolve_preset(workspace_id, canon, preset)
+        assert_preset_paths_resolved(rec, src)  # a dry run refuses what the launch refuses
         preset_inputs = dict(rec.inputs or {})
     return await explain_pipeline(
         d, environment=environment or "", preset_name=preset,

@@ -179,7 +179,7 @@ def test_the_public_cli_lists_none_of_the_product_commands():
     (top, demo) = run_cairn([], ["--help"], ["demo", "--help"])
     assert top["code"] == 0
     listed = _listed(top["out"])
-    assert {"run", "doctor", "demo", "pipeline", "flow"} <= listed, sorted(listed)
+    assert {"run", "setup", "demo", "pipeline", "flow"} <= listed, sorted(listed)
     assert not listed & set(PRODUCT_COMMANDS), sorted(listed & set(PRODUCT_COMMANDS))
     assert demo["code"] == 0 and "--showcase" not in demo["out"]  # the flag left with the platform
 

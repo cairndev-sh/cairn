@@ -100,7 +100,7 @@ def _set_token(token: str) -> None:
 
 def _expired_line(token: str) -> str:
     exp = remote._token_exp(token)
-    return f"session expired at {time.strftime('%H:%M', time.localtime(exp))} — run `cairn remote login`"
+    return f"session expired at {time.strftime('%H:%M', time.localtime(exp))} — run `cairn setup`"
 
 
 def test_login_writes_only_the_access_token_to_a_private_file(app):
@@ -125,7 +125,7 @@ def test_findings_ends_the_same_way(app):
     _set_token(_expired_token())
     res = cli.invoke(remote.app, ["findings", "pl_x"])
     assert res.exit_code == 77, res.output
-    assert "run `cairn remote login`" in res.output
+    assert "run `cairn setup`" in res.output
 
 
 def test_an_explicit_expired_token_exits_77(app):
@@ -144,7 +144,7 @@ def test_a_refused_unexpired_token_is_named_as_refused(app):
 def test_no_session_at_all_keeps_the_plain_401_and_exit_1(app):
     res = cli.invoke(remote.app, ["ps", "-e", "http://testserver"])
     assert res.exit_code == 1, res.output
-    assert "401 Unauthorized — run `cairn remote login`" in res.output
+    assert "401 Unauthorized — run `cairn setup`" in res.output
 
 
 def test_logs_follow_ends_loudly_when_the_stream_is_refused(app):
