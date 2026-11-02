@@ -195,19 +195,37 @@ def _pipelines_started_by(c: Any, rec: dict, seen: set[str]) -> list[str]:
         return []
     pipeline_id = rec.get("pipeline_id")
     deadline = time.monotonic() + _START_WAIT_S
+    started: list[str] = []
+    checked: set[str] = set()  # who started a pipeline never changes: read each record once
+    last_look = False          # one event can start several: look once more after the first
     while True:
-        started = []
         rows = (_call(c.pipelines) or {}).get("pipelines", [])
         for row in rows:
             other = row.get("pipeline_id")
-            if other in seen or str(row.get("created_at") or "") < str(rec.get("created_at") or ""):
+            if (other in seen or other in checked
+                    or str(row.get("created_at") or "") < str(rec.get("created_at") or "")):
                 continue
+            checked.add(other)
             full = _call(c.pipeline, other) or {}
             if (full.get("trigger") or {}).get("correlation_id") == pipeline_id:
                 started.append(other)
-        if started or time.monotonic() >= deadline:
+        if last_look or time.monotonic() >= deadline:
             return started
+        last_look = bool(started)
         time.sleep(1.0)
+
+
+def _settled(c: Any, pipeline_id: str) -> dict:
+    """The record once its results are on it: the bridge writes ``done`` first and ``outputs`` right
+    after, and only then emits (ADR-0161). A pipeline that declares neither has nothing to wait for."""
+    deadline = time.monotonic() + _START_WAIT_S
+    while True:
+        rec = _call(c.pipeline, pipeline_id) or {}
+        plan = rec.get("plan") or {}
+        if (rec.get("status") != "done" or rec.get("outputs") is not None
+                or not (plan.get("outputs") or plan.get("emits")) or time.monotonic() >= deadline):
+            return rec
+        time.sleep(0.5)
 
 
 def _print_results(rec: dict) -> None:
@@ -221,16 +239,23 @@ def _print_results(rec: dict) -> None:
         typer.echo(f"    {remote._safe_line(key):<{width}}  {remote._safe_line(value)}")
 
 
-def follow_chain(c: Any, pipeline_id: str, *, quiet: bool = False, **kw: Any) -> tuple[int, list[dict]]:
+def follow_chain(c: Any, pipeline_id: str, *, decision: Optional[str] = None, quiet: bool = False,
+                 **kw: Any) -> tuple[int, list[dict]]:
     """Follow a pipeline, then any pipeline its events start, and those they start. Stops at the
-    first that doesn't end ``done``. Returns the exit code and the records, in order."""
+    first that doesn't end ``done``. Returns the exit code and the records, in order.
+
+    ``decision`` answers the pipeline it was given for and no other: a gate in a pipeline an event
+    started is asked, or ends the command with its ``cairn decide`` line."""
     queue, seen, records = [pipeline_id], {pipeline_id}, []
     while queue:
         current = queue.pop(0)
-        code = follow_pipeline(c, current, quiet=quiet, **kw)
-        rec = _call(c.pipeline, current) or {}
+        code = follow_pipeline(c, current, decision=decision if current == pipeline_id else None,
+                               quiet=quiet, **kw)
+        rec = _settled(c, current)
         records.append(rec)
         if code:
+            if queue and not quiet:
+                typer.secho(f"  also started, still going: {', '.join(queue)}", fg="yellow")
             return code, records
         if not quiet:
             _print_results(rec)
@@ -242,6 +267,7 @@ def follow_chain(c: Any, pipeline_id: str, *, quiet: bool = False, **kw: Any) ->
                 typer.secho(f"  → {current} started {other}", fg="cyan")
     if not quiet:
         typer.secho(f"  ✓ done: {' → '.join(r.get('pipeline_id', '') for r in records)}", fg="green")
+        remote._next("findings", f"cairn status {records[-1].get('pipeline_id')} --results")
     return 0, records
 
 
@@ -260,7 +286,7 @@ def launch_and_follow(ref: str, inputs: dict, *, environment: Optional[str], pre
             pipeline_id = out.get("pipeline_id")
             typer.secho(f"pipeline_id={pipeline_id} status={out.get('status')}", fg="green", err=json_out)
             if save_preset:
-                remote._save_preset(c, ref, preset, inputs, save_preset)
+                remote._save_preset(c, ref, preset, inputs, save_preset, err=json_out)
             if detach:
                 if json_out:
                     typer.echo(json.dumps(out, indent=2))
@@ -268,10 +294,13 @@ def launch_and_follow(ref: str, inputs: dict, *, environment: Optional[str], pre
                     remote._next("watch", f"cairn status {pipeline_id} --follow")
                 return 0
             code, records = follow_chain(
-                c, pipeline_id, quiet=json_out, decision=None, native=native, timeout=timeout,
+                c, pipeline_id, quiet=json_out, native=native, timeout=timeout,
                 on_timeout=on_timeout, dump=dump, interval=interval)
             if json_out:
                 typer.echo(json.dumps({"pipelines": records}, indent=2))
+            if local and code == 2:
+                typer.secho("ephemeral engine: it stops with this command. The record is kept; "
+                            "`cairn decide` starts it again to answer.", fg="yellow", err=True)
             return code
 
 

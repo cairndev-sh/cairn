@@ -52,6 +52,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any, Optional
 
 import typer
@@ -856,9 +857,9 @@ def cmd(
     # #1092 — pipeline-FILE mode: a `.py` holding one cairn.pipeline_file.Pipeline.
     if target.endswith(".py"):
         raise typer.Exit(_run_pipeline_file_sync(
-            target, environment_override=environment or "production", mock=mock, sandbox=sandbox,
+            target, environment_override=environment, mock=mock, sandbox=sandbox,
             interactive=interactive, parent_run=from_run or "", series_override=series or "",
-            set_values=list(set_ or []), dry_run=dry_run, detach=detach,
+            set_values=[f"{k}={json.dumps(v)}" for k, v in values.items()], dry_run=dry_run, detach=detach,
         ))
     # A trigger JSON file: local skill matching, unchanged.
     if not values and Path(target).is_file() and not (dry_run or mock or interactive):
@@ -881,7 +882,11 @@ def cmd(
             ))
     # The governed start. A flow is refused here, with the wrapper to add (ADR-0106 D1), before any
     # engine is reached. A ref this machine doesn't have may still be on a configured server.
-    if not _startable(target, explicit_server=remote._explicit_endpoint(endpoint, profile)):
+    def _a_server() -> bool:
+        return (remote._explicit_endpoint(endpoint, profile)
+                or remote._reachable(remote._resolve(endpoint, token, profile)[0]))
+
+    if not _startable(target, a_server=_a_server):
         raise typer.Exit(_start_governed_sync(target, values))
     for flag, value, why in (("--series", series, "a pipeline's series is in its governance block"),
                              ("--from", from_run, "it applies to a pipeline file"),
@@ -909,7 +914,7 @@ def _collect_inputs(inputs: list[str], sets: list[str]) -> dict[str, Any]:
     values: dict[str, Any] = {}
     for item in [*inputs, *sets]:
         key, eq, raw = item.partition("=")
-        as_file = item[1:] if item.startswith("@") else item if Path(item).is_file() else None
+        as_file = item[1:] if item.startswith("@") else item if not eq and Path(item).is_file() else None
         if as_file is not None:
             try:
                 loaded = json.loads(Path(as_file).read_text(encoding="utf-8"))
@@ -945,9 +950,9 @@ def _names_a_pipeline(ref: str) -> bool:
     return (_not_an_agentic_template(ref) or ("", ""))[0] == "pipeline"
 
 
-def _startable(ref: str, *, explicit_server: bool) -> bool:
+def _startable(ref: str, *, a_server: Callable[[], bool]) -> bool:
     """May this ref go to the launch door? A declared pipeline may; a flow never (the refusal in
-    :func:`_start_governed_sync` says why); an unknown ref only when a server was named, which may
+    :func:`_start_governed_sync` says why); an unknown ref only when there is a server, which may
     have it installed."""
     from cairn.core.dispatch.start import FlowNotRunnableError, UnknownStartRefError, resolve_start_ref  # noqa: PLC0415
 
@@ -956,7 +961,7 @@ def _startable(ref: str, *, explicit_server: bool) -> bool:
     except FlowNotRunnableError:
         return False
     except (UnknownStartRefError, ValueError):
-        return explicit_server
+        return a_server()
     return True
 
 
@@ -981,7 +986,7 @@ def _parse_set(values: list[str]) -> dict[str, Any]:
 def _run_pipeline_file_sync(
     file_path: str,
     *,
-    environment_override: str,
+    environment_override: Optional[str],
     mock: bool,
     sandbox: bool,
     interactive: bool,
@@ -1000,9 +1005,7 @@ def _run_pipeline_file_sync(
     governed or in-process, or the sentence above stops being true (ADR-0105 D1,
     #2118).
 
-    Env precedence: an explicit ``--env`` wins; otherwise the file's ``env``. We
-    read ``sys.argv`` to tell "explicitly passed" from "typer's default", because
-    the flag has a non-None default and Typer cannot report provenance here.
+    Env precedence: an explicit ``--environment`` wins; otherwise the file's ``env``.
     """
     from cairn.pipeline_file import PipelineFileError, load_pipeline_file, resolve_run_args
 
@@ -1013,15 +1016,13 @@ def _run_pipeline_file_sync(
         print(f"{e}", file=sys.stderr)
         return 2
 
-    env_explicit = any(a == "--env" or a.startswith("--env=") for a in sys.argv[1:])
-    args = resolve_run_args(
-        cls, env=environment_override if env_explicit else None, inputs=overrides,
-    )
+    env_explicit = environment_override is not None
+    args = resolve_run_args(cls, env=environment_override, inputs=overrides)
     series_id = series_override or args["series"]
 
     print(f"pipeline: {cls.__name__}  ({file_path})")
     print(f"workflow: {args['workflow']}")
-    print(f"env:      {args['environment']}" + ("  [--env]" if env_explicit else "  [file]"))
+    print(f"env:      {args['environment']}" + ("  [--environment]" if env_explicit else "  [file]"))
     if series_id:
         print(f"series:   {series_id}")
     if args["inputs"]:
@@ -1066,7 +1067,7 @@ def _run_pipeline_file_sync(
 def preflight_cmd(
     template_ref: str = typer.Argument(
         ..., help="Namespaced agentic template reference, e.g. 'dataset-readiness/check'. "
-                  "A pipeline is checked with `cairn pipeline explain`.",
+                  "A pipeline is checked with `cairn run <pipeline> --dry-run`.",
     ),
     input_file: Optional[str] = typer.Option(
         None, "--input", "-i",

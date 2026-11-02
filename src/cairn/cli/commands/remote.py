@@ -686,7 +686,7 @@ def _decide(*, decision_opt, native, timeout, on_timeout) -> Optional[str]:
     if not _is_interactive():
         typer.secho(
             "non-interactive (no TTY) — not prompting. Decide with "
-            "`cairn decide <id> approve|reject`, or pass --decision.",
+            "`cairn decide <id> approve|reject`, or follow it with `cairn status <id> --follow --decision approve`.",
             fg="yellow", err=True,
         )
         return None
@@ -1213,7 +1213,7 @@ def disable_trigger_cmd(
     _set_trigger(trigger_id, False, endpoint, token, profile)
 
 
-def _save_preset(c, ref: str, preset: Optional[str], overrides: dict, name: str) -> None:
+def _save_preset(c, ref: str, preset: Optional[str], overrides: dict, name: str, *, err: bool = False) -> None:
     """#1789 criterion 3 — save from a launch that WORKED, so a preset can only ever be a set of
     inputs the door already accepted. Saved AFTER the launch for exactly that reason. The saved set
     is the merge the server used: the chosen preset's inputs with these inputs on top (read back
@@ -1225,7 +1225,7 @@ def _save_preset(c, ref: str, preset: Optional[str], overrides: dict, name: str)
         if base:
             inputs = {**(base.get("inputs") or {}), **overrides}
     saved = _call(c.save_pipeline_preset, ref, name, inputs)
-    typer.secho(f"saved preset {name!r} ({(saved or {}).get('input_count', 0)} inputs)", fg="green")
+    typer.secho(f"saved preset {name!r} ({(saved or {}).get('input_count', 0)} inputs)", fg="green", err=err)
 
 
 @app.command(hidden=True)

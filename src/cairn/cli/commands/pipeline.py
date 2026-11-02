@@ -144,7 +144,7 @@ def _preset_inputs(d: PipelineDef, preset: str, workspace: str) -> dict:
 
 _PRESET = typer.Option(
     "", "--preset", "-p", help="layer a saved or pack-shipped input set under --input, "
-    "as `cairn remote launch --preset` does")
+    "as `cairn run --preset` does")
 # the `workspace` layer of the resolved view: ADR-0101 D2
 _WORKSPACE = typer.Option(
     "default", "--workspace", "-w", help="whose variables answer the "
@@ -173,7 +173,7 @@ def show_cmd(
     input's value and the layer it comes from, as the launch would resolve them."""
     if (preset or input_) and not plan:
         console.print("[red]--preset and --input apply to --plan[/] — add --plan, or use "
-                      "`cairn pipeline explain` for the full dry run.")
+                      "`cairn run <ref> --dry-run` for the full dry run.")
         raise typer.Exit(2)
     d = _inspection_pipeline(ref)
     if d is None:
@@ -227,7 +227,7 @@ def explain_cmd(
     opening four of them.
 
     ``--preset NAME`` layers a saved or pack-shipped input set under ``-i`` exactly
-    as ``cairn remote launch --preset`` does, and refuses what that launch refuses
+    as ``cairn run --preset`` does, and refuses what that launch refuses
     (an unknown name, a key the pipeline no longer declares).
 
     Offline: installed packs + the environment's selection plane + the
@@ -267,10 +267,10 @@ def explain_cmd(
     # next-command discipline (#1792): the verb that acts on what was just read.
     if preset:
         flags = "".join(f" -i {p}" for p in input_ or [])
-        console.print(f"\n  launch: cairn remote launch {d.pack}/{d.name} --preset {preset}{flags}",
+        console.print(f"\n  launch: cairn run {d.pack}/{d.name} --preset {preset}{flags}",
                       markup=False, soft_wrap=True)
         return
-    console.print(f"\n  launch: cairn remote launch {d.pack}/{d.name} -i key=value"
+    console.print(f"\n  launch: cairn run {d.pack}/{d.name} -i key=value"
                   f"   (add --preset <name> to launch from a saved set)",
                   markup=False, soft_wrap=True)
 
@@ -437,9 +437,9 @@ def run_pipeline(
                       f"server, or rerun without --detach.[/yellow]")
         raise typer.Exit(2)
 
-    if rec.status == "paused":  # #260
-        waiting = ", ".join(s for s, st in rec.step_state.items()
-                            if st.status in ("awaiting_approval", "awaiting_advance"))
+    waiting = ", ".join(s for s, st in rec.step_state.items()
+                        if st.status in ("awaiting_approval", "awaiting_advance"))
+    if rec.status == "paused" and waiting:  # #260
         console.print(f"[yellow]paused at {waiting}: this command has no way to ask you. The record is "
                       f"kept. To answer gates at a prompt, run it with `cairn run {ref}`.[/yellow]",
                       soft_wrap=True)

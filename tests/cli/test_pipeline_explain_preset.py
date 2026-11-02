@@ -79,7 +79,7 @@ def test_explain_text_marks_the_preset_layer(tune_pack):
     res = CliRunner().invoke(pipeline.app, ["explain", "scratch-tune/tune", "--preset", "small"])
     assert res.exit_code == 0, res.output
     assert "← preset 'small'" in res.output
-    assert "cairn remote launch scratch-tune/tune --preset small" in res.output
+    assert "cairn run scratch-tune/tune --preset small" in res.output
 
 
 def test_explain_shows_the_inputs_the_launch_uses(tune_pack, monkeypatch):

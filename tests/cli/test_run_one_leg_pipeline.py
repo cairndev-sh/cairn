@@ -170,6 +170,7 @@ def test_an_unknown_ref_is_one_refusal_from_the_shared_resolver(inputs_file, bri
     one `POST /start` gives. No server is configured: a named one may have the ref installed."""
     monkeypatch.setenv("CAIRN_CONFIG_HOME", str(tmp_path))
     monkeypatch.delenv("CAIRN_REMOTE_ENDPOINT", raising=False)
+    monkeypatch.setattr("cairn.cli.commands.remote._reachable", lambda ep: False)
     r = runner.invoke(app, ["run", "nope/nope", "--input", str(inputs_file)])
     assert r.exit_code != 0
     assert "no pipeline 'nope/nope' is installed" in r.output
