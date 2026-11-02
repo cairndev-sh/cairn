@@ -4,7 +4,7 @@
 `refusing to start: CAIRN_PROFILE is unset — a deployment must name its profile` (or
 `CAIRN_PROFILE=… cannot be loaded`). `docker compose up` (the unified file and both DBOS tiers) stops with
 `set CAIRN_PROFILE to the deployment profile`. `helm template` fails with
-`env.profile is empty`. `cairn deploy doctor` reports `CAIRN_PROFILE  REQUIRED`.
+`env.profile is empty`. `cairn admin deploy doctor` reports `CAIRN_PROFILE  REQUIRED`.
 
 **Cause (#2296).** Every deployment names its profile. The profile holds the capability
 bindings (`[profile.bindings]`), redaction and audit, and the backends. Without a profile,
@@ -27,7 +27,7 @@ The engine ships only profiles whose every binding resolves against the builtin 
 | Production, any runtime (in-process, DBOS, Temporal; compose or Helm) | `/app/.venv/lib/python3.13/site-packages/cairn/profiles/secure.toml` |
 | Production reading secrets from Infisical (the `infisical` compose profile) | `…/cairn/profiles/prod-infisical.toml` |
 | Light quickstart (`deploy/light`) | `…/cairn/profiles/secure.toml` (already set in its compose file) |
-| Local development | none to set: `cairn dev`, `make serve`, `.claude/launch.json`, `docker-compose.dev.yml` and the dev-loop commands (`cairn run`, `preflight`, `validate`, `pipeline explain`, `pipeline run`) use `local-dev.toml` |
+| Local development | none to set: `cairn setup`, `make serve`, `.claude/launch.json`, `docker-compose.dev.yml` and the dev-loop commands (`cairn run`, `cairn run --dry-run`, `cairn pack check`) use `local-dev.toml` |
 
 `local-dev` and `secure` are base layers: your own profile can `extends = "secure.toml"` (the
 path is resolved beside the file that names it, so keep your profile in the same directory, or
@@ -38,10 +38,10 @@ rather than by `CAIRN_RUNTIME`.
 
 ## Fix
 - **Compose:** set `CAIRN_PROFILE=` in `.env`, then run
-  `cairn deploy doctor --env .env` and `docker compose up -d server worker`.
+  `cairn admin deploy doctor --env .env` and `docker compose up -d server worker`.
 - **Helm:** set `env.profile` in your values file, then run
-  `cairn deploy doctor --values <file> --strict` and `helm upgrade`.
+  `cairn admin deploy doctor --values <file> --strict` and `helm upgrade`.
 
 ## Verify
-On the box, `cairn doctor` shows the loaded profile and its bindings instead of
+On the box, `cairn setup --check` shows the loaded profile and its bindings instead of
 `CAIRN_PROFILE unset — defaults active`.

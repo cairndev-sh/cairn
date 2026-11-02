@@ -35,7 +35,7 @@ with cairn.
 
 Operators ship as their own Python packages. cairn finds an operator package
 through its `cairn.operators` entry point once it is installed, and not
-before. `cairn init operator` scaffolds one.
+before. `cairn pack new operator` scaffolds one.
 
 ## Environments
 
@@ -47,7 +47,7 @@ operators and picks the backends a run uses. You choose one when you launch
 | Profile | What it is |
 |---|---|
 | `sandbox` | The environment a fresh install offers. No credentials, no remote compute: the in-process runtime and the built-in data and ML engines. |
-| `local-dev` | The base layer `sandbox` extends, and what `cairn dev` uses when `CAIRN_PROFILE` is unset. |
+| `local-dev` | The base layer `sandbox` extends, and what `cairn setup` uses when `CAIRN_PROFILE` is unset. |
 | `secure` | `local-dev` plus redaction before every model call and the hash-chained audit trail. The Docker Compose stack runs it. |
 | `prod-infisical` | `secure` with secrets read from Infisical. |
 
@@ -97,7 +97,7 @@ matches the call says `require_hitl` or `deny`. A flow leg is checked once,
 on the highest risk among its stages: when an approval is required, the leg
 pauses as **awaiting approval** before the engine is touched.
 
-`cairn pipeline explain <ref>` prints, for each leg, the operator or engine
+`cairn run --dry-run <ref>` prints, for each leg, the operator or engine
 that will run it, its risk, and which gate (if any) applies and why.
 
 ## Next

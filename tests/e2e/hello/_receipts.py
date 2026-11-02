@@ -48,7 +48,7 @@ FEATURES: dict[str, tuple[str, str]] = {
     "secrets.env": ("secrets.store bound to secrets/env (nightly-ops' secret check)", "nightly-ops"),
     "secrets.infisical": ("secrets.store bound to secrets/infisical (nightly-ops on Infisical)", "nightly-ops"),
     "ssh": ("remote/exec over SSH on a compute.ssh connection", "nightly-ops"),
-    "worker.pull": ("cairn worker --pull --once serving a leg", "tiny-finetune"),
+    "worker.pull": ("cairn admin worker --pull --once serving a leg", "tiny-finetune"),
     "storage.postgres": ("every store on Postgres", "profile-and-publish"),
     "bus.postgres": ("the Postgres bus", "profile-and-publish"),
     "runtime.dbos": ("the DBOS runtime running a template leg", "ask-the-docs"),

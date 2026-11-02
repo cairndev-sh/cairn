@@ -48,14 +48,20 @@ _PROBE_TIMEOUT_SECONDS = 2.0
 # ─── settings inventory pass ────────────────────────────────────────
 
 
+#: A secret URL shows its path only for these: a database's path is its name, and any
+#: other URL's path may be the secret itself, as a webhook's token is.
+_DATABASE_SCHEMES = ("postgres", "postgresql", "sqlite", "mysql", "mariadb")
+
+
 def _mask(value: str) -> str:
     """Mask a secret like 'xoxb-1234567' → 'xoxb-12******'. A URL, or a DSN missing
     its scheme, goes through ``redacted_url`` instead: its first characters are the
     user and password (GHSA-gw2v-3922-g7gm)."""
     if not value:
         return ""
-    if _settings.url_scheme(value) or "@" in value:
-        return _settings.redacted_url(value)
+    scheme = _settings.url_scheme(value)
+    if scheme or "@" in value:
+        return _settings.redacted_url(value, keep_path=scheme.split("+")[0] in _DATABASE_SCHEMES)
     keep = min(8, max(2, len(value) // 4))
     return value[:keep] + "*" * max(4, len(value) - keep)
 

@@ -16,7 +16,7 @@ what each one does on its way through the engine; the shared spine is
 | `over-budget` | budget refusal | flow `engine-check`, refused at its reservation (`leg_executor.py`, `budget_reservations.reserve`) before the engine is handed the job | `governance.estimated_usd` above `governance.budget.usd`, `leg.budget_refused`; proved in `tests/examples/test_hello_cairn.py`, not in the feature proof |
 
 ## Trigger
-- `cairn pipeline run hello-cairn/<name> --set k=v`, or `POST /start {"ref": "hello-cairn/<name>"}`.
+- `cairn run hello-cairn/<name> --set k=v`, or `POST /start {"ref": "hello-cairn/<name>"}`.
 - Declared triggers, materialised into the existing schedule/trigger stores (ADR-0131),
   paused unless declared `enabled: true`, each starting the declaring pipeline through the
   same door:
@@ -33,7 +33,7 @@ what each one does on its way through the engine; the shared spine is
 ## Execution diagram
 ```mermaid
 flowchart TD
-  A[cairn pipeline run · POST /start · cron · watch · webhook · bus event] --> B[launch_ref / resolve_start_ref<br/>dispatch/start.py:317 / :179]
+  A[cairn run · POST /start · cron · watch · webhook · bus event] --> B[launch_ref / resolve_start_ref<br/>dispatch/start.py:317 / :179]
   B --> C[launch_pipeline<br/>dispatch/pipeline_launch.py:167]
   C --> D[plan_pipeline<br/>engine/pipeline.py:988]
   D --> E[inject_policy_gates<br/>policy/pipeline_gates.py:158]
@@ -100,5 +100,5 @@ flowchart TD
   torch, so they skip there with that reason.
 - The Infisical variant of nightly-ops needs a machine identity made by hand in the
   Infisical UI; without one the env-secrets variant runs and the Infisical row is NOT PROVED.
-- Seeded demo records (`cairn dev --seed`) still write profile-and-publish's earlier step
+- Seeded demo records (`cairn setup --seed`) still write profile-and-publish's earlier step
   list (#2608).
