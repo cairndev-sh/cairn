@@ -1,0 +1,92 @@
+{
+  "measurement": "audit_tamper",
+  "title": "What the audit log detects, and what it can't",
+  "script": "benchmark/audit_tamper.py",
+  "provenance": {
+    "cairndev_version": "0.4.0",
+    "uv_lock_sha256": "2f3a08bed7ab6e047e088d2185067267f6024637bbe0af1de3462c8729426faa",
+    "git_sha": "aa27363546895ac0fe1406b7e2081e9a31170ea1",
+    "code_clean": true,
+    "machine": {
+      "os": "Linux",
+      "arch": "x86_64",
+      "cpus": 4,
+      "python": "3.13.13"
+    },
+    "measured_at": "2026-11-02",
+    "ci_run": "https://github.com/cairndev-sh/cairn/actions/runs/41511935945"
+  },
+  "inputs": {
+    "pipeline": "hello-cairn/profile-and-publish",
+    "profile": "hello.toml",
+    "profile_sha256": "da9e54d2a9f4b0ae7fe9de33b4a564e578fb99a612a85b4a63fa325825529069",
+    "rows_cut": 3,
+    "prefix_length": 4
+  },
+  "results": [
+    {
+      "what": "The untouched log, 23 rows, with `cairn admin audit verify`",
+      "result": "verifies: exit 0"
+    },
+    {
+      "what": "The untouched log against its own head, with `cairn admin lineage --expect-head`",
+      "result": "matches: exit 0"
+    },
+    {
+      "what": "The same, without `--json`, on a log with no lineage records",
+      "result": "exit 1, because it has no lineage records, though the head matches"
+    },
+    {
+      "what": "Changed who gave an approval, row 11",
+      "result": "detected: exit 2, row 11 (hash)"
+    },
+    {
+      "what": "Deleted that row",
+      "result": "detected: exit 2, row 11 (prev_hash)"
+    },
+    {
+      "what": "Inserted a forged approval before it, correctly linked, so the row after the forgery breaks",
+      "result": "detected: exit 2, row 12 (prev_hash)"
+    },
+    {
+      "what": "Swapped it with the next row",
+      "result": "detected: exit 2, rows 11, 12, 13 (prev_hash)"
+    },
+    {
+      "what": "Limit: appended a forged approval at the end, correctly linked",
+      "result": "NOT detected by the chain: exit 0. Against a saved head: exit 2, the same answer a log that only grew gets"
+    },
+    {
+      "what": "Limit: cut the last 3 rows",
+      "result": "NOT detected by the chain: exit 0. Detected only against a head saved outside the log (`--expect-head`): exit 2"
+    },
+    {
+      "what": "Limit: emptied the file",
+      "result": "NOT detected by the chain: exit 0. Detected only against a head saved outside the log (`--expect-head`): exit 2"
+    },
+    {
+      "what": "Limit: changed row 11 and recomputed every hash after it",
+      "result": "NOT detected by the chain: exit 0. Detected only against a head saved outside the log (`--expect-head`): exit 2"
+    },
+    {
+      "what": "Limit: changed row 1 and recomputed every hash in the file",
+      "result": "NOT detected by the chain: exit 0. Detected only against a head saved outside the log (`--expect-head`): exit 2"
+    },
+    {
+      "what": "Limit: rows written after a head was saved, then cut",
+      "result": "NOT detected, even with that head: exit 0"
+    },
+    {
+      "what": "Limit: a head saved earlier, on a log that has grown since",
+      "result": "reported as a mismatch: exit 2. The saved head has to be the latest one"
+    },
+    {
+      "what": "Limit: cut the last 3 rows, with `--expect-head` given an empty or blank value",
+      "result": "NOT detected: exit 0. The check compares nothing"
+    },
+    {
+      "what": "Limit: cut the last 3 rows and tried values in the new last row until its hash began with the first 4 characters of the saved head",
+      "result": "NOT detected with that prefix: exit 0. With the full saved head: exit 2"
+    }
+  ]
+}

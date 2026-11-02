@@ -46,6 +46,15 @@ def test_every_published_number_links_its_script_and_its_provenance(tmp_path: Pa
         assert fact in block
 
 
+def test_a_result_can_name_its_own_columns_and_add_notes(tmp_path: Path) -> None:
+    results = _result(tmp_path, columns={"storage": "Storage", "outcome": "Outcome"},
+                      results=[{"storage": "SQLite", "outcome": "passed"}], notes=["What this table can't say."])
+    block = render.render_block(render.load_results(results, tmp_path))
+    assert "| Storage | Outcome |\n|---|---|\n| SQLite | passed |" in block
+    assert "| Measured |" not in block
+    assert "\n\nWhat this table can't say.\n\n" in block and "1.2.3" in block
+
+
 def test_an_edited_number_is_caught(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     results = _result(tmp_path)
     monkeypatch.setattr(render, "RESULTS", results)
@@ -70,6 +79,8 @@ def test_an_edited_number_is_caught(tmp_path: Path, monkeypatch: pytest.MonkeyPa
      "uncommitted code"),
     ({"script": "benchmark/gone.py"}, "does not exist"),
     ({"results": []}, "no results"),
+    ({"results": [{"what": "A thing"}]}, "a row with no result"),
+    ({"columns": {"what": "Measured", "bus": "Bus"}}, "a row with no bus"),
 ])
 def test_a_result_that_cannot_be_traced_is_refused(tmp_path: Path, change: dict, refused: str) -> None:
     with pytest.raises(ValueError, match=refused):

@@ -30,7 +30,11 @@ Each launch writes one pipeline record (`pl_…`). It holds:
 
 A paused pipeline is stored, not held in memory. After a restart cairn picks up
 the running and paused pipelines again; a gate that was waiting is still
-waiting.
+waiting. A leg that was running is a different matter: in the crash cells, a flow
+leg on the builtin engine fails and its pipeline fails, and only a template leg
+on DBOS resumes.
+[What happens when the server is killed](https://github.com/cairndev-sh/cairn/blob/main/benchmark/README.md#what-happens-when-the-server-is-killed)
+says what each cell checks and what no cell tests.
 
 ## Leg runs
 

@@ -3,9 +3,9 @@
   "title": "The quickstart's path on a local engine",
   "script": "benchmark/quickstart_path.py",
   "provenance": {
-    "cairndev_version": "0.3.3",
-    "uv_lock_sha256": "43c69f31e9856268c23e1fcde3d18fcf6a60814ffdb8af27e00576ee093cc9b0",
-    "git_sha": "1e067ede94f0cce76b626bac4c6562c583d5aa47",
+    "cairndev_version": "0.4.0",
+    "uv_lock_sha256": "2f3a08bed7ab6e047e088d2185067267f6024637bbe0af1de3462c8729426faa",
+    "git_sha": "aa27363546895ac0fe1406b7e2081e9a31170ea1",
     "code_clean": true,
     "machine": {
       "os": "Linux",
@@ -14,20 +14,20 @@
       "python": "3.13.13"
     },
     "measured_at": "2026-11-02",
-    "ci_run": "https://github.com/cairndev-sh/cairn/actions/runs/41452065865"
+    "ci_run": "https://github.com/cairndev-sh/cairn/actions/runs/41511935945"
   },
   "inputs": {
     "pipeline": "hello-cairn/profile-and-publish",
     "environment": "sandbox",
     "sample_sha256": "d2c09d27b2874cee99ccbb1272b0bd50c689220fe47c7058948c86a02cb0a8c8",
     "profile": "hello.toml",
-    "profile_sha256": "39c78281d6182ae9120f3a4cd290c46f5623e82435307aaddeeb22367c34b372",
+    "profile_sha256": "da9e54d2a9f4b0ae7fe9de33b4a564e578fb99a612a85b4a63fa325825529069",
     "repeats": 5
   },
   "results": [
     {
       "what": "Engine start to answering",
-      "result": "2.0 s"
+      "result": "2.3 s"
     },
     {
       "what": "Launch to a pipeline paused at its person gate",

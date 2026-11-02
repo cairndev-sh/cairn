@@ -59,19 +59,23 @@ def provenance() -> dict[str, Any]:
 
 
 def write_result(out: Path, measurement: str, *, title: str, inputs: dict[str, Any],
-                 results: list[dict[str, str]]) -> Path:
+                 results: list[dict[str, str]], extra: Optional[dict[str, Any]] = None) -> Path:
     """One result file. A runner calls this only after every check held, so a failed run
-    publishes nothing."""
-    out.mkdir(parents=True, exist_ok=True)
-    path = out / f"{measurement}.json"
-    path.write_text(json.dumps({
+    publishes nothing. ``extra`` adds fields, such as the ``columns`` and ``notes`` ``render.py`` reads."""
+    result = {
         "measurement": measurement,
         "title": title,
         "script": f"benchmark/{measurement}.py",
         "provenance": provenance(),
         "inputs": inputs,
         "results": results,
-    }, indent=2) + "\n", encoding="utf-8")
+    }
+    clash = sorted(result.keys() & (extra or {}).keys())
+    if clash:
+        raise ValueError(f"extra can't replace {', '.join(clash)}")
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / f"{measurement}.json"
+    path.write_text(json.dumps({**result, **(extra or {})}, indent=2) + "\n", encoding="utf-8")
     return path
 
 
