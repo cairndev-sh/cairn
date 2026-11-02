@@ -39,6 +39,9 @@ The CLI is five commands: `cairn setup`, `run`, `status`, `decide` and `pack` (A
 - `cairn pipeline run` no longer polls forever at a human gate it has no way to answer: it says so and exits 2, with the record kept. (#260)
 - `examples/ci` gates on a check that ships. It named a pack that isn't in the public install, so every run exited 2; it now uses `examples/ci/templates/dataset-check.md`, which needs only `pip install cairndev`. (#255)
 
+### Added
+- A `pipeline.finished` run-hook event. An installed `cairn.run_hooks` provider learns when a pipeline reaches `done`, `failed` or `cancelled`, including a pipeline that ends on a gate, a cancel or a deferred failure. The payload is `pipeline_id`, `pipeline_ref`, `status` and `workspace_id`. The in-process pipeline bridge fires it once per pipeline per process, after the record is stored with its final status and, on `done`, its resolved `outputs`. It is notify-only: a failing provider is logged and never affects the pipeline. (#306)
+
 ## [0.3.3] - 2026-10-30
 
 A pipeline can start another: one pipeline's results, announced as an event when it finishes, start the next through a trigger a person turns on, and the started pipeline's record names the one that fed it. A pipeline cancel now stops its running task legs before the teardown, so a GPU box being started is never left billing. Also: task-leg spend is measured and governed, and a gated finalizer can be decided during teardown.
