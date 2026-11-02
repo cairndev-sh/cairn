@@ -6,7 +6,7 @@ the captured exit code (+ pulls outputs and any `metrics.json`), cancel kills it
 on the existing `remote_job` lifecycle. Run a workflow locally, dispatch the heavy
 step to a box you control.
 
-- **Connection:** `cairn connect ssh` → a `compute.ssh` connection (host/user/port +
+- **Connection:** `cairn admin connect add ssh` → a `compute.ssh` connection (host/user/port +
   `known_hosts`); the private key is held in the SecretStore. Key-based auth,
   host-key verified (never disabled).
 - **Install:** `pip install 'cairndev[ssh]'` (asyncssh).
@@ -16,9 +16,9 @@ step to a box you control.
 ## The box lifecycle: `compute/acquire`, `compute/release` (ADR-0151 D6)
 
 Start and stop the EC2 instance a `compute.ssh` connection names
-(`cairn connect ssh --name gpu --set instance_id=i-… --set region=<aws-region>`),
+(`cairn admin connect add ssh --name gpu --set instance_id=i-… --set region=<aws-region>`),
 under governance. Both call `cairn.core.compute_lifecycle`, the module
-`cairn compute status|sweep` uses.
+`cairn admin compute status|sweep` uses.
 
 - `compute/acquire` — **`risk: paid_compute`**. Writes the `cairn:managed` lease tag
   (plus `cairn:release-after` when `max_hours > 0`), then starts the instance and

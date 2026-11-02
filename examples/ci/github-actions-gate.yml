@@ -1,10 +1,10 @@
-# cairn gate in GitHub Actions.
+# cairn run --check in GitHub Actions.
 #
 # Blocks a PR when the training dataset fails a read-only check, and posts the
 # findings as a PR comment. No cairn server, no separate Action, just
-# `pip install cairndev && cairn gate …`. Copy this into .github/workflows/, and
+# `pip install cairndev && cairn run --check …`. Copy this into .github/workflows/, and
 # copy templates/dataset-check.md to templates/ at the root of your repository.
-name: cairn gate
+name: cairn run --check
 
 on:
   pull_request:
@@ -26,11 +26,11 @@ jobs:
 
       # Run the read-only gate. It exits non-zero on FAIL — captured, not fatal
       # yet, so the comment step still runs. The final step re-raises it.
-      - name: cairn gate — dataset check
+      - name: cairn run --check — dataset check
         id: gate
         run: |
           set +e
-          cairn gate dataset-check \
+          cairn run --check dataset-check \
             --set path=data/train.jsonl \
             --json > gate.json
           echo "rc=$?" >> "$GITHUB_OUTPUT"
@@ -43,7 +43,7 @@ jobs:
         run: |
           verdict=$(jq -r '.verdict // "error"' gate.json)
           {
-            echo "### cairn gate — \`${verdict}\`  ·  \`dataset-check\`"
+            echo "### cairn run --check — \`${verdict}\`  ·  \`dataset-check\`"
             echo
             echo '```json'
             jq '{verdict, blocking, warnings, reasons, error}' gate.json

@@ -1,6 +1,6 @@
 # Shape A — bundled Postgres, DBOS runtime (what prod runs today, on a cluster).
 #
-#   cairn deploy doctor --values deploy/helm/cairn/values-postgres.example.yaml --strict
+#   cairn admin deploy doctor --values deploy/helm/cairn/values-postgres.example.yaml --strict
 #   helm upgrade --install cairn deploy/helm/cairn -f values-postgres.example.yaml
 
 image:
@@ -28,7 +28,7 @@ postgres:
 
 secrets:
   obsJwtSecret: CHANGE-ME-openssl-rand-hex-32
-  # `cairn remote hash-password` — no `$$` escaping needed here (YAML, not compose).
+  # `cairn admin hash-password` — no `$$` escaping needed here (YAML, not compose).
   obsApiPasswordHash: "$argon2id$v=19$m=65536,t=3,p=4$hdL7wUwAlItMM+v3pVfHxA$R1VstcN4/3bgfIjAOEmkCALYtjAqE4bjysDdB7zSit8"
 
 env:

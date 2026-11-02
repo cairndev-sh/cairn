@@ -13,8 +13,10 @@ import os
 os.environ.setdefault("OPENAI_API_KEY", "sk-test-dummy")
 
 import pytest
+from typer.testing import CliRunner
 
 from cairn.cli.commands import remote, replay
+from cairn.cli.main import app
 from cairn.core.engine.schema import TriggerEvent
 import cairn.core.storage as storage_mod
 from cairn.core.storage import Run, SqliteRunStore
@@ -203,3 +205,161 @@ def test_the_operators_are_what_the_record_names():
         ["a/b", "llm/complete"]
     assert replay._operators({"template_ref": "task:data/profile"}, []) == ["data/profile"]
     assert replay._operators({"template_ref": "flow:p/f"}, []) == []
+
+
+# ─── a named engine is never silently replaced by local data (the rule above remote._explicit_endpoint) ──
+
+DEAD_REMOTE = "http://prod.example.invalid:1"
+DEAD_LOCAL = "http://127.0.0.1:1"  # port 1: nothing listens there
+
+
+def _seed_dev_db(home, monkeypatch, run_id="run-x"):
+    (home / ".cairn").mkdir(exist_ok=True)
+    db = home / ".cairn" / "dev.db"
+    monkeypatch.setenv("CAIRN_STORAGE", f"sqlite:///{db}")
+    _seed_via_env(db, run_id, with_result=False)
+    monkeypatch.delenv("CAIRN_STORAGE")
+    return db
+
+
+def _save_endpoint(endpoint):
+    remote._save_config({"default_profile": "default", "profiles": {"default": {"endpoint": endpoint, "token": "t"}}})
+
+
+@pytest.mark.parametrize("name_it", ["flag", "env", "saved"])
+def test_a_dead_remote_engine_fails_and_local_data_never_stands_in(no_store, monkeypatch, name_it):
+    _seed_dev_db(no_store, monkeypatch)
+    args = ["status", "run-x", "--replay", "--json"]
+    if name_it == "flag":
+        args += ["--endpoint", DEAD_REMOTE]
+    elif name_it == "env":
+        monkeypatch.setenv("CAIRN_REMOTE_ENDPOINT", DEAD_REMOTE)
+    else:
+        _save_endpoint(DEAD_REMOTE)
+    r = CliRunner().invoke(app, args)
+    assert r.exit_code != 0, r.stdout
+    assert r.stdout == ""
+    assert DEAD_REMOTE in r.stderr
+
+
+def test_a_named_engine_that_is_down_fails_even_when_the_configured_store_has_the_run(no_store, monkeypatch):
+    db = _seed_dev_db(no_store, monkeypatch)
+    monkeypatch.setenv("CAIRN_STORAGE", f"sqlite:///{db}")
+    r = CliRunner().invoke(app, ["status", "run-x", "--replay", "--endpoint", DEAD_REMOTE])
+    assert r.exit_code != 0, r.stdout
+    assert r.stdout == "" and DEAD_REMOTE in r.stderr
+
+
+def test_a_named_engine_is_asked_before_the_configured_store_and_a_local_trace(no_store, monkeypatch):
+    db = _seed_dev_db(no_store, monkeypatch)
+    monkeypatch.setenv("CAIRN_STORAGE", f"sqlite:///{db}")
+    monkeypatch.setattr(replay, "run_dir_exists", lambda rid: True)
+    engine = _Engine()
+    monkeypatch.setattr(remote, "_reachable", lambda ep: True)
+    monkeypatch.setattr(remote, "_api", lambda ep, tok: engine)
+    r = CliRunner().invoke(app, ["status", "run-x", "--replay", "--json", "--endpoint", "http://there:1"])
+    assert r.exit_code == 0, r.stderr
+    assert engine.seen == ["run-x"]
+    assert json.loads(r.stdout)["meta"]["source"] == "engine"
+
+
+def test_naming_a_local_engine_that_is_down_fails_too(no_store, monkeypatch):
+    _seed_dev_db(no_store, monkeypatch)
+    r = CliRunner().invoke(app, ["status", "run-x", "--replay", "--endpoint", DEAD_LOCAL])
+    assert r.exit_code != 0, r.stdout
+    assert r.stdout == "" and DEAD_LOCAL in r.stderr
+
+
+@pytest.mark.parametrize("how", ["default", "env", "saved-127", "saved-localhost", "saved-ipv6"])
+def test_a_loopback_engine_that_is_down_falls_back_to_the_local_store(no_store, monkeypatch, how):
+    """Not named on this command: `cairn setup --server` saves the endpoint in the profile, and a
+    local engine that has stopped still leaves its record on this machine."""
+    db = _seed_dev_db(no_store, monkeypatch)
+    if how == "env":
+        monkeypatch.setenv("CAIRN_REMOTE_ENDPOINT", DEAD_LOCAL)
+    elif how != "default":
+        _save_endpoint({"saved-127": DEAD_LOCAL, "saved-localhost": "http://localhost:1",
+                        "saved-ipv6": "http://[::1]:1"}[how])
+    r = CliRunner().invoke(app, ["status", "run-x", "--replay", "--json"])
+    assert r.exit_code == 0, r.stderr
+    assert json.loads(r.stdout)["meta"]["source"] == "dev-db"
+    assert str(db) in r.stderr
+
+
+def test_every_source_is_named_in_the_json_and_on_stderr(no_store, monkeypatch, capsys):
+    db = _seed_dev_db(no_store, monkeypatch)
+    monkeypatch.setenv("CAIRN_STORAGE", f"sqlite://{db}?secret=hunter2")
+    monkeypatch.setattr(storage_mod, "default_store", lambda: SqliteRunStore(str(db)))
+    assert replay._run("run-x", json=True) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["meta"]["source"] == "db"
+    assert "configured store" in captured.err and "hunter2" not in captured.err, "a DSN can hold a password"
+
+    assert replay._run("run-x", json=True, source="db") == 0
+    assert json.loads(capsys.readouterr().out)["meta"]["source"] == "db"
+
+    monkeypatch.setattr(storage_mod, "default_store", lambda: SqliteRunStore(str(no_store / "empty.db")))
+    monkeypatch.setattr(remote, "_reachable", lambda ep: True)
+    monkeypatch.setattr(remote, "_api", lambda ep, tok: _Engine())
+    assert replay._run("run-x", json=True) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["meta"]["source"] == "engine"
+    assert "the engine at" in captured.err
+
+
+def test_a_local_trace_is_named_as_the_source(no_store, monkeypatch, capsys):
+    from cairn.cli.runs import write_meta  # noqa: PLC0415
+
+    write_meta("run-t", {"status": "done"})
+    assert replay._run("run-t", json=True) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["meta"]["source"] == "file"
+    assert "local trace" in captured.err
+
+
+@pytest.mark.parametrize("source", ["file", "db"])
+def test_a_named_engine_does_not_go_with_a_source_that_would_ignore_it(no_store, source):
+    r = CliRunner().invoke(app, ["status", "run-x", "--replay", "--source", source, "--endpoint", DEAD_LOCAL])
+    assert r.exit_code != 0 and "--endpoint" in r.stderr
+
+
+def test_nowhere_offers_no_option_the_command_does_not_have(no_store, monkeypatch):
+    monkeypatch.setattr(remote, "_reachable", lambda ep: False)
+    r = CliRunner().invoke(app, ["replay", "run-x"])
+    assert r.exit_code == 1 and "--endpoint" not in r.stderr
+
+
+@pytest.mark.parametrize("command", [["replay", "pl_abc"], ["status", "pl_abc", "--replay"]])
+def test_both_spellings_point_a_pipeline_at_its_runs(no_store, command):
+    r = CliRunner().invoke(app, command)
+    assert r.exit_code == 1 and "cairn status pl_abc --logs" in r.stderr
+
+
+@pytest.mark.parametrize("endpoint, loopback", [
+    ("http://localhost:8000", True),
+    ("http://LOCALHOST:8000", True),
+    ("http://127.0.0.1:8000", True),
+    ("http://127.1.2.3:8000", True),
+    ("http://[::1]:8000", True),
+    ("http://evil.example@localhost:8000", True),   # the host really is localhost
+    ("http://localhost.evil.example:8000", False),
+    ("http://127.0.0.1.evil.example:8000", False),
+    ("http://localhost@evil.example:8000", False),
+    ("http://evil.example/localhost", False),
+    ("http://evil.example#@localhost", False),
+    ("http://0.0.0.0:8000", False),
+    ("http://[::1", False),                          # malformed: fails closed, no traceback
+    ("localhost:8000", False),
+])
+def test_only_a_host_that_is_this_machine_counts_as_loopback(endpoint, loopback):
+    """The local store stands in only for a local engine, so a look-alike must not pass (#369)."""
+    assert replay._is_loopback(endpoint) is loopback
+
+
+def test_a_password_in_the_endpoint_is_never_printed(no_store, monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    r = CliRunner().invoke(
+        app, ["status", "run-x", "--replay", "--endpoint", "http://user:hunter2@prod.example.invalid:1"])
+    assert r.exit_code == 1
+    assert "hunter2" not in r.output and "user:" not in r.output
+    assert "prod.example.invalid" in r.output

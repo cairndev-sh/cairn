@@ -50,7 +50,7 @@ Executing anything. Operator code. Persisting runs. The console's notion of "ins
 ## Public interface
 - Authoring: `pack.toml` (schema = `manifest.py`), the asset directory conventions, `Pack.from_manifest`.
 - Engine-side: `ensure_loaded()`, `get_packs()`, `get_pack(name)`, the `all_*()` aggregators, `load_profile_from_env()`.
-- CLI: `cairn init pack`, `cairn pack add [--dev]`, `cairn pack check`, `cairn ls`, `cairn doctor`, `cairn lock`.
+- CLI: `cairn pack new pack`, `cairn pack add [--dev]`, `cairn pack check`, `cairn pack ls`, `cairn setup --check`, `cairn pack lock`.
 
 ## Dependencies
 `core/pack` → `core/<top>` (4), `core/triggers` (3 lazy: trigger specs in composition/registry), `core/operator` (3), `core/schema` (1). Domain packs → `cairn.core.pack.Pack` only (11 edges) — except `packs/incident/__init__.py:16` → `cairn_platform.integrations.observability.mock.backend` (lazy).
@@ -95,4 +95,4 @@ entry-point group, so a normal install does not load them (they would load only 
 | Packs are self-sufficient; no cross-pack executable refs (ADR-0084 D5) | PARTIALLY: `packs/training/flows/finetune.md` still composes `dataset-readiness/check` as a `subgraph_node` (the ADR said this one ref would be internalised); `compiler.py:1115 _warn_cross_pack` warns | |
 | `pack.toml` uses `kind` (ADR-0083 D4) | OBSERVED: manifests carry `kind = "domain"`; ADR-0020 (locked) still specifies `type = "domain"` → **CONFLICT between a locked ADR and shipped manifests** (operator packs carry both `type` and `kind`) | |
 | `[provides]` encapsulation | permissive default (no `[provides]` → everything visible) — DOCUMENTED `docs/architecture.md` §Pack composition; enforced in `pack/visibility.py` | |
-| Shipped pack closure is hash-pinned | CONFIRMED: `cairn.lock` + CI `cairn lock --check` | |
+| Shipped pack closure is hash-pinned | CONFIRMED: `cairn.lock` + CI `cairn pack lock --check` | |

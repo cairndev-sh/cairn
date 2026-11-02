@@ -1,6 +1,6 @@
 """`examples/ci` gates on a check that ships, and a bad file blocks it.
 
-Runs `cairn gate` the way the copy-paste workflows do, from a directory holding
+Runs `cairn run --check` the way the copy-paste workflows do, from a directory holding
 `templates/dataset-check.md`, on the public core alone. A missing file has to block,
 through the template's own fallback, on released versions as well as this one.
 """
@@ -22,7 +22,7 @@ def _gate(path: Path, *flags: str) -> tuple[int, dict]:
     env = {k: v for k, v in os.environ.items() if k != "CAIRN_PACK_PATH"}
     env["PYTHONPATH"] = os.pathsep.join(p for p in sys.path if p)  # this code, not an installed copy
     done = subprocess.run(
-        [sys.executable, "-m", "cairn.cli.main", "gate", "dataset-check",
+        [sys.executable, "-m", "cairn.cli.main", "run", "--check", "dataset-check",
          "--set", f"path={path}", "--json", *flags],
         cwd=CI, env=env, capture_output=True, text=True, timeout=120,
     )
@@ -65,5 +65,5 @@ def test_a_file_that_cannot_be_read_blocks(tmp_path, content):
 @pytest.mark.parametrize("name", ["github-actions-gate.yml", "gitlab-ci-gate.yml", "README.md"])
 def test_the_copy_paste_files_name_the_check_that_ships(name):
     text = (CI / name).read_text()
-    assert "cairn gate dataset-check" in text
+    assert "cairn run --check dataset-check" in text
     assert "dataset-readiness" not in text

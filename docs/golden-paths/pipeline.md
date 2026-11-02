@@ -9,13 +9,13 @@ specialisations of it.
 ## Trigger
 - `POST /start {"ref": "<pack>/<pipeline>", "inputs": {...}, "kind": "pipeline"?}` (console launch dialog, `cairn-client`, MCP).
 - `POST /pipelines/launch` (older door, same function).
-- `cairn pipeline run <pack>/<name> --set k=v`.
+- `cairn run <pack>/<name> --set k=v`.
 - Cron/`on:` (`dispatch/scheduler.py:55 fire_scheduled_workflow`), a declared `watch` trigger, or the `monitor/dispatch` operator.
 
 ## Execution diagram
 ```mermaid
 flowchart TD
-  A[POST /start · cairn pipeline run] --> B[resolve_start_ref<br/>dispatch/start.py:179]
+  A[POST /start · cairn run] --> B[resolve_start_ref<br/>dispatch/start.py:179]
   B --> C[launch_pipeline<br/>dispatch/pipeline_launch.py:161]
   C --> C1[resolve_or_raise :66 → PipelineDef]
   C1 --> C2[assert_runnable<br/>engine/pipeline_resolve.py:152]
@@ -112,11 +112,10 @@ sequences and records.
 outputs, artifacts registered, bus events, console rows (`routers/pipelines.py:393 list_pipelines`).
 
 ## Tests
-`tests/core/test_pipeline_launch.py`, `test_pipeline_bridge.py`, `test_pipeline_bridge_e2e.py`,
-`test_pipeline_governance_wiring.py`, `test_policy_injected_gates.py`, `test_leg_executor.py`,
-`test_leg_approval_gates.py`, `test_flow_leg_gate_guard.py`, `test_pipeline_drift_guard.py`,
-`test_pipeline_leg_timeout.py`, `test_pipeline_artifacts.py`, `test_target_concurrency.py`,
-`test_temporal_owner_leg_kinds.py`, `test_temporal_owner_readopt.py`, `test_run_template_ref.py`.
+`tests/core/test_pipeline_bridge.py`, `test_pipeline_gates.py`, `test_pipeline_task_leg.py`,
+`test_policy_injected_gates.py`, `test_leg_executor.py`, `test_leg_retry.py`, `test_leg_readopt.py`,
+`test_flow_leg_gate_guard.py`, `test_pipeline_leg_timeout.py`, `test_target_concurrency.py`,
+`test_temporal_owner_capability.py`.
 
 ## Where to modify it
 | Change | File |

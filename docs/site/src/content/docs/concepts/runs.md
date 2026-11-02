@@ -133,8 +133,7 @@ It does not mean the log can't be rewritten. The chain has no key and nothing
 outside the file to compare with, so anyone who can write the file can recompute
 the hashes. These all exit 0 from `cairn admin audit verify`:
 
-- a forged row appended at the end, linked correctly to the last row, which is the
-  cheapest forgery of all
+- a forged row appended at the end, linked correctly to the last row
 - the last rows cut off, or the whole file emptied (an empty log verifies)
 - a row changed and every hash after it recomputed
 - the whole file rewritten, with every hash recomputed
@@ -176,12 +175,12 @@ end, and fails if one of them answers differently. Its result lists each case it
 
 | Where | What you get |
 |---|---|
-| `cairn remote pipeline <id>` | a pipeline's full record from a server, as JSON: plan, inputs, governance, every step's state |
-| `cairn remote findings <id>` | every leg's outputs for a pipeline |
-| `cairn remote ps` · `cairn remote status <run-id>` · `cairn remote logs <run-id>` | the runs on a server, one run's record, its event log |
-| `cairn replay <run-id>` | a past run's recorded event trace, rendered as a timeline; it does not run anything again |
-| `cairn audit verify` | whether the audit log's hash chain holds, with the row count, first and last timestamp and head hash |
-| `cairn lineage [subject]` | lineage records in the audit log, with the hash chain checked as it reads |
+| `cairn status <id> --json` | a pipeline's full record from a server, as JSON: plan, inputs, governance, every step's state |
+| `cairn status <id> --results` | every leg's outputs for a pipeline |
+| `cairn status` · `cairn status <run-id>` · `cairn status <run-id> --logs` | the runs on a server, one run's record, its event log |
+| `cairn status <run-id> --replay` | a past run's recorded event trace, rendered as a timeline; it does not run anything again |
+| `cairn admin audit verify` | whether the audit log's hash chain holds, with the row count, first and last timestamp and head hash |
+| `cairn admin lineage [subject]` | lineage records in the audit log, with the hash chain checked as it reads |
 | `GET /pipelines/<id>` · `GET /pipelines/<id>/findings` | the same over the HTTP API |
 
 The operator that writes lineage records is part of cairn-platform, as is the

@@ -47,7 +47,7 @@ stages:
 - The same content always gives the same version: running it twice on an
   unchanged file adds no new version.
 
-`cairn flow ls` should now list it:
+`cairn pack ls --flows` should now list it:
 
 ```text
   acme/keep  kind=data stages=1
@@ -79,7 +79,7 @@ input and wires it through, so the leg needs no `with:` block. Declaring
 description.
 
 ```text
-$ cairn pipeline show acme/keep-file
+$ cairn pack show acme/keep-file
 acme/keep-file  —  Record one file as a dataset version.
   hash: sha256:4574efcf2bee1cc8
   inputs: register, source
@@ -90,13 +90,13 @@ acme/keep-file  —  Record one file as a dataset version.
 ## 4. Try it in the sandbox
 
 ```bash
-cairn remote launch acme/keep-file -i source=$PWD/train.jsonl --environment sandbox --watch
+cairn run acme/keep-file -i source=$PWD/train.jsonl --environment sandbox
 ```
 
 Then read what the stage reported:
 
 ```text
-$ cairn remote findings pl_2066d9105a384e3e
+$ cairn status pl_2066d9105a384e3e --results
 pipeline pl_2066d9105a384e3e  status=done
   keep  [done] run=run-flow-acme--keep-eb33b0
     artifact_ids                 [1 items]   (--json for the full value)

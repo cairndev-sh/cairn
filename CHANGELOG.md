@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Added
 - The example pack's `over-budget` pipeline shows a budget refusing a run before its engine starts, with no key and no spend, and `cairn run` now prints why a leg failed (#368).
 
+### Fixed
+- `cairn setup --check` and `cairn doctor` no longer print the path of a secret URL. A Slack webhook's token is in its path, and 0.3.2 through 0.4.0 printed it in full: `set: https://hooks.slack.com/services/...`. They now show `https://hooks.slack.com/***`. If you shared that output, for example in a bug report, rotate the webhook.
 
 ## [0.4.0] - 2026-11-02
 

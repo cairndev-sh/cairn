@@ -95,7 +95,7 @@ the expression; there is no string interpolation. The
 
 ## The launch door
 
-`cairn pipeline run`, `cairn remote launch`, `POST /start` on the HTTP API and
+`cairn run`, `POST /start` on the HTTP API and
 a trigger all start a pipeline through the same launch code. In order, it:
 
 1. resolves the reference (`<pack>/<name>`, optionally prefixed `pipeline:`),

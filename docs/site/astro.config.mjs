@@ -134,6 +134,7 @@ export default defineConfig({
             { label: 'What is cairn', slug: '' },
             { label: 'Quickstart', slug: 'quickstart' },
             { label: 'Install and deploy', slug: 'install' },
+            { label: 'FAQ', slug: 'faq' },
           ],
         },
         {
@@ -145,6 +146,7 @@ export default defineConfig({
             { label: 'Gates and approvals', slug: 'concepts/gates' },
             { label: 'Cost and budgets', slug: 'concepts/cost' },
             { label: 'Runs and the record', slug: 'concepts/runs' },
+            { label: 'How cairn compares', slug: 'compare' },
           ],
         },
         {

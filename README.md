@@ -32,6 +32,10 @@
   <a href="https://github.com/cairndev-sh/cairn-extensions">Extensions</a>
 </p>
 
+<p align="center">
+  <sub>The live demo runs a web console that isn't part of this repository. <a href="#what-cairndev-includes">What <code>cairndev</code> includes</a>.</sub>
+</p>
+
 ---
 
 ## What is cairn?
@@ -49,6 +53,18 @@ lets any operator inherit the budget, policy gate, and audit for free.
 
 cairn is **open source** (Apache 2.0) and **self-hosted**: your keys, your
 GPUs, your logs — nothing leaves your perimeter.
+
+## What cairndev includes
+
+`pip install cairndev` gives you the engine, the `cairn` command, the API server
+(`cairn-server`), the client (`cairn-client`) and the builtin operator packs, under
+Apache 2.0. Domain packs and more operator packs are separate Apache 2.0 wheels from
+[cairn-extensions](https://github.com/cairndev-sh/cairn-extensions).
+
+The web console, and the operator packs for GPU providers and managed training, are
+part of cairn-platform. Everything in the [docs](https://docs.cairndev.sh) runs on the
+open-source packages, unless a page says otherwise. The [live demo](https://demo.cairndev.sh) runs that console, so
+it shows things you won't get from `pip install cairndev`.
 
 ## Extensions
 
@@ -78,8 +94,8 @@ work runs behind deterministic guardrails you can inspect afterward:
 - **Policy + human approval** — proposed actions pass declarative policy rules
   before any executor runs; high-risk ones (promote a model, destroy a
   resource) pause for a human and resume durably from a checkpoint.
-- **Recorded runs** — every run on an engine stores its inputs, the operator or flow
-  it ran, and its events. `cairn status <run-id> --replay` prints them. It doesn't
+- **Recorded runs** — every run on an engine stores its inputs, the operator, flow or
+  template it ran, and its events. `cairn status <run-id> --replay` prints them. It doesn't
   execute anything again: it shows what happened, and doesn't reproduce the result.
 - **Tamper-evident audit** — with `audit.sink` bound, approvals and every governed
   pipeline step land in a hash-chained, append-only log: what ran, what it cost, who
@@ -125,10 +141,9 @@ curl -LsSfO https://raw.githubusercontent.com/cairndev-sh/cairn/main/examples/he
 curl -LsSfO https://raw.githubusercontent.com/cairndev-sh/cairn/main/examples/hello-cairn/profiles/hello.toml
 export CAIRN_PROFILE=$PWD/hello.toml                        # the example's profile: audit trail on
 
-cairn dev --engine-only --port 8471 &                       # local engine on SQLite
-cairn remote login -u dev -p dev -e http://localhost:8471
-cairn remote launch hello-cairn/profile-and-publish \
-  -i path=$PWD/sample.jsonl --environment sandbox --watch
+cairn setup --port 8471                                     # local engine on SQLite, signed in as dev
+cairn run hello-cairn/profile-and-publish \
+  -i path=$PWD/sample.jsonl --environment sandbox
 ```
 
 The pipeline profiles the file, passes its **data gate** (the profile must pass and
@@ -146,15 +161,24 @@ count at least 10 rows), redacts and versions the file, and stops at `review`, a
     promote            pending              run=None
     publish            pending              run=None
     audit              pending              run=None
-⏸ paused — 1 step(s) waiting on a human
+  gate review  (approvers: data-owners)
+    profile.verdict       pass
+    profile.record_count  20
+    …
+→ approve   cairn decide pl_3f5b6ec6a25d414d approve --step review --approver you
+→ findings  cairn status pl_3f5b6ec6a25d414d --results
+→ watch     cairn status pl_3f5b6ec6a25d414d --follow
+Approve this step? [a]pprove / [r]eject / [s]kip (detach)
 ```
 
-Approve it, then the promotion the operator itself gates, and read the record:
+Answer `a`, then `a` again at `promote`, the gate the operator itself adds. With `s`, or with
+no terminal to ask on, the pipeline stays waiting, and these answer from any shell. The last
+one reads the record:
 
 ```bash
-cairn remote advance <pipeline_id> review     # the person gate
-cairn remote advance <pipeline_id> promote    # the operator's own gate
-cairn remote findings <pipeline_id>           # what every leg produced
+cairn decide <pipeline_id> approve --step review     # the person gate
+cairn decide <pipeline_id> approve --step promote    # the operator's own gate
+cairn status <pipeline_id> --results                 # what every leg produced
 ```
 
 ```text
@@ -167,15 +191,16 @@ pipeline pl_3f5b6ec6a25d414d  status=done
     hash  af362a96212cf0d5298dfe71e81b5109d08a0219f3079387550e753f2fa25466
 ```
 
-`cairn remote pipeline <pipeline_id>` prints the whole record as JSON: the plan, the
+`cairn status <pipeline_id> --json` prints the whole record as JSON: the plan, the
 inputs, and every step's state and decision. The audit trail is in `./audit.jsonl`:
 rows for the launch, each step, each decision a person made, with the signed-in user
 (`pipeline.gate_approved`), and the row the pipeline's own `audit` step writes. Each
-row is chained to the one before it by its hash, and `cairn audit verify` checks the
+row is chained to the one before it by its hash, and `cairn admin audit verify` checks the
 file. Try `-i min_rows=1000` to watch the data gate stop the pipeline before any later
 step starts. The full walkthrough is the [Quickstart](https://docs.cairndev.sh/quickstart/);
 to look around without installing, use the live demo at https://demo.cairndev.sh (a
-shared sandbox, so don't enter real credentials).
+shared sandbox, so don't enter real credentials). It runs a web console that isn't part
+of this repository ([what `cairndev` includes](#what-cairndev-includes)).
 
 To watch a budget refuse a run, with no key and no spend, start a pipeline whose estimate
 is above its cap:
@@ -203,7 +228,7 @@ From source:
 ```bash
 git clone https://github.com/cairndev-sh/cairn && cd cairn
 uv sync --extra dev
-CAIRN_PACK_PATH=examples/hello-cairn uv run cairn pipeline explain hello-cairn/profile-and-publish
+CAIRN_PACK_PATH=examples/hello-cairn uv run cairn run --dry-run hello-cairn/profile-and-publish
 ```
 
 The engine ships as the `cairndev` distribution (import name `cairn`), carrying the
