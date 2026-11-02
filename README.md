@@ -81,8 +81,11 @@ work runs behind deterministic guardrails you can inspect afterward:
 - **Reproducible runs** — every run stores its validated inputs, a content-
   addressed schema hash, and the exact operators it resolved to. Replay any run;
   explain any result.
-- **Tamper-evident audit** — every model call, tool call, and approval lands in
-  a hash-chained, append-only log: what ran, what it cost, who approved it.
+- **Tamper-evident audit** — with `audit.sink` bound, approvals and every governed
+  pipeline step land in a hash-chained, append-only log: what ran, what it cost, who
+  approved it. So do direct model completions and `mcp/call` tool calls; a template's own
+  prompt and agent nodes don't write a row yet. The quickstart's profile, the
+  `secure` profile and the Compose stack bind it; `local-dev` leaves it off.
 - **Citation validation** — for synthesized answers, every identifier the model
   cites is exact-string-matched against its context; unmatched citations are
   stripped.
@@ -112,12 +115,14 @@ cairndev 0.3.3, `uv.lock` `43c69f31e985`, Linux x86_64 with 4 CPUs and Python 3.
 ## Quickstart
 
 Run a governed pipeline on your machine: it checks a dataset, stops at a gate for
-you, and writes an audit row. No API key, no spend, about ten minutes.
+you, and writes a hash-chained audit trail. No API key, no spend, about ten minutes.
 
 ```bash
 curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_EXTRAS=hello sh   # or: pip install 'cairndev[hello]'
 mkdir cairn-quickstart && cd cairn-quickstart
 curl -LsSfO https://raw.githubusercontent.com/cairndev-sh/cairn/main/examples/hello-cairn/data/sample.jsonl
+curl -LsSfO https://raw.githubusercontent.com/cairndev-sh/cairn/main/examples/hello-cairn/profiles/hello.toml
+export CAIRN_PROFILE=$PWD/hello.toml                        # the example's profile: audit trail on
 
 cairn dev --engine-only --port 8471 &                       # local engine on SQLite
 cairn remote login -u dev -p dev -e http://localhost:8471
@@ -162,10 +167,12 @@ pipeline pl_3f5b6ec6a25d414d  status=done
 ```
 
 `cairn remote pipeline <pipeline_id>` prints the whole record as JSON: the plan, the
-inputs, and every step's state and decision. The audit row lands in `./audit.jsonl`,
-chained to the row before it by its hash. Try
-`-i min_rows=1000` to watch the data gate stop the pipeline before anything is
-written. The full walkthrough is the [Quickstart](https://docs.cairndev.sh/quickstart/);
+inputs, and every step's state and decision. The audit trail is in `./audit.jsonl`:
+rows for the launch, each step, each decision a person made, with the signed-in user
+(`pipeline.gate_approved`), and the row the pipeline's own `audit` step writes. Each
+row is chained to the one before it by its hash, and `cairn audit verify` checks the
+file. Try `-i min_rows=1000` to watch the data gate stop the pipeline before any later
+step starts. The full walkthrough is the [Quickstart](https://docs.cairndev.sh/quickstart/);
 to look around without installing, use the live demo at https://demo.cairndev.sh (a
 shared sandbox, so don't enter real credentials).
 

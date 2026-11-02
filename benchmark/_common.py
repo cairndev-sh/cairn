@@ -82,9 +82,11 @@ def _free_port() -> int:
 
 
 class LocalEngine:
-    """``cairn dev --engine-only`` in a scratch HOME on a free port, with the example pack."""
+    """``cairn dev --engine-only`` in a scratch HOME on a free port, with the example pack, under
+    ``profile`` when one is given."""
 
-    def __init__(self) -> None:
+    def __init__(self, profile: Optional[Path] = None) -> None:
+        self.profile = profile
         self._scratch = tempfile.TemporaryDirectory(prefix="cairn-benchmark-")
         self.home = Path(self._scratch.name)
         self.port = _free_port()
@@ -102,6 +104,8 @@ class LocalEngine:
         env = {k: v for k, v in os.environ.items() if not k.startswith(("CAIRN_", "OBS_"))}
         env.update({"HOME": str(self.home), "CAIRN_AUDIT_LOG": str(self.audit_log),
                     "CAIRN_PACK_PATH": str(REPO / "examples" / "hello-cairn")})
+        if self.profile is not None:
+            env["CAIRN_PROFILE"] = str(self.profile)
         log = open(self.home / "engine.log", "wb")
         start = time.monotonic()
         self._proc = subprocess.Popen(cmd, cwd=self.home, env=env, stdout=log, stderr=subprocess.STDOUT,
