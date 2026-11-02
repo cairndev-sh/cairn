@@ -22,6 +22,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from cairn.core import holdout as holdout_module
 from cairn.core.admission_door import ADMITTED, REFUSED, AdmissionRefusedError, decide_admission
 from cairn.core.dataflow.contract import ArtifactDescriptor
 from cairn.core.dataset_roles import DatasetRoleError, row_id
@@ -368,7 +369,7 @@ async def test_a_registry_with_no_dataset_roles_reads_as_not_checked(registry):
     assert verdict.warnings == ["registry does not support dataset roles — holdout NOT checked"]
 
 
-async def test_no_storage_configured_reads_as_not_checked_and_a_run_can_launch(monkeypatch):
+async def test_no_storage_configured_reads_as_not_checked(monkeypatch):
     monkeypatch.setenv("CAIRN_STORAGE", "")
     monkeypatch.setenv("OBS_STORAGE", "")
     verdict = await _check({"train": "dataset:corpus@1"})
@@ -376,7 +377,8 @@ async def test_no_storage_configured_reads_as_not_checked_and_a_run_can_launch(m
     assert verdict.warnings == ["dataset:corpus@1: not registered — nothing to check"]
 
 
-async def test_a_malformed_cutoff_reads_as_not_checked_not_as_no_cutoff(registry):
+async def test_a_malformed_cutoff_says_nothing_was_compared(registry):
+    """What the verdict says today, not that this outcome is right: see the strict xfails for #396."""
     await registry.version("eval-set", HOLDOUT, role="test")
     dirty = await registry.version("corpus", [SHARED])
     verdict = await _check({"train": dirty, "eval_cutoff": "last tuesday"})
@@ -465,7 +467,7 @@ async def test_a_launch_is_refused_before_any_record_exists(registry):
     assert bridge.calls == []
 
 
-async def test_a_clean_launch_reaches_the_record_with_the_verdict_on_it(registry):
+async def test_a_clean_launch_reaches_the_bridge_with_the_verdict(registry):
     await registry.version("eval-set", HOLDOUT, role="test")
     clean = await registry.version("corpus", TRAIN)
     bridge = _Bridge()
@@ -490,8 +492,9 @@ async def test_an_unreadable_holdout_does_not_refuse_a_launch_and_the_record_say
 
 
 def _dispatcher(monkeypatch):
-    """A real dispatcher over the real run store. Only compute is stubbed: the template lookup,
-    its compilation and the run itself."""
+    """A real dispatcher over the real run store. Stubbed: the template lookup, its compilation
+    and the run itself, plus operator and pack loading and the operator list those need, which
+    also turns off the job-channel and engine doors. The holdout door and the store are real."""
     from cairn.core.dispatch.dispatcher import RunDispatcher
     from cairn.core.storage import build_storage
 
@@ -637,3 +640,64 @@ def test_the_door_hashes_a_row_exactly_as_the_pack_does(row, expected):
 ])
 def test_the_door_shingles_a_row_exactly_as_the_pack_does(row, n, expected):
     assert row_shingles(row, n) == expected
+
+
+# The door's known gaps, as what its own text promises. Each fails today, on purpose: strict, so a
+# fix has to remove the marker. What it should do when it can't compare at all is #399.
+
+@pytest.mark.xfail(strict=True, reason="#396 a malformed cutoff turns the door off")
+async def test_a_malformed_cutoff_does_not_admit_an_overlapping_launch(registry):
+    await registry.version("eval-set", HOLDOUT, role="test")
+    dirty = await registry.version("corpus", [SHARED])
+    decision = await decide_admission({"train": dirty, "eval_cutoff": "last tuesday"}, workspace_id=WS, policies=[])
+    assert decision.verdict != ADMITTED
+
+
+@pytest.mark.xfail(strict=True, reason="#396 a malformed cutoff turns the door off")
+async def test_a_malformed_cutoff_does_not_let_an_overlapping_run_start(registry, monkeypatch):
+    await registry.version("eval-set", HOLDOUT, role="test")
+    dirty = await registry.version("corpus", [SHARED])
+    d = _dispatcher(monkeypatch)
+    with pytest.raises(ValueError):
+        await d.run_template("demo/train", {"train": dirty, "eval_cutoff": "last tuesday"},
+                             bundle_pipeline_id="p-1", step_id="train")
+
+
+@pytest.mark.xfail(strict=True, reason="#396 one bad row date voids the door for every holdout")
+async def test_one_bad_row_date_does_not_void_the_other_holdouts(registry):
+    await registry.version("eval-set", [SHARED], role="test")
+    await registry.version("eval-bad-date", [{"id": "other", "text": "x", "dated_at": "not a date"}], role="test")
+    dirty = await registry.version("corpus", [SHARED])
+    verdict = await _check({"train": dirty, "eval_cutoff": "2026-06-01"})
+    assert verdict.ok is False
+
+
+@pytest.mark.xfail(strict=True, reason="#397 preflight doesn't find the cutoff the door reads")
+async def test_preflight_agrees_with_the_door_on_a_cutoff(registry, monkeypatch):
+    await registry.version("eval-later", HOLDOUT, role="test", dated_at="2026-06-02")
+    dirty = await registry.version("corpus", [SHARED])
+    values = {"train": dirty, "eval_cutoff": "2026-06-01"}
+    assert (await _check(values)).ok is True
+    verdict = await _preflight(monkeypatch, values)
+    assert [b for b in verdict.blockers if b.kind == "holdout-overlap"] == []
+
+
+@pytest.mark.xfail(strict=True, reason="#398 a capped read isn't reported")
+async def test_a_version_past_the_row_cap_is_reported_as_truncated(registry, monkeypatch):
+    monkeypatch.setattr(holdout_module, "MAX_ROWS", 2)
+    await registry.version("eval-set", HOLDOUT, role="test")
+    verdict = await _check({"train": await registry.version("corpus", [*TRAIN, SHARED])})
+    assert not verdict.ok or any("truncated" in w for w in verdict.warnings)
+
+
+@pytest.mark.xfail(strict=True, reason="#398 data the door didn't read scores clean")
+async def test_a_directory_with_no_jsonl_rows_is_not_scored_clean(registry, tmp_path):
+    shards = tmp_path / "shards"
+    shards.mkdir()
+    (shards / "part-0.parquet").write_bytes(b"PAR1 not read by the door")
+    digest = hashlib.sha256(b"dir").hexdigest()
+    await registry.store.register(ArtifactDescriptor(uri=f"file://{shards}", kind="dataset", content_hash=digest),
+                                  producer_run_id="prep", workspace_id=WS)
+    await registry.store.register_dataset_version("eval-dir", digest, actor="prep", role="test", workspace_id=WS)
+    verdict = await _check({"train": await registry.version("corpus", [SHARED])}, near_dup=False)
+    assert verdict.warnings
