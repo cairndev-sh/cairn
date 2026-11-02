@@ -57,6 +57,12 @@ class StepState(BaseModel):
     status: str = "pending"
     verdict: Optional[str] = None  # the step's gate/exit verdict, if any (pass|warn|fail|…)
     approver: Optional[str] = None  # who approved an approval-gated step (ADR-0069 §2, #746)
+    #: #258 — what the person at a gate is asked to decide on: its ``show:`` fields,
+    #: approvers, spend against the cap, cost estimate and admission decision, as the
+    #: audit event and the review record hold it (``gate_context_for`` plus the bridge's
+    #: evidence). Set when the gate pauses and kept after the decision, so the record
+    #: says what was shown. In the JSON blob, so no migration; older rows read None.
+    gate_context: Optional[dict] = None
     started_at: Optional[str] = None
     # when the step entered an awaiting_* state — the replay cursor for on:<event> catch-up
     # on a durable bus (#763): an event published since here still fires it after a restart.

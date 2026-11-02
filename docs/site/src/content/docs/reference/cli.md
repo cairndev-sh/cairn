@@ -121,7 +121,7 @@ running on the server; log in again and re-attach with `cairn remote pipeline <i
 | `cairn remote login -e <url>` | Signs in and stores the token. |
 | `cairn remote pipelines` | Lists the pipelines on the server. |
 | `cairn remote launch <ref>` | Launches a pipeline. `-i key=value`, `--preset` to start from a saved input set, `--watch` to follow it. |
-| `cairn remote pipeline <id>` | One pipeline's full record: its plan and the state of every step. |
+| `cairn remote pipeline <id>` | One pipeline's full record: its plan and the state of every step, with what each gate shows its approver (`gate_context`). |
 | `cairn remote advance <id> <step>` | Approves a step waiting on a person: a gate, or a leg whose operator or policy asks for approval. Under sign-in the server records your identity. |
 | `cairn remote findings <id>` | A run's findings, or every step's findings for a pipeline. |
 | `cairn remote cancel-pipeline <id>` | Cancels a pipeline and its running legs. |

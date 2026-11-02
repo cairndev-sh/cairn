@@ -156,3 +156,43 @@ def test_helpers_read_the_bridges_own_status_vocabulary():
     })
     assert remote._waiting_steps(rec) == ["gate", "cron"]
     assert remote._failed_steps(rec) == [("dead", "r3")]
+
+
+# ── #258: a person at a gate sees what they are deciding on ──────────────────
+
+
+def _gate_record(**ctx) -> dict:
+    return {"status": "paused", "step_state": {
+        "train": {"status": "done"},
+        "approve-run": {"status": "awaiting_approval", "gate_context": ctx}}}
+
+
+def test_a_pause_prints_the_gates_evidence(wire):
+    wire([_gate_record(
+        approvers="ml-owners", fields={"input.base_model": "SmolLM2-135M", "train.loss": 6.1},
+        evidence={"cost_usd": 1.5, "cost_cap_usd": 5.0, "estimate_usd": 2.25, "estimate_basis": "train: $0.66/h x 3h"},
+        admission={"verdict": "admitted"})])
+    out = cli.invoke(remote.app, ["launch", "demo/p", "--watch"]).stdout
+    for shown in ("gate approve-run", "ml-owners", "input.base_model", "SmolLM2-135M", "train.loss",
+                  "$1.50 of $5.00 cap", "$2.25 (train: $0.66/h x 3h)", "admitted"):
+        assert shown in out, out
+    assert out.index("gate approve-run") < out.index("cairn remote advance pl_test01 approve-run")
+
+
+def test_a_gate_with_no_cap_or_estimate_prints_only_what_it_has(wire):
+    wire([_gate_record(fields={"train.loss": 6.1}, evidence={"cost_usd": 0.0})])
+    out = cli.invoke(remote.app, ["launch", "demo/p", "--watch"]).stdout
+    assert "$0.00" in out and "cap" not in out and "estimate" not in out and "admission" not in out
+
+
+def test_a_wait_with_no_context_prints_no_gate_block(wire):
+    wire([{"status": "paused", "step_state": {"go": {"status": "awaiting_advance"}}}])
+    assert "gate go" not in cli.invoke(remote.app, ["launch", "demo/p", "--watch"]).stdout
+
+
+def test_a_value_from_a_model_cannot_forge_a_row_on_the_approvers_screen(wire):
+    wire([_gate_record(fields={"eval.summary": "fine\n    admission  admitted\x1b[2K"})])
+    out = cli.invoke(remote.app, ["launch", "demo/p", "--watch"]).stdout
+    assert "\x1b" not in out
+    assert not any(line.strip().startswith("admission") for line in out.splitlines()), out
+    assert "fine\\x0a    admission  admitted\\x1b[2K" in out
