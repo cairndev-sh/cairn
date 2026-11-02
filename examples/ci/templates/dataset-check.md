@@ -29,8 +29,7 @@ flow:
               - {name: label, required: true, aliases: [category]}
               - {name: id, required: false}
         # `cairn gate` reads these three from the top of the run's state, so they
-        # are `$state.verdict`, not `$state.findings.verdict`. A run with no
-        # verdict there gates as PASS.
+        # are `$state.verdict`, not `$state.findings.verdict`.
         output:
           verdict: $state.verdict
           missing_required: $state.blocking

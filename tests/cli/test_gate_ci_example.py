@@ -1,8 +1,8 @@
 """`examples/ci` gates on a check that ships, and a bad file blocks it.
 
 Runs `cairn gate` the way the copy-paste workflows do, from a directory holding
-`templates/dataset-check.md`, on the public core alone. A missing file has to block:
-`cairn gate` reads no verdict from a run whose operator failed, and that exits 0.
+`templates/dataset-check.md`, on the public core alone. A missing file has to block,
+through the template's own fallback, on released versions as well as this one.
 """
 from __future__ import annotations
 
