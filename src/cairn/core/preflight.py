@@ -283,7 +283,7 @@ async def build_preflight(
     for reason in (await check_pull_worker(op_names)).reasons:
         blockers.append(Blocker(kind="service-unreachable", what=reason,
                                 fix="start a worker on the machine that should run it: "
-                                    "cairn worker --pull --engine-url <url> --token <token>"))
+                                    "cairn admin worker --pull --engine-url <url> --token <token>"))
 
     # 4. gates — approvals that will pause the run (heads-up, not a blocker).
     gates = [GateInfo(step=str(a)) for a in (plan.get("approvals_required", []) or [])]

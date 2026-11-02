@@ -9,7 +9,7 @@ from cairn.cli.commands import compute
 def test_missing_connection_hints_at_connect_ls() -> None:
     res = CliRunner().invoke(compute.app, ["status"])
     assert res.exit_code == 2  # the usage-error code a missing argument always had
-    assert "cairn connect ls" in res.output
+    assert "cairn admin connect ls" in res.output
 
 
 def test_sweep_without_a_region_says_how_to_give_one(monkeypatch) -> None:

@@ -279,7 +279,7 @@ def _remediation(operators, connected_names):  # noqa: ANN001
             out.append(Remediation(
                 kind="mcp",
                 what=f"MCP server {op.mcp_server!r} (needed by {op.operator}) is not connected",
-                fix=f"cairn connect add {op.mcp_server}",
+                fix=f"cairn admin connect add {op.mcp_server}",
             ))
     return out
 

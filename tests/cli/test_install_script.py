@@ -188,3 +188,46 @@ def test_a_download_cut_short_runs_nothing(env):
     truncated = text[: text.rindex('main "$@"')]
     r = subprocess.run([SH], input=truncated, env=e, capture_output=True, text=True, timeout=30)
     assert r.returncode == 0 and not log.exists()
+
+
+def test_each_pack_goes_in_the_tools_environment(env):
+    e, log, _, _ = env
+    r = _run(e, CAIRN_PACKS="finetune[laptop] dataset-prep cairn-pack-hello")
+    assert r.returncode == 0, r.stderr
+    assert log.read_text().splitlines() == [
+        "tool install --upgrade --force --python 3.13 --with cairn-pack-finetune[laptop] "
+        "--with cairn-pack-dataset-prep --with cairn-pack-hello cairndev"]
+
+
+def test_a_pack_entry_is_not_a_glob(env, tmp_path):
+    """`finetune[laptop]` must reach uv as typed even when a file in the cwd matches it as a pattern."""
+    e, log, _, _ = env
+    (tmp_path / "finetunel").write_text("")
+    r = subprocess.run([SH, str(SCRIPT)], env={**e, "CAIRN_PACKS": "finetune[laptop]"}, cwd=tmp_path,
+                       capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stderr
+    assert "--with cairn-pack-finetune[laptop] " in log.read_text()
+
+
+def test_an_unknown_pack_fails_and_says_which_packs_were_asked_for(env):
+    e, _, bin_, _ = env
+    _stub(bin_ / "uv", 'echo "cairn-pack-nope was not found in the package registry" >&2\nexit 1\n')
+    r = _run(e, CAIRN_PACKS="nope")
+    assert r.returncode == 1
+    assert "cairn-pack-nope was not found" in r.stderr and "CAIRN_PACKS asked for: nope" in r.stderr
+
+
+@pytest.mark.parametrize("bad", ["a;rm -rf ~", "Finetune", "a$(id)", "a\nb"])
+def test_a_pack_entry_with_anything_else_is_refused(env, bad):
+    e, log, _, _ = env
+    r = _run(e, CAIRN_PACKS=bad)
+    assert r.returncode != 0 and "CAIRN_PACKS" in r.stderr
+    assert not log.exists()
+
+
+def test_a_cairn_not_on_path_gets_the_line_to_paste(env):
+    e, _, bin_, _ = env
+    r = _run(e)
+    assert "export PATH=" in r.stdout and ".local/bin" in r.stdout and "update-shell" in r.stdout
+    _stub(bin_ / "cairn", "exit 0\n")
+    assert "export PATH=" not in _run(e).stdout

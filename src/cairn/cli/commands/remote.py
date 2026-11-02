@@ -145,13 +145,13 @@ def _session_ended(token: Optional[str], *, then: str = ""):
     """The one line a session the server refused ends on, and its exit code. With no
     token at all there is no session: the plain 401 message, exit 1, as before."""
     if not token:
-        _fail("401 Unauthorized — run `cairn remote login` (or set CAIRN_REMOTE_TOKEN).")
+        _fail("401 Unauthorized — run `cairn setup`, or `cairn setup --server <url>` (or set CAIRN_REMOTE_TOKEN).")
     exp = _token_exp(token)
     if exp is not None and exp <= time.time():
         line = f"session expired at {time.strftime('%H:%M', time.localtime(exp))}"
     else:
         line = "session refused by the server (401)"
-    typer.secho(f"{line} — run `cairn remote login`{then}", fg="red", err=True)
+    typer.secho(f"{line} — run `cairn setup`, or `cairn setup --server <url>`{then}", fg="red", err=True)
     raise typer.Exit(EXIT_SESSION_EXPIRED)
 
 
@@ -261,7 +261,7 @@ def _ephemeral():
         while not _reachable(ep):
             if proc.poll() is not None:
                 _fail("ephemeral engine exited during startup — "
-                      "run `cairn dev --engine-only` to see why.")
+                      "run `cairn setup --foreground --engine-only` to see why.")
             if time.monotonic() > deadline:
                 _fail("ephemeral engine did not become healthy within 30s.")
             time.sleep(0.3)
@@ -430,7 +430,8 @@ _TOK = typer.Option(None, "--token", help="bearer token (overrides profile/env)"
 _PROF = typer.Option(None, "--profile", help="config profile name")
 
 
-@app.command()
+@app.command(hidden=True)
+@renamed("cairn remote login", "cairn setup --server <url>")
 def login(
     username: Optional[str] = typer.Option(None, "--username", "-u", help="admin username"),
     password: Optional[str] = typer.Option(None, "--password", "-p", help="prompted if omitted"),
@@ -441,16 +442,23 @@ def login(
     ep, _ = _resolve(endpoint, None, profile)
     username = username or typer.prompt("Username", default="admin")
     password = password or typer.prompt("Password", hide_input=True)
+    _sign_in(ep, username, password, profile or _load_config().get("default_profile") or "default")
+
+
+def _sign_in(ep: str, username: str, password: str, prof_name: str, *, make_default: bool = False) -> Optional[str]:
+    """POST /token and store the JWT under this config profile. Returns the token."""
     with _api(ep, None) as c:
         token = _call(c.login, username, password)
     cfg = _load_config()
-    prof_name = profile or cfg.get("default_profile") or "default"
     cfg.setdefault("profiles", {}).setdefault(prof_name, {})
     cfg["profiles"][prof_name]["endpoint"] = ep
     cfg["profiles"][prof_name]["token"] = token
+    if make_default:
+        cfg["default_profile"] = prof_name
     cfg.setdefault("default_profile", prof_name)
     _save_config(cfg)
     typer.secho(f"logged in to {ep} (profile '{prof_name}'); token saved to {_config_path()}", fg="green")
+    return token
 
 
 @app.command(hidden=True)
@@ -920,16 +928,7 @@ def reject(
     _reject_gate(target, step, reason, approver, endpoint, token, profile)
 
 
-@app.command()
-def console(
-    endpoint: Optional[str] = _EP,
-    token: Optional[str] = _TOK,
-    profile: Optional[str] = _PROF,
-):
-    """Launch the interactive Textual console (Toad-style) over the server — a
-    live runs view, a command bar with autocomplete, and clickable HITL
-    approve/reject. Needs textual and textual-autocomplete, which cairndev does not
-    install (there is no 'tui' extra): the error says how to add them."""
+def open_console(endpoint: Optional[str], token: Optional[str], profile: Optional[str]) -> None:
     ep, tok = _resolve(endpoint, token, profile)
     try:
         from cairn.cli.tui.app import run_console
@@ -943,7 +942,17 @@ def console(
     run_console(ep, tok)
 
 
-@app.command(name="hash-password")
+@app.command(hidden=True)
+@renamed("cairn remote console", "cairn admin console")
+def console(
+    endpoint: Optional[str] = _EP,
+    token: Optional[str] = _TOK,
+    profile: Optional[str] = _PROF,
+):
+    """Launch the interactive terminal console over the server."""
+    open_console(endpoint, token, profile)
+
+
 def hash_password_cmd(
     password: Optional[str] = typer.Option(None, "--password", "-p", help="prompted if omitted"),
 ):
@@ -956,12 +965,11 @@ def hash_password_cmd(
         _fail(str(e))
 
 
-@app.command(name="worker-token")
 def worker_token_cmd(
     name: str = typer.Option(..., "--name", "-n", help="names the worker or pool, e.g. gpu-a"),
     days: int = typer.Option(30, "--days", help="how long the token is valid (1-365 days)"),
 ):
-    """Print a worker-pool token for `cairn worker --pull --token`.
+    """Print a worker-pool token for `cairn admin worker --pull --token`.
 
     Only a worker credential claims pull-lane jobs: this token, or the deployment
     admin's. It is signed locally with the deployment's CAIRN_JWT_SECRET, so run
@@ -975,6 +983,10 @@ def worker_token_cmd(
         typer.echo(mint_worker_pool_token(name, days))
     except ValueError as e:
         _fail(str(e))
+
+
+app.command(name="hash-password", hidden=True)(renamed("cairn remote hash-password", "cairn admin hash-password")(hash_password_cmd))
+app.command(name="worker-token", hidden=True)(renamed("cairn remote worker-token", "cairn admin worker-token")(worker_token_cmd))
 
 
 # ─── pipelines (#1195 slice 2 — the multi-leg surface, client-backed) ──────
@@ -1124,14 +1136,7 @@ def _print_pipeline_next(pipeline_id: str, p: dict, *, approver: str = "") -> No
 # a terminal and another from the console is worse than no preset at all.
 
 
-@app.command(name="presets")
-def presets_cmd(
-    ref: str = typer.Argument(..., help="installed pipeline ref, e.g. training/retrain-cycle"),
-    endpoint: Optional[str] = _EP,
-    token: Optional[str] = _TOK,
-    profile: Optional[str] = _PROF,
-):
-    """List the launch presets for a pipeline (saved + pack-shipped)."""
+def list_presets(ref: str, endpoint: Optional[str], token: Optional[str], profile: Optional[str]) -> None:
     with _session(endpoint, token, profile) as (ep, tok, _local):
         with _api(ep, tok) as c:
             out = _call(c.pipeline_presets, ref)
@@ -1146,7 +1151,28 @@ def presets_cmd(
         typer.echo(f"(no presets for {(out or {}).get('ref', ref)})")
 
 
-@app.command(name="delete-preset")
+def delete_preset(ref: str, name: str, endpoint: Optional[str], token: Optional[str], profile: Optional[str]) -> None:
+    with _session(endpoint, token, profile) as (ep, tok, _local):
+        with _api(ep, tok) as c:
+            out = _call(c.delete_pipeline_preset, ref, name)
+    typer.secho(f"deleted={(out or {}).get('deleted')}",
+                fg="green" if (out or {}).get("deleted") else "yellow")
+
+
+@app.command(name="presets", hidden=True)
+@renamed("cairn remote presets", "cairn admin preset ls")
+def presets_cmd(
+    ref: str = typer.Argument(..., help="installed pipeline ref, e.g. training/retrain-cycle"),
+    endpoint: Optional[str] = _EP,
+    token: Optional[str] = _TOK,
+    profile: Optional[str] = _PROF,
+):
+    """List the launch presets for a pipeline (saved + pack-shipped)."""
+    list_presets(ref, endpoint, token, profile)
+
+
+@app.command(name="delete-preset", hidden=True)
+@renamed("cairn remote delete-preset", "cairn admin preset rm")
 def delete_preset_cmd(
     ref: str = typer.Argument(...),
     name: str = typer.Argument(...),
@@ -1155,21 +1181,11 @@ def delete_preset_cmd(
     profile: Optional[str] = _PROF,
 ):
     """Delete a SAVED preset (a pack-shipped one of the same name reappears)."""
-    with _session(endpoint, token, profile) as (ep, tok, _local):
-        with _api(ep, tok) as c:
-            out = _call(c.delete_pipeline_preset, ref, name)
-    typer.secho(f"deleted={(out or {}).get('deleted')}",
-                fg="green" if (out or {}).get("deleted") else "yellow")
+    delete_preset(ref, name, endpoint, token, profile)
 
 
 # ADR-0160
-@app.command(name="triggers")
-def triggers_cmd(
-    endpoint: Optional[str] = _EP,
-    token: Optional[str] = _TOK,
-    profile: Optional[str] = _PROF,
-):
-    """List this workspace's stored triggers (event, webhook) and whether each is on."""
+def list_triggers(endpoint: Optional[str], token: Optional[str], profile: Optional[str]) -> None:
     with _session(endpoint, token, profile) as (ep, tok, _local):
         with _api(ep, tok) as c:
             out = _call(c.stored_triggers)
@@ -1181,7 +1197,7 @@ def triggers_cmd(
         typer.echo("(no stored triggers in this workspace)")
 
 
-def _set_trigger(trigger_id: str, enabled: bool, endpoint, token, profile) -> None:
+def set_trigger(trigger_id: str, enabled: bool, endpoint, token, profile) -> None:
     with _session(endpoint, token, profile) as (ep, tok, _local):
         with _api(ep, tok) as c:
             out = _call(c.set_trigger_enabled, trigger_id, enabled)
@@ -1190,27 +1206,40 @@ def _set_trigger(trigger_id: str, enabled: bool, endpoint, token, profile) -> No
                 fg="green" if enabled else "yellow")
 
 
+@app.command(name="triggers", hidden=True)
+@renamed("cairn remote triggers", "cairn admin trigger ls")
+def triggers_cmd(
+    endpoint: Optional[str] = _EP,
+    token: Optional[str] = _TOK,
+    profile: Optional[str] = _PROF,
+):
+    """List this workspace's stored triggers (event, webhook) and whether each is on."""
+    list_triggers(endpoint, token, profile)
+
+
 # ADR-0131
-@app.command(name="enable-trigger")
+@app.command(name="enable-trigger", hidden=True)
+@renamed("cairn remote enable-trigger", "cairn admin trigger enable")
 def enable_trigger_cmd(
-    trigger_id: str = typer.Argument(..., help="a stored trigger id, from `cairn remote triggers`"),
+    trigger_id: str = typer.Argument(..., help="a stored trigger id, from `cairn admin trigger ls`"),
     endpoint: Optional[str] = _EP,
     token: Optional[str] = _TOK,
     profile: Optional[str] = _PROF,
 ):
     """Turn a stored trigger on: a declared trigger is paused until a person does."""
-    _set_trigger(trigger_id, True, endpoint, token, profile)
+    set_trigger(trigger_id, True, endpoint, token, profile)
 
 
-@app.command(name="disable-trigger")
+@app.command(name="disable-trigger", hidden=True)
+@renamed("cairn remote disable-trigger", "cairn admin trigger disable")
 def disable_trigger_cmd(
-    trigger_id: str = typer.Argument(..., help="a stored trigger id, from `cairn remote triggers`"),
+    trigger_id: str = typer.Argument(..., help="a stored trigger id, from `cairn admin trigger ls`"),
     endpoint: Optional[str] = _EP,
     token: Optional[str] = _TOK,
     profile: Optional[str] = _PROF,
 ):
     """Pause a stored trigger: it starts nothing until it is enabled again."""
-    _set_trigger(trigger_id, False, endpoint, token, profile)
+    set_trigger(trigger_id, False, endpoint, token, profile)
 
 
 def _save_preset(c, ref: str, preset: Optional[str], overrides: dict, name: str, *, err: bool = False) -> None:

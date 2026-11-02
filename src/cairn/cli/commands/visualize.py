@@ -28,14 +28,14 @@ def cmd(
 ) -> None:
     """Render an agentic template's graph as Mermaid (paste into any markdown tool).
 
-    Only `cairn visualize template <pack>/<name>` is supported: a pipeline's legs and
-    gates are shown by `cairn pipeline show`, a data flow's stages by `cairn flow ls`.
+    Only `template` is supported: a pipeline's legs and gates are shown by `cairn pack show`,
+    a data flow's stages by `cairn pack ls --flows`.
     """
     if kind != "template":
         print(
             f"only 'template' is supported today (got {kind!r}); "
             "pack/skill views are ADR-0016 future scope. A pipeline: "
-            "`cairn pipeline show <ref>`; a data flow: `cairn flow ls`.",
+            "`cairn pack show <ref>`; a data flow: `cairn pack ls --flows`.",
             file=sys.stderr,
         )
         raise typer.Exit(2)

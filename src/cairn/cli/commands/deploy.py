@@ -76,7 +76,7 @@ def doctor(
     # a fresh install is not a deployment, and the doctor has nothing to check yet.
     # A Caddyfile already beside it is still checked (a box whose .env went missing).
     if not env.exists():
-        typer.echo(f"no deploy .env at {env} — `cairn deploy doctor` preflights a "
+        typer.echo(f"no deploy .env at {env} — `cairn admin deploy doctor` preflights a "
                    "deployment's .env before `docker compose up`; a local install needs "
                    "none. Pass --env <file>, or --values <helm values> for the chart.",
                    err=True)

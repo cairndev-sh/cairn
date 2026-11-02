@@ -166,7 +166,7 @@ class ComputeBox:
                 f"compute connection {self.name!r} has no `instance_id` — the "
                 f"lifecycle operators start and stop an instance that already "
                 f"exists, so they need its id. Set it with: "
-                f"`cairn connect ssh --name {self.name} --set instance_id=i-…"
+                f"`cairn admin connect add ssh --name {self.name} --set instance_id=i-…"
                 f" --set region=<aws-region>`"
             )
         return self.instance_id
@@ -188,7 +188,7 @@ async def load_box(name: str, *, account_id: Optional[str] = None) -> ComputeBox
     if conn is None:
         raise ComputeLifecycleError(
             f"compute connection {name!r} did not resolve to an enabled "
-            f"connection — add it with `cairn connect ssh --name {name}`")
+            f"connection — add it with `cairn admin connect add ssh --name {name}`")
     if conn.kind != "compute.ssh":
         raise ComputeLifecycleError(
             f"connection {name!r} is kind {conn.kind!r}; the lifecycle "

@@ -270,7 +270,7 @@ class HttpRemoteJobOperation(Operation[I, O]):
             raise RuntimeError(
                 f"{getattr(self, 'name', type(self).__name__)} needs a "
                 f"{self.provider_label or self.provider} compute connection — run "
-                f"`cairn connect {self.connect_slug or self.provider}` and bind it "
+                f"`cairn admin connect add {self.connect_slug or self.provider}` and bind it "
                 f"via execution.compute_target"
             )
         return key

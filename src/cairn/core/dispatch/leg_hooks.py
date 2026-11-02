@@ -343,7 +343,7 @@ async def price_flow_leg(target: str, timeout_s: Optional[float], *,
             f"connection {name!r} could not be read ({type(e).__name__}: {e})") from e
     if conn is None:
         raise LegPriceUnreadable(f"connection {name!r} is not registered in this account; "
-                                 f"add it with `cairn connect ssh --name {name}`")
+                                 f"add it with `cairn admin connect add ssh --name {name}`")
     if str(getattr(conn, "kind", "")) != PRICED_TARGET_KIND:
         return {"priced": False, "connection": name,
                 "basis": f"{NOT_PRICED}: {name!r} is kind {conn.kind!r}"}

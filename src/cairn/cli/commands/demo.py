@@ -63,7 +63,7 @@ def cmd(
         console.print(
             f"[yellow]Archived[/] demo workspace [b]{workspace}[/] "
             f"({n} workflow record(s) deactivated). Runs and audit are preserved; "
-            f"re-run [b]cairn demo[/] to restore."
+            f"re-run [b]cairn admin demo[/] to restore."
         )
         return
 
@@ -82,5 +82,5 @@ def cmd(
         f"that [b]cairn remote[/] reads: send the header [b]X-Cairn-Workspace: "
         f"{result.workspace_id}[/] to the HTTP API (a console, where one is installed, "
         f"switches workspace in its header). Re-run this command any time — it is "
-        f"idempotent. Tear it down with [b]cairn demo --archive[/]."
+        f"idempotent. Tear it down with [b]cairn admin demo --archive[/]."
     )
