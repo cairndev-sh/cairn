@@ -42,6 +42,9 @@ The CLI is five commands: `cairn setup`, `run`, `status`, `decide` and `pack` (A
 ### Added
 - A `pipeline.finished` run-hook event. An installed `cairn.run_hooks` provider learns when a pipeline reaches `done`, `failed` or `cancelled`, including a pipeline that ends on a gate, a cancel or a deferred failure. The payload is `pipeline_id`, `pipeline_ref`, `status` and `workspace_id`. The in-process pipeline bridge fires it once per pipeline per process, after the record is stored with its final status and, on `done`, its resolved `outputs`. It is notify-only: a failing provider is logged and never affects the pipeline. (#306)
 
+### Added
+- **A registered directory artifact gets a durable copy.** When an artifact object store is configured, registering a directory (a LoRA adapter, for example) copies its tree to `…/artifacts/<content_hash>/<name>/` and records that root as `durable_uri`, the way a file was already copied. The artifact then reads `durable` in `cairn doctor` and the registry health check after the producing machine is gone. The `CAIRN_ARTIFACT_RELAY_MAX_BYTES` cap counts the whole tree. A tree that holds a symlink is not copied. File relay is unchanged (#286).
+
 ## [0.3.3] - 2026-10-30
 
 A pipeline can start another: one pipeline's results, announced as an event when it finishes, start the next through a trigger a person turns on, and the started pipeline's record names the one that fed it. A pipeline cancel now stops its running task legs before the teardown, so a GPU box being started is never left billing. Also: task-leg spend is measured and governed, and a gated finalizer can be decided during teardown.
