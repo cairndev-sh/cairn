@@ -97,3 +97,16 @@ async def test_the_env_var_and_the_default_path_are_honoured(tmp_path, monkeypat
     monkeypatch.delenv("OBS_AUDIT_LOG", raising=False)
     monkeypatch.chdir(tmp_path)
     assert runner.invoke(app, ["admin", "audit", "verify"]).exit_code == 0       # ./audit.jsonl
+
+
+async def test_a_broken_chain_says_what_was_found_and_no_more(tmp_path, monkeypatch):
+    """The chain can't see rows cut from the end, so the message must not suggest that it can."""
+    log = tmp_path / "audit.jsonl"
+    await _write(log, monkeypatch=monkeypatch)
+    lines = log.read_text().splitlines()
+    row = json.loads(lines[1])
+    log.write_text("\n".join([lines[0], json.dumps({**row, "target": "forged"}), lines[2]]) + "\n")
+
+    result = runner.invoke(app, ["admin", "audit", "verify", "--audit-log", str(log)])
+    assert result.exit_code == 2
+    assert result.stderr == "chain BROKEN at row 2 (hash); 1 broken row(s) in all.\n"

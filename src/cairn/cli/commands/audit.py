@@ -67,8 +67,7 @@ def _verify(audit_log: Optional[str], *, as_json: bool) -> int:
         else:
             first = report.broken[0]
             typer.echo(f"chain BROKEN at row {first.row} ({first.reason}); "
-                       f"{len(report.broken)} broken row(s) in all — the log was altered "
-                       f"or truncated.", err=True)
+                       f"{len(report.broken)} broken row(s) in all.", err=True)
     return EXIT_OK if report.ok else EXIT_BROKEN
 
 

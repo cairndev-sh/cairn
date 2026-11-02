@@ -204,8 +204,8 @@ def _run(subject: Optional[str], *, json: bool, audit_log: Optional[str],
               f"provenance is NOT trustworthy.", file=sys.stderr)
         return 2
     if head_mismatch:
-        print(f"\n⚠ the log's last row is not the expected head {expect_head!r} — rows "
-              f"are missing from its end or it is a different log; provenance is NOT trustworthy.",
+        print(f"\n⚠ the log's last row is not the expected head {expect_head!r}. This does not "
+              f"show why: rows may have been added, cut or rewritten since that head was saved.",
               file=sys.stderr)
         return 2
     return 0

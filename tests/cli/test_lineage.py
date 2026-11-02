@@ -218,3 +218,18 @@ async def test_expect_head_detects_rows_missing_from_the_tail(tmp_path, capsys, 
     log.write_text(log.read_text().splitlines()[0] + "\n")   # the last row is gone
     assert lineage_cmd.main(["--expect-head", head[:12]]) == 2
     assert "expected head" in capsys.readouterr().err
+
+
+async def test_a_head_mismatch_on_a_log_that_only_grew_does_not_say_rows_are_missing(tmp_path, capsys, monkeypatch):
+    log = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("OBS_AUDIT_LOG", str(log))
+    await _write_lineage_row(log, target="a")
+    head = json.loads(log.read_text().splitlines()[-1])["hash"]
+    await _write_lineage_row(log, target="b")
+    capsys.readouterr()
+
+    assert lineage_cmd.main(["--expect-head", head]) == 2
+    err = capsys.readouterr().err
+    assert (f"the log's last row is not the expected head {head!r}. This does not show why: rows may have been "
+            "added, cut or rewritten since that head was saved.") in err
+    assert "missing" not in err and "NOT trustworthy" not in err
