@@ -9,7 +9,7 @@
 #   * `job` (flows/nightly-job.md) checks the job's secret through whatever the
 #     profile binds to `secrets.store` (secrets/env by default, Infisical with
 #     profiles/hello-infisical.toml), then runs `command` on an SSH box through the
-#     builtin remote/exec. The box is a `compute.ssh` connection (`cairn connect add
+#     builtin remote/exec. The box is a `compute.ssh` connection (`cairn admin connect add
 #     ssh`) the `compute_target` input names; a template node is where remote/exec
 #     gets one (a `task:` leg has no `execution.compute_target`).
 #   * `summarise` carries the report through the builtin dataflow engine.
@@ -29,7 +29,7 @@ outcome: Run a nightly job on a box you own
 suite: operate
 
 inputs:
-  compute_target: {type: str, default: "hello-ssh", description: "The compute.ssh connection to run the report on (cairn connect add ssh --name hello-ssh …)."}
+  compute_target: {type: str, default: "hello-ssh", description: "The compute.ssh connection to run the report on (cairn admin connect add ssh --name hello-ssh …)."}
   secret_name: {type: str, default: "HELLO_REPORT_TOKEN", description: "The secret the job needs; checked for presence, never read into the run."}
   command:
     type: str

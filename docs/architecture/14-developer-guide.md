@@ -22,7 +22,7 @@ architectural constitution and no longer carries operational rules.)
 - Python is always `.venv/bin/python`; tests `.venv/bin/pytest tests/core -q` (a bare `uv sync`/`uv run` strips extras — CONTRIBUTING).
 - The suite neutralises `.env` (`tests/conftest.py`); a shell-exported `CAIRN_STORAGE` still steers it: `env -u CAIRN_STORAGE .venv/bin/pytest …`.
 - A pack (domain or operator) is invisible to the engine until installed (or on `CAIRN_PACK_PATH` for dev). Manifest gates pass **vacuously** on uninstalled packs (`cairn/operators/CLAUDE.md` §B).
-- CI gates (`.github/workflows/ci.yml`): ruff `F`+`E9` only; full pytest (`-m "not dbos"`); `scripts/audit_status.py` (docs honesty); `cairn lock --check`; console `check-design-rules.mjs`; `scripts/dump_openapi.py --check` + oasdiff (breaking API change needs the `api-break` label); wheels build; console build + `check:api`; engine image build + discovery smoke.
+- CI gates (`.github/workflows/ci.yml`): ruff `F`+`E9` only; full pytest (`-m "not dbos"`); `scripts/audit_status.py` (docs honesty); `cairn pack lock --check`; console `check-design-rules.mjs`; `scripts/dump_openapi.py --check` + oasdiff (breaking API change needs the `api-break` label); wheels build; console build + `check:api`; engine image build + discovery smoke.
 
 ## 3. Finding things
 | I am looking for… | Look in |
@@ -61,9 +61,9 @@ Checklist before you edit:
 5. Does the test exist and can it fail? Run the real gate, not a lookalike.
 
 ## 5. Adding things — recipes
-**A new operator** (code): copy an existing pack dir → `pyproject.toml` (name `operator-<x>`, entry point `"<pack>/<op>" = "operator_<x>.operators.<mod>:<Class>"`) → `pack.toml` `[operator."<pack>/<op>"]` with `risk`, `executors`, flags → `src/operator_<x>/operators/<mod>.py` subclassing `Operation` with `@register_operator` → `schemas/` Pydantic → `tests/` golden fixtures → `DESIGN.md` per `docs/templates/operator-pack-DESIGN.md` → root `pyproject.toml` (workspace member, dependency, `[tool.uv.sources]`) → `uv pip install -e <pack> --no-deps` → run `tests/core/test_operator_manifest_sync.py`, `test_pack_manifest_drift.py`, `test_pack_design_docs.py` → `uv run cairn lock`.
+**A new operator** (code): copy an existing pack dir → `pyproject.toml` (name `operator-<x>`, entry point `"<pack>/<op>" = "operator_<x>.operators.<mod>:<Class>"`) → `pack.toml` `[operator."<pack>/<op>"]` with `risk`, `executors`, flags → `src/operator_<x>/operators/<mod>.py` subclassing `Operation` with `@register_operator` → `schemas/` Pydantic → `tests/` golden fixtures → `DESIGN.md` per `docs/templates/operator-pack-DESIGN.md` → root `pyproject.toml` (workspace member, dependency, `[tool.uv.sources]`) → `uv pip install -e <pack> --no-deps` → run `tests/core/test_operator_manifest_sync.py`, `test_pack_manifest_drift.py`, `test_pack_design_docs.py` → `uv run cairn pack lock`.
 
-**A new pipeline step in a pack** (data): edit `cairn/packs/<pack>/pipelines/<name>.yaml`; wires are `$input.*` / `$steps.<id>.<field>` / `<step>.<produced>`; declare `produces/consumes` types; `cairn pipeline explain <pack>/<name>`; `uv run cairn lock`.
+**A new pipeline step in a pack** (data): edit `cairn/packs/<pack>/pipelines/<name>.yaml`; wires are `$input.*` / `$steps.<id>.<field>` / `<step>.<produced>`; declare `produces/consumes` types; `cairn run --dry-run <pack>/<name>`; `uv run cairn pack lock`.
 
 **A new flow stage** (kernel): a function in an operator pack registered under `[project.entry-points."cairn.flow_stages"]`; declare its risk class where the pack does (see `operator_training/flow_stages.py`); it is governed at flow admission by aggregate risk, so an `external_write` stage makes the whole flow gated.
 

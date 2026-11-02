@@ -13,14 +13,14 @@
 #
 #   * `secrets.store` — nightly-ops' secret check is a capability node
 #     (`capability: contract://secrets.store/1.0.0`), and a capability with no
-#     binding refuses to compile; local-dev.toml binds none, so `cairn validate
+#     binding refuses to compile; local-dev.toml binds none, so `cairn pack check
 #     examples/hello-cairn` needs this profile. secrets/env reads the engine's
 #     environment; profiles/hello-infisical.toml binds Infisical.
 #   * `audit.sink` — the quickstart's audit trail: every governed step and each decision a person makes
 #     lands in the hash-chained log at CAIRN_AUDIT_LOG (default ./audit.jsonl), next to the
 #     row the pipeline's own `audit` leg writes. local-dev.toml leaves it unbound (ADR-0028).
 #   * the `hello-calc` MCP server, which pack.toml declares under [requires.mcp].
-#     This entry is what `cairn doctor`'s composition check and the strict tool
+#     This entry is what `cairn setup --check`'s composition check and the strict tool
 #     allow-list read. The MCP client itself takes the server's command from the
 #     engine's environment, CAIRN_MCP_SERVERS (see the README), not from here.
 

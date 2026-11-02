@@ -34,7 +34,7 @@ compute/release            load_box(connection) -> describe_state -> (stopped? n
 verified against the connection's `known_hosts`.
 
 The lifecycle pair adds no lifecycle logic. Every EC2 call is a function of
-`cairn.core.compute_lifecycle`, the module `cairn compute status|sweep` calls too, so
+`cairn.core.compute_lifecycle`, the module `cairn admin compute status|sweep` calls too, so
 "what starting a box means" cannot drift between the operators and the sweep
 (#1376). The pack reaches those functions through the operator contract's
 re-exports in `cairn.core.operator` (ADR-0120 D7), never by importing the core module
@@ -43,7 +43,7 @@ dependency of the engine wheel and is imported lazily inside `ec2_client`.
 
 **Lease before start (ADR-0151 D8).** `acquire` writes the `cairn:managed` tag (plus
 `cairn:release-after` when `max_hours > 0` and `cairn:acquired-by`) before it starts
-the instance. `cairn compute sweep` selects boxes by that tag, so a crash between the
+the instance. `cairn admin compute sweep` selects boxes by that tag, so a crash between the
 two calls leaves a tagged box that is not running, never a billing box the sweep
 cannot see. The platform's 0.1.0 operator did the reverse.
 
@@ -100,7 +100,7 @@ No `implements` contract URI on either lifecycle operator yet (ADR-0151 D7); a
 | `max_hours`, `wait_ready_s`, `acquired_by` | `input_schema` | run | `0`, `600`, `""` | per-run lease length, readiness wait, owner tag |
 
 No operator here declares a `config_schema`. A connection that does not resolve, or
-is not `compute.ssh`, fails closed with the `cairn connect ssh` command that fixes it.
+is not `compute.ssh`, fails closed with the `cairn admin connect add ssh` command that fixes it.
 
 ## 5. Governance
 

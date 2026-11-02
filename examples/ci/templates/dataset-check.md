@@ -4,7 +4,7 @@ version: 0.1.0
 module: ci
 description: |
   Profile a dataset file against the roles it must contain and report a
-  verdict for `cairn gate`. Read-only, no model, no API key.
+  verdict for `cairn run --check`. Read-only, no model, no API key.
 
 flow:
   type: state_machine
@@ -28,7 +28,7 @@ flow:
               - {name: text, required: true, aliases: [body, content]}
               - {name: label, required: true, aliases: [category]}
               - {name: id, required: false}
-        # `cairn gate` reads these three from the top of the run's state, so they
+        # `cairn run --check` reads these three from the top of the run's state, so they
         # are `$state.verdict`, not `$state.findings.verdict`. A run with no
         # verdict there gates as PASS.
         output:

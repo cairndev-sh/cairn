@@ -46,7 +46,7 @@ tests inside the pack.
 ## Entry-point groups (the discovery contract)
 `cairn.packs` · `cairn.operators` · `cairn.dataflow_engines` · `cairn.dataflow_stages` ·
 `cairn.flow_stages` · `cairn.dataset_readers` · `cairn.seeds`
-(the `cairn demo` data providers, ADR-0120 D4, `src/cairn/core/pack/seeds.py`; the one named
+(the `cairn admin demo` data providers, ADR-0120 D4, `src/cairn/core/pack/seeds.py`; the one named
 `platform-demo` also answers `POST /demo/seed?showcase=1` with `showcase=True`) ·
 `cairn.model_catalogs` (the licence door's catalogue providers, ADR-0120 D4,
 `src/cairn/core/pack/model_catalogs.py`) · `cairn.run_hooks` (the run/leg event listeners the
@@ -79,7 +79,7 @@ checks this list against the code). Adding a group is an architecture change (ro
 
 ## Installability and versioning
 Each pack is a workspace member with its own `pyproject.toml`; `cairn.lock` pins the shipped
-closure by content hash (`uv run cairn lock --check` in CI). A pack must install and pass
+closure by content hash (`uv run cairn pack lock --check` in CI). A pack must install and pass
 its own tests against the public core surface alone. Versioning and deprecation follow
 `docs/compatibility.md`: operator input/output schemas are public; adding an optional
 field is additive; removing or retyping one is breaking and needs a manifest version bump

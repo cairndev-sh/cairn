@@ -16,7 +16,7 @@ pipeline.
 | agentic | `flows/<name>.md` | a markdown file: front matter plus a prompt or a state machine of nodes | cairn's LangGraph runtime |
 
 A pipeline leg runs a data or ML flow with `flow:` and an agentic flow with
-`template:`. `cairn flow ls` lists all three kinds:
+`template:`. `cairn pack ls --flows` lists all three kinds:
 
 ```text
   hello-cairn/engine-check  kind=data stages=1
@@ -100,7 +100,7 @@ cairn run hello-cairn/assistant --input input.json --interactive   # approve or 
 ```
 
 These runs write **no pipeline record and no run row**. `--mock` and
-`--interactive` write a local trace instead, which `cairn replay <run-id>`
+`--interactive` write a local trace instead, which `cairn status <run-id> --replay`
 prints. `--mock` returns a deterministic response for every LLM call and uses
 `.mock()` for operators that declare `supports_mock`. It refuses before running
 any node when a reachable operator does not declare mock support, and needs no

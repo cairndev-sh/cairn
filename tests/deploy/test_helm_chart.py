@@ -377,8 +377,9 @@ def test_pull_worker_is_off_by_default():
 _PULL = {
     "pullWorker.enabled": "true",
     "pullWorker.command[0]": "cairn",
-    "pullWorker.command[1]": "worker",
-    "pullWorker.command[2]": "--pull",
+    "pullWorker.command[1]": "admin",
+    "pullWorker.command[2]": "worker",
+    "pullWorker.command[3]": "--pull",
 }
 
 #: What the control plane's Secret carries; none of it may reach the pull worker.
@@ -390,7 +391,7 @@ _CONTROL_PLANE_KEYS = {"CAIRN_JWT_SECRET", "CAIRN_API_PASSWORD_HASH", "POSTGRES_
 def test_pull_worker_renders_with_the_operator_supplied_command():
     docs = render("values-postgres.example.yaml", sets={**_PULL, "pullWorker.token": "wp-token"})
     dep = _by_name(docs, "Deployment", "-pull-worker")
-    assert _main_container(dep)["command"] == ["cairn", "worker", "--pull"]
+    assert _main_container(dep)["command"] == ["cairn", "admin", "worker", "--pull"]
 
 
 @needs_helm
@@ -499,7 +500,7 @@ def test_an_existing_secret_equal_to_a_custom_control_plane_secret_is_refused():
     assert "the control plane's Secret" in err, err
 
 
-_PULL_VALUES = {"enabled": True, "command": ["cairn", "worker", "--pull"]}
+_PULL_VALUES = {"enabled": True, "command": ["cairn", "admin", "worker", "--pull"]}
 
 
 def _render_error_with_file(pull: dict) -> str:
@@ -519,7 +520,7 @@ def _doctor(pull: dict, **top) -> dict[str, str]:
     from cairn.core.deploy_check import check_values
 
     values = yaml.safe_load(_values("values-postgres.example.yaml").read_text())
-    values["pullWorker"] = {"enabled": True, "command": ["cairn", "worker", "--pull"], **pull}
+    values["pullWorker"] = {"enabled": True, "command": ["cairn", "admin", "worker", "--pull"], **pull}
     for k, v in top.items():
         values[k] = v
     return {r.name: r.status for r in check_values(values) if r.name == "pull_worker_token"}

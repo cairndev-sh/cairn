@@ -278,7 +278,7 @@ deployment that has actually gone wrong somewhere, on compose or on a box.
 {{- fail "secrets.obsJwtSecret is empty and secrets.existingSecret is unset — auth is ON in prod (issue #2) and the engine refuses to start without a JWT secret." -}}
 {{- end -}}
 {{- if not .Values.secrets.obsApiPasswordHash -}}
-{{- fail "secrets.obsApiPasswordHash is empty and secrets.existingSecret is unset — generate it with `cairn remote hash-password`." -}}
+{{- fail "secrets.obsApiPasswordHash is empty and secrets.existingSecret is unset — generate it with `cairn admin hash-password`." -}}
 {{- end -}}
 {{- end -}}
 
@@ -290,9 +290,9 @@ deployment that has actually gone wrong somewhere, on compose or on a box.
 {{- fail "CAIRN_ML_ENGINE=skypilot with server.persistence.enabled=false — SkyPilot keeps its cluster state in ~/.sky, so a pod restart would forget every machine it provisioned and `sky down` could not terminate them. They would keep billing. Enable server.persistence, or select an engine that does not provision." -}}
 {{- end -}}
 
-{{- /* The pull worker (`cairn worker --pull`, #565) has no default command. */ -}}
+{{- /* The pull worker (`cairn admin worker --pull`, #565) has no default command. */ -}}
 {{- if and .Values.pullWorker.enabled (not .Values.pullWorker.command) -}}
-{{- fail "pullWorker.enabled=true but pullWorker.command is empty — the chart has no default command for the pull worker. Supply pullWorker.command explicitly, e.g. [cairn, worker, --pull, --engine-url, https://<host>]." -}}
+{{- fail "pullWorker.enabled=true but pullWorker.command is empty — the chart has no default command for the pull worker. Supply pullWorker.command explicitly, e.g. [cairn, admin, worker, --pull, --engine-url, https://<host>]." -}}
 {{- end -}}
 {{- /* Its token comes from a Secret of its own, never the control plane's. */ -}}
 {{- if .Values.pullWorker.enabled -}}
@@ -301,9 +301,9 @@ deployment that has actually gone wrong somewhere, on compose or on a box.
 {{- if and $tok $existing -}}
 {{- fail "pullWorker.token AND pullWorker.existingSecret are both set — pick one: the chart renders a Secret from pullWorker.token only when pullWorker.existingSecret is empty." -}}
 {{- end -}}
-{{- $_ := required "pullWorker.enabled=true needs the worker's own token: set pullWorker.token to a worker-pool token (`cairn remote worker-token --name <pool>`), or pullWorker.existingSecret to a Secret with the key CAIRN_ENGINE_TOKEN. A token that is empty or only whitespace counts as unset. The pull worker never reads the control plane's Secret." ($tok | default $existing) -}}
+{{- $_ := required "pullWorker.enabled=true needs the worker's own token: set pullWorker.token to a worker-pool token (`cairn admin worker-token --name <pool>`), or pullWorker.existingSecret to a Secret with the key CAIRN_ENGINE_TOKEN. A token that is empty or only whitespace counts as unset. The pull worker never reads the control plane's Secret." ($tok | default $existing) -}}
 {{- if and $tok (eq $tok (trim (toString (default "" .Values.secrets.obsJwtSecret)))) -}}
-{{- fail "pullWorker.token equals secrets.obsJwtSecret — the worker must never hold the control plane's JWT secret. Mint a worker-pool token with `cairn remote worker-token --name <pool>`." -}}
+{{- fail "pullWorker.token equals secrets.obsJwtSecret — the worker must never hold the control plane's JWT secret. Mint a worker-pool token with `cairn admin worker-token --name <pool>`." -}}
 {{- end -}}
 {{- range $k, $_ := .Values.pullWorker.extraEnv -}}
 {{- if not (regexMatch "^[A-Za-z_][A-Za-z0-9_]*$" $k) -}}

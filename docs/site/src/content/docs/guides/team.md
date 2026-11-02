@@ -15,17 +15,17 @@ on the server and restart it:
 ```bash
 CAIRN_JWT_SECRET=<openssl rand -hex 32>
 CAIRN_API_USER=admin
-CAIRN_API_PASSWORD=<choose one>    # or CAIRN_API_PASSWORD_HASH from `cairn remote hash-password`
+CAIRN_API_PASSWORD=<choose one>    # or CAIRN_API_PASSWORD_HASH from `cairn admin hash-password`
 ```
 
 Every request now needs a token. Sign in from the CLI; the token is stored in
 your CLI profile:
 
 ```bash
-cairn remote login -e https://cairn.example.com -u admin
+cairn setup --server https://cairn.example.com -u admin
 ```
 
-Sign-up and `cairn remote hash-password` hash passwords with argon2, which the base install
+Sign-up and `cairn admin hash-password` hash passwords with argon2, which the base install
 carries (since 0.1.2; on 0.1.1 install the `auth` extra).
 
 A console sign-in lasts longer than its access token (30 minutes,

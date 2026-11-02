@@ -44,8 +44,8 @@ Check the install:
 
 ```bash
 cairn --version
-cairn doctor        # packs load, profile bindings resolve, settings, service reachability
-cairn ls            # the installed packs and what they contribute
+cairn setup --check        # packs load, profile bindings resolve, settings, service reachability
+cairn pack ls            # the installed packs and what they contribute
 ```
 
 ### Upgrade from 0.1.x
@@ -78,8 +78,8 @@ sign-in on, or with more than one account or workspace.
 **With sign-in on, or more than one account or workspace:**
 
 6. **Pull workers.** Mint a token per pool with
-   `cairn remote worker-token --name <pool>` (where `CAIRN_JWT_SECRET` is set)
-   and restart each worker with `cairn worker --pull --token <that token>`. A
+   `cairn admin worker-token --name <pool>` (where `CAIRN_JWT_SECRET` is set)
+   and restart each worker with `cairn admin worker --pull --token <that token>`. A
    signed-in user's token now gets `403` on `/jobs/claim`.
 7. **Team accounts' connections.** Each team account creates, under its own
    names, the connections its runs used from the deployment, and its pipelines
@@ -161,12 +161,12 @@ touches the data. `dbos` (the `runtime-dbos` extra) recovers a run at the next
 boot without an extra server. Under `temporal` the launch is refused, before
 anything is recorded, for a pipeline with a `task:` leg or a `finalizer:` step:
 the Temporal pipeline owner does not run either yet. The refusal names the step
-(HTTP 403, `cairn pipeline run` exits 3); use `inprocess` or `dbos` for such
+(HTTP 403, `cairn run` exits 1); use `inprocess` or `dbos` for such
 pipelines.
 
 The deployment **profile** decides which operator serves each capability. Set
 it with `CAIRN_PROFILE`; see
-[Capabilities and environments](/concepts/capabilities/). `cairn dev` sets all
+[Capabilities and environments](/concepts/capabilities/). `cairn setup` sets all
 of this for you on a laptop; a server is started with `cairn-server`.
 
 ## Single host with Docker Compose
@@ -191,7 +191,7 @@ The first build compiles the engine image (several minutes). When
 
 ```bash
 curl -s http://localhost:8080/healthz
-cairn remote ps --endpoint http://localhost:8080
+cairn status --endpoint http://localhost:8080
 ```
 
 The stack runs the `secure` profile: every run leaves a hash-chained audit
@@ -214,7 +214,7 @@ Check a deployment's `.env` and the profiles you enabled before anything
 starts:
 
 ```bash
-cairn deploy doctor --env .env
+cairn admin deploy doctor --env .env
 ```
 
 ### Operating it
@@ -241,7 +241,7 @@ docker run -d -p 9090:9090 \
   -e CAIRN_STORAGE=sqlite:////data/cairn.db -v cairn-data:/data \
   ghcr.io/cairndev-sh/cairn-engine:0.4.0
 curl -s http://localhost:9090/healthz
-cairn remote login --endpoint http://localhost:9090 -u admin
+cairn setup --server http://localhost:9090 -u admin
 ```
 
 With sign-in off the server listens on the container's own loopback, so a published
@@ -263,7 +263,7 @@ variables.
 ```bash
 kubectl create namespace cairn
 cp deploy/helm/cairn/values-postgres.example.yaml my-values.yaml   # edit every CHANGE-ME
-cairn deploy doctor --values my-values.yaml --strict
+cairn admin deploy doctor --values my-values.yaml --strict
 helm upgrade --install cairn deploy/helm/cairn -n cairn -f my-values.yaml
 ```
 
@@ -285,10 +285,10 @@ helm upgrade --install cairn oci://ghcr.io/cairndev-sh/charts/cairn --version 0.
 Then `kubectl -n cairn rollout status deploy/cairn-server` and
 `curl -fsS https://<your host>/healthz`.
 
-The chart can also run a pull worker (`cairn worker --pull`), off by default.
+The chart can also run a pull worker (`cairn admin worker --pull`), off by default.
 With `pullWorker.enabled: true`, set `pullWorker.command`, and set either
 `pullWorker.token` (a worker-pool token from
-`cairn remote worker-token --name <pool>`) or `pullWorker.existingSecret` (a
+`cairn admin worker-token --name <pool>`) or `pullWorker.existingSecret` (a
 Secret holding `CAIRN_ENGINE_TOKEN`); otherwise rendering refuses. See the
 [chart README](https://github.com/cairndev-sh/cairn/blob/main/deploy/helm/cairn/README.md#the-pull-worker)
 for the values and the upgrade notes.
@@ -302,17 +302,17 @@ other people can reach. To turn sign-in on, set in `.env` (or the chart's
 ```bash
 CAIRN_JWT_SECRET=<openssl rand -hex 32>
 CAIRN_API_USER=admin
-CAIRN_API_PASSWORD=<choose one>     # or CAIRN_API_PASSWORD_HASH from `cairn remote hash-password`
+CAIRN_API_PASSWORD=<choose one>     # or CAIRN_API_PASSWORD_HASH from `cairn admin hash-password`
 ```
 
-Every API call then needs a token: `cairn remote login --endpoint <url>`.
+Every API call then needs a token: `cairn setup --server <url>`.
 The token goes in the `Authorization: Bearer` header. The one exception is the run
 event stream, `GET /runs/{id}/stream`, which also accepts it as `?access_token=`
 because a browser's `EventSource` cannot set headers; every other route refuses a
 token in the query string with `401`.
 
 Only `/healthz`, `/token`, the sign-up, invite and provider sign-in routes
-under `/auth/`, `/oauth/callback` (the redirect `cairn connect --via oauth`
+under `/auth/`, `/oauth/callback` (the redirect `cairn admin connect add --via oauth`
 completes on; it checks its own single-use `state`), and webhook receivers that require a
 signature (`signature.required: true`) answer without one. A receiver is open only for
 its own method and only while its signing secret is set to a non-empty value. Its runs
