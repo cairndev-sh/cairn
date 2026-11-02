@@ -53,7 +53,7 @@ dataset version always points at one exact file.
 
 With the audit trail on, cairn appends security-relevant events to a log in
 which every row carries `sha256(previous hash + row)`. Changing or deleting a
-row breaks every hash after it. The log records operator approvals inside
+row breaks the chain at that row. The log records operator approvals inside
 flows, `llm_complete` model calls, `mcp/call` tool calls, actions, and every governed
 step of a pipeline run, listed below. A template's own prompt and agent nodes write
 no row yet. The pipeline record and the run events stay the place to replay a run; the
@@ -96,12 +96,12 @@ With no `audit.sink` bound none of this is written and nothing else changes.
 
 ### Verify the audit trail
 
-`cairn audit verify` recomputes every row's hash from the one before it and
+`cairn admin audit verify` recomputes every row's hash from the one before it and
 reports whether the chain holds. It only reads the log, and it needs no lineage
 records:
 
 ```console
-$ cairn audit verify
+$ cairn admin audit verify
 audit log: audit.jsonl
   rows:      412
   first ts:  2026-10-28T09:01:12+00:00
@@ -115,9 +115,44 @@ chain is broken it names the first broken row and why (`hash`, `prev_hash` or
 `corrupt line`). `--json` prints `{path, rows, first_ts, last_ts, head_hash, ok,
 broken}`. The exit code is 0 when the chain verifies (an empty log verifies, with
 zero rows), 2 when it is broken or has a corrupt line, and 1 when there is no log
-or it cannot be read, so a CI job can gate on it. The check proves that no row was
-changed, removed from the middle or reordered; it cannot tell that rows were cut
-off the end, so keep the head hash somewhere else if you need that.
+or it cannot be read, so a CI job can gate on it.
+
+"Tamper-evident" means an edit that leaves the hashes as they were shows up, at
+the row it broke:
+
+| Altered | Result | Row named |
+|---|---|---|
+| A field in a row | exit 2, `hash` | that row |
+| A row deleted | exit 2, `prev_hash` | the row now in its place |
+| A forged row inserted, linked correctly to the row before it | exit 2, `prev_hash` | the row after the forgery |
+| Two neighbouring rows swapped | exit 2, `prev_hash` | the first of them, then the two rows after it |
+
+It does not mean the log can't be rewritten. The chain has no key and nothing
+outside the file to compare with, so anyone who can write the file can recompute
+the hashes. These all exit 0 from `cairn admin audit verify`:
+
+- the last rows cut off, or the whole file emptied (an empty log verifies)
+- a row changed and every hash after it recomputed
+- the whole file rewritten, with every hash recomputed
+
+To detect them, save the head hash somewhere the log's writer can't reach, and
+check the log against it:
+
+```console
+$ cairn admin lineage --json --audit-log audit.jsonl --expect-head 9c1f…
+```
+
+A log that no longer ends at that hash exits 2, with `chain_ok: false`. Pass
+`--json`: without it, a log with no lineage records exits 1 even when the head
+matches, and that is every log on a public install.
+
+A saved head only covers the rows written before you saved it. Rows added later
+and then cut go unnoticed even with that head, and a log that has simply grown
+exits 2 as well, so save the head again as the log grows.
+
+[`benchmark/audit_tamper.py`](https://github.com/cairndev-sh/cairn/blob/main/benchmark/audit_tamper.py)
+runs all of this on a log a real engine wrote, and fails if any answer differs
+from this section.
 
 ## Reading it back
 
