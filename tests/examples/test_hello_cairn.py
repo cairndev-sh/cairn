@@ -16,11 +16,14 @@ What it pins, in the order the pipeline reaches it:
   * approving that tags the flow leg's registered artifact, publishes the file and
     writes a hash-chained audit row, and the pipeline ends ``done``;
   * a predicate that is false STOPS the pipeline (``gate_blocked``) before
-    anything is written.
+    anything is written;
+  * an estimate above the cap is refused at the flow leg's reservation, before
+    its engine starts (``over-budget``).
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from pathlib import Path
 
@@ -43,6 +46,7 @@ from tests.core.test_trigger_server_dispatch import FakeRunner
 REPO = Path(__file__).resolve().parents[2]
 PACK_DIR = REPO / "examples" / "hello-cairn"
 PIPELINE = "hello-cairn/profile-and-publish"
+OVER_BUDGET = "hello-cairn/over-budget"
 
 
 @pytest.fixture
@@ -178,5 +182,80 @@ async def test_a_false_predicate_stops_the_pipeline(hello_pack, tmp_path):
         assert (st["data-ok"].status, st["data-ok"].verdict) == ("skipped", "gate_blocked")
         assert st["stage"].status == "pending"       # ... and nothing after the gate ran
         assert not (tmp_path / "artifacts").exists()
+    finally:
+        bridge.stop()
+
+
+# ── a budget refuses a run: no key, no spend ────────────────────────────────
+
+@pytest.fixture
+def engine_submits(monkeypatch):
+    """Every job handed to the builtin engine. Nothing can reach it unrecorded: the real
+    ``submit`` still runs, so a leg that is admitted runs for real."""
+    from operator_dataflow.engines import BuiltinLocalEngine
+
+    submits, real = [], BuiltinLocalEngine.submit
+
+    async def spy(self, spec, ctx):
+        submits.append(spec)
+        return await real(self, spec, ctx)
+
+    monkeypatch.setattr(BuiltinLocalEngine, "submit", spy)
+    return submits
+
+
+@pytest.fixture
+def audit_rows(tmp_path, monkeypatch):
+    """The real chained writer as the audit sink, as ``hello.toml``'s ``audit.sink`` binds it."""
+    from cairn.core.obs import audit as audit_mod
+    from operator_audit_store.operators.audit_store import AuditStoreOp
+
+    log = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("CAIRN_AUDIT_LOG", str(log))
+    audit_mod.reset_audit_sink()
+    monkeypatch.setattr(audit_mod, "_CACHE", AuditStoreOp())
+    yield lambda: [json.loads(line) for line in log.read_text().splitlines()]
+    audit_mod.reset_audit_sink()
+
+
+async def test_a_budget_refuses_the_run_before_its_engine_starts(hello_pack, engine_submits, audit_rows):
+    """The over-budget pipeline's own file, through the launch door, with the real reservation."""
+    from cairn.core.budget_reservations import held_for_run
+
+    dispatcher, bridge = await _bridge()
+    try:
+        rec = await launch_pipeline(OVER_BUDGET, inputs={}, bridge=bridge, environment="sandbox")
+        rec = await _wait_for(bridge, rec.pipeline_id, ("failed", "done"))
+        leg = rec.step_state["engine-check"]
+        assert (rec.status, leg.status) == ("failed", "failed")
+        assert engine_submits == []             # the engine was never handed the job
+        assert leg.handle is None               # so there is no engine job on the record
+        run = await dispatcher.store.get(leg.run_id)
+        assert "this run's estimate $5.00 would exceed the $1.00 cap" in run.error
+        assert await held_for_run(run.id) == []
+        # the refusal is the leg's: the launch was admitted, so `pipeline.refused` has no row
+        actions = [r["action"] for r in audit_rows()]
+        assert "pipeline.refused" not in actions and "pipeline.admitted" in actions
+        row = next(r for r in audit_rows() if r["action"] == "leg.budget_refused")
+        assert row["outcome"] == "deny" and row["run_id"] == run.id
+        assert (row["metadata"]["estimated_usd"], row["metadata"]["budget_usd"]) == (5.0, 1.0)
+    finally:
+        bridge.stop()
+
+
+async def test_the_same_pipeline_runs_once_its_cap_covers_the_estimate(hello_pack, engine_submits):
+    """The control for the test above: only the cap differs, the leg runs, and the engine
+    spy sees it. So an empty spy above means the refusal stopped it, not that the spy is blind."""
+    from cairn.core.dispatch.pipeline_launch import launch_pipeline_def
+
+    d = parse_pipeline_def((PACK_DIR / "pipelines" / "over-budget.yaml").read_text(), pack="hello-cairn")
+    d = d.model_copy(update={"governance": {**d.governance, "budget": {"usd": 5}}})
+    _, bridge = await _bridge()
+    try:
+        rec = await launch_pipeline_def(d, inputs={}, bridge=bridge, environment="sandbox")
+        # a real engine subprocess, which imports the stack before it starts on the stage
+        rec = await _wait_for(bridge, rec.pipeline_id, ("failed", "done"), timeout=180.0)
+        assert rec.status == "done", rec.step_state["engine-check"]
+        assert len(engine_submits) == 1
     finally:
         bridge.stop()

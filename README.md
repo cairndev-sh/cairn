@@ -177,6 +177,27 @@ step starts. The full walkthrough is the [Quickstart](https://docs.cairndev.sh/q
 to look around without installing, use the live demo at https://demo.cairndev.sh (a
 shared sandbox, so don't enter real credentials).
 
+To watch a budget refuse a run, with no key and no spend, start a pipeline whose estimate
+is above its cap:
+
+```bash
+cairn run hello-cairn/over-budget --environment sandbox
+```
+
+```text
+pipeline_id=pl_592c6c850aec40a5 status=running
+  failed
+    engine-check       failed               run=run-flow-hello-cairn--engine-check-78f6c9
+  engine-check: series 'hello-over-budget': this run's estimate $5.00 would exceed the $1.00 cap ($0.00 spent, $0.00 reserved by in-flight runs). Raise the budget or start a new series.
+→ logs      cairn status run-flow-hello-cairn--engine-check-78f6c9 --logs   # leg engine-check
+→ findings  cairn status pl_592c6c850aec40a5 --results
+```
+
+The flow leg's reservation failed, so its engine never started, and the command exits 1. The
+$5 is a figure the pipeline file declares, not a measured price, and the flow itself would cost
+nothing. The refusal is the real one every flow leg under a `series` goes through. This pipeline
+needs the release after cairndev 0.4.0. See [Cost and budgets](https://docs.cairndev.sh/concepts/cost/).
+
 From source:
 
 ```bash

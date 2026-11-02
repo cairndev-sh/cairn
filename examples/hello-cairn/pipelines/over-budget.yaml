@@ -1,0 +1,32 @@
+# pipelines/over-budget.yaml — watch a budget refuse a run, with no key and no spend.
+#
+#   engine-check (flow) → refused at its reservation; the engine never starts
+#
+# Before a flow leg starts its engine, it reserves the pipeline's `estimated_usd`
+# against the `series` cap (docs/site/.../concepts/cost.md). This file declares an
+# estimate above its cap, so the reservation fails and the leg ends with the
+# refusal. This is the same reservation every flow leg under a `series` takes: nothing here
+# is special-cased.
+#
+# The estimate is a figure this file declares, as any pipeline's `estimated_usd`
+# is. The flow is one `noop` stage and would cost nothing; raise `budget.usd` to 5
+# and the same leg runs and ends `done`.
+name: over-budget
+kind: pipeline
+visibility: public
+description: >
+  Declare an estimate above the budget and watch the flow leg's reservation
+  refuse it before the engine starts. No key, no spend.
+outcome: Watch a budget refuse a run before anything starts
+suite: data
+
+governance:
+  budget: {usd: 1}
+  # Its own series, so what the other pipelines hold under `hello` can't change the figures.
+  series: hello-over-budget
+  estimated_usd: 5
+
+steps:
+  - id: engine-check
+    label: Run the data flow
+    flow: engine-check
