@@ -8,7 +8,7 @@ everyday work, with the options the code defines. Every command takes
 `--help` for its full option list.
 
 Commands that touch the engine's data read the same settings as the server, so
-set them first when you run outside `cairn dev`:
+set them first when you run outside `cairn setup`:
 
 | Variable | What it selects |
 |---|---|
@@ -20,9 +20,13 @@ set them first when you run outside `cairn dev`:
 
 | Command | What it does |
 |---|---|
-| `cairn dev --engine-only` | Starts the engine on SQLite with the in-process runtime and sign-in as `dev`/`dev`. `--port` sets the port (default 8000), `--db` the SQLite file (default `~/.cairn/dev.db`), `--seed` loads demo records first. Without `--engine-only` it also starts the console's dev server, which is part of cairn-platform. |
+| `cairn setup` | Starts the engine in the background on SQLite with the in-process runtime, signs in as `dev`/`dev`, runs the checks and returns once it all works. The engine listens on this machine only, on port 9090 (`--port`), with its log in `~/.cairn/engine.log`. `--db` sets the SQLite file (default `~/.cairn/dev.db`), `--seed` fills a demo workspace first, and `--profile` names the deployment profile: a file, or a name cairn or an installed pack ships. A second `cairn setup` reports the running engine and starts no other. |
+| `cairn setup --enable <pipeline>` | Also turns on the triggers that pipeline declares. Repeatable. Nothing else turns a declared trigger on, so installing a pack or choosing a profile starts nothing. |
+| `cairn setup --stop` | Stops the background engine and gives the CLI back its previous default server. |
+| `cairn setup --foreground` | Stays attached until Ctrl-C, with the console dev server when the checkout has one. `--engine-only` and `--web-only` start just that part. |
+| `cairn setup --server <url>` | Connects to a running server instead of starting an engine, and signs in. `-u` and `--password` are prompted when absent. |
 | `cairn demo` | Seeds a demo workspace (default `demo`; `-w` to choose). `--archive` removes the demo workspace again, keeping its runs and audit entries. |
-| `cairn doctor` | Checks the environment configuration and whether configured services are reachable. When an engine answers at the endpoint `cairn remote` uses, it also checks that the engine reads the store this CLI writes (`engine_store`). `--strict` fails on warnings. |
+| `cairn setup --check` | Checks the environment configuration and whether configured services are reachable. When an engine answers at the endpoint `cairn remote` uses, it also checks that the engine reads the store this CLI writes (`engine_store`). `--strict` fails on warnings. |
 | `cairn ls` | Lists the installed packs and what each contributes; `cairn ls <pack>` for one pack, `--json` for the raw shape. A pack's deployment profiles (`profiles/*.toml`) are listed with their `visibility` and absolute installed path, the value to give `CAIRN_PROFILE`. `cairn ls operators` prints the operator map. |
 
 ## Pipelines
@@ -51,9 +55,9 @@ refused: a flow runs as a leg of a pipeline.
 | `0` | the pipeline completed, and any pipeline its events started |
 | `1` | one failed or was cancelled, or the launch was refused: the ref is unknown, an input is missing, a policy denied it |
 | `2` | a pipeline is waiting on a person and there is no terminal to ask on (it prints the `cairn decide` command); or the command line is wrong: a bad input, a flag that doesn't apply, a ref that names a flow |
-| `77` | the session expired; run `cairn remote login` |
+| `77` | the session expired; run `cairn setup`, or `cairn setup --server <url>` |
 
-The old names keep working for one more minor version, and each says its new name on stderr: `cairn pipeline run` and `cairn remote launch` are now `cairn run`, `cairn pipeline explain` and `cairn preflight` are `cairn run --dry-run`, `cairn gate` is `cairn run --check`, and `cairn remote submit` is `cairn run --skill`. They keep their own exit codes: `cairn pipeline run` still exits `3` on a refused launch and `130` on Ctrl-C, and now `2` at a human gate it has no way to ask about.
+The old names keep working for one more minor version, and each says its new name on stderr: `cairn pipeline run` and `cairn remote launch` are now `cairn run`, `cairn pipeline explain` and `cairn preflight` are `cairn run --dry-run`, `cairn gate` is `cairn run --check`, and `cairn remote submit` is `cairn run --skill`. `cairn dev` is `cairn setup --foreground` (it keeps its default port, 8000, and like `cairn setup` it listens on this machine only unless `CAIRN_TRIGGER_HOST` is set), `cairn doctor` is `cairn setup --check`, and `cairn remote login` is `cairn setup --server`. They keep their own exit codes: `cairn pipeline run` still exits `3` on a refused launch and `130` on Ctrl-C, and now `2` at a human gate it has no way to ask about.
 
 ## Flows
 
@@ -100,7 +104,7 @@ else the `CAIRN_CONNECTIONS_DB` file, else `~/.cairn/cairn.db`. Before writing, 
 `cairn remote` uses (its `/healthz` reports a fingerprint of its store, never a path or
 DSN) whether it reads the same store. If it reads another one, nothing is written and
 the command exits 3, naming this CLI's store; set `CAIRN_STORAGE` to the value the engine
-was started with (`cairn dev --db PATH` is `sqlite:///PATH`), or pass `--force` to write
+was started with (`cairn setup --db PATH` is `sqlite:///PATH`), or pass `--force` to write
 anyway. When no engine answers, the write goes ahead and the line names the store.
 
 ## The record
@@ -116,7 +120,7 @@ anyway. When no engine answers, the write goes ahead and the line names the stor
 Drive a deployed cairn from your terminal. Log in once; the token is stored in
 your profile (`~/.cairn/config.toml`, written with mode 0600). The token is not renewed:
 a command that meets an expired session, `--watch` and `--follow` included, prints
-`session expired at HH:MM — run cairn remote login` and exits 77. A watched pipeline keeps
+`session expired at HH:MM — run cairn setup` and exits 77. A watched pipeline keeps
 running on the server; log in again and re-attach with `cairn status <id> --follow`.
 
 | Command | What it does |
@@ -124,7 +128,6 @@ running on the server; log in again and re-attach with `cairn status <id> --foll
 | `cairn status` | What's running and what just finished. `--status`, `--limit`, `--watch` (`-n` sets the interval). |
 | `cairn status <id>` | One pipeline (`pl_…`) or run: its state, who decided what, and what started it. `--results` for every step's findings, `--logs` for the event log (`--after-seq`, `--events-only`), `--follow` to stay attached and answer each gate (`--decision`, `--timeout`, `--on-timeout`, `--native`, `--dump`), `--replay` for a run's persisted trace (`--source`), `--json` for the raw form. Following exits 0 when done, 1 when failed or cancelled, and 2 when it's waiting on a person with no terminal to ask on. |
 | `cairn decide <id> approve\|reject\|cancel` | Decides what a pipeline or run is waiting on, or cancels it. The id picks the route. `--step` names the gate when a pipeline waits at more than one, `--reason` is required to reject a pipeline gate, and `--approver` is recorded when sign-in is off. |
-| `cairn remote login -e <url>` | Signs in and stores the token. |
 | `cairn remote triggers` | Lists this workspace's stored triggers (event and webhook), whether each is on, and which pipeline declared it. |
 | `cairn remote enable-trigger <id>` / `disable-trigger <id>` | Turns a stored trigger on or pauses it. A trigger a pipeline declares starts paused; an event trigger applies to the next event, a webhook trigger at the next server start. |
 

@@ -35,6 +35,7 @@ from cairn.cli.commands import connect as _connect
 from cairn.cli.commands import demo as _demo
 from cairn.cli.commands import deploy as _deploy
 from cairn.cli.commands import doctor as _doctor
+from cairn.cli.commands import setup as _setup
 from cairn.cli.commands import export as _export
 from cairn.cli.commands import init as _init
 from cairn.cli.commands import lock as _lock
@@ -82,7 +83,8 @@ def _root(
     """cairn — engine + community packs for declarative agent workflows."""
 
 
-app.command(name="doctor")(_doctor.cmd)
+app.command(name="doctor", hidden=True)(renamed("cairn doctor", "cairn setup --check")(_doctor.cmd))
+app.command(name="setup")(_setup.cmd)
 app.command(name="ls")(_ls.cmd)
 app.command(name="validate")(_validate.cmd)
 # #1092 — render an installed workflow as one runnable pipeline file.
@@ -115,7 +117,7 @@ app.add_typer(_remote.app, name="remote")
 app.add_typer(_audit.app, name="audit")
 # `dev` — one-command sqlite dev environment (#1188, ADR-0085 D5): engine + vite
 # on a pinned config the repo .env can't poison; login dev/dev.
-app.add_typer(_dev.app, name="dev")
+app.add_typer(_dev.app, name="dev", hidden=True)
 # `connect` manages typed infra connections (model APIs / compute / MCP / oauth)
 # over the ConnectionStore (#68): add / ls / test / rm / providers / authorize.
 app.add_typer(_connect.app, name="connect")
