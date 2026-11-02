@@ -8,6 +8,8 @@ paste into issues.
 """
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from cairn.cli.commands import doctor as doctor_mod
@@ -47,3 +49,43 @@ def test_a_dsn_row_still_names_where_it_points(monkeypatch):
 def test_a_plain_value_is_unchanged(monkeypatch):
     rows = {r.name: r.detail for r in _rows(monkeypatch, "CAIRN_JOB_CHANNEL", "http")}
     assert rows["CAIRN_JOB_CHANNEL"] == "set: http"
+
+
+TOKEN = "T0AAA/B0BBB/SEKRETTOKENVALUE"
+WEBHOOK = f"https://hooks.slack.com/services/{TOKEN}"
+
+
+def test_a_webhook_row_keeps_its_host_and_hides_its_token(monkeypatch):
+    """A secret URL's path can be the secret: a Slack webhook's token is in it."""
+    rows = {r.name: r.detail for r in _rows(monkeypatch, "SLACK_WEBHOOK_URL", WEBHOOK)}
+    assert rows["SLACK_WEBHOOK_URL"] == "set: https://hooks.slack.com/***"
+
+
+def test_the_reachability_row_hides_it_too(monkeypatch):
+    async def reachable(url):
+        assert url == WEBHOOK, "the probe still goes to the real URL"
+        return True, "HTTP 200"
+
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", WEBHOOK)
+    monkeypatch.setattr(doctor_mod, "_probe_url", reachable)
+    row = asyncio.run(doctor_mod.check_slack_webhook())
+    assert row.detail == "https://hooks.slack.com/*** — HTTP 200"
+
+
+@pytest.mark.parametrize("value, shown", [
+    ("https://hooks.example.com/hook/abc123", "https://hooks.example.com/***"),
+    ("https://user:pw@hooks.example.com:8443/hook?key=abc123", "https://hooks.example.com:8443/***"),
+    ("https://hooks.example.com", "https://hooks.example.com"),
+    ("wss://hooks.example.com/abc123", "wss://hooks.example.com/***"),
+])
+def test_a_secret_url_shows_only_where_it_points(value, shown):
+    assert doctor_mod._mask(value) == shown
+
+
+@pytest.mark.parametrize("value, shown", [
+    ("postgresql://alice:s3cret@db.invalid:5432/cairn", "postgresql://db.invalid:5432/cairn"),
+    ("postgresql+asyncpg://alice:s3cret@db.invalid/cairn", "postgresql+asyncpg://db.invalid/cairn"),
+    ("sqlite:////var/cairn/dev.db", "sqlite:////var/cairn/dev.db"),
+])
+def test_a_secret_database_url_still_names_its_database(value, shown):
+    assert doctor_mod._mask(value) == shown
