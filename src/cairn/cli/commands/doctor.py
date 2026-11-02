@@ -154,7 +154,7 @@ def check_engine_store() -> Optional[CheckResult]:
                            category="store")
     return CheckResult("engine_store", "warn",
                        f"this CLI writes {mine}, but the engine at {ep} reads a different "
-                       "store: `cairn connect add` refuses until CAIRN_STORAGE names the "
+                       "store: `cairn admin connect add` refuses until CAIRN_STORAGE names the "
                        "engine's store (or --force)", category="store")
 
 
@@ -324,13 +324,13 @@ def check_seed_providers() -> list[CheckResult]:
 
     found = load_seed_providers()
     out = [CheckResult(f"seed_provider[{f['name']}]", "warn",
-                       f"{f['target']} does not load ({f['error']}) — `cairn demo` skips it",
+                       f"{f['target']} does not load ({f['error']}) — `cairn admin demo` skips it",
                        category="packs") for f in seed_load_failures()]
     if found:
         out.append(CheckResult("seed_providers", "ok", ", ".join(found), category="packs"))
     else:
         out.append(CheckResult("seed_providers", "warn",
-                               "no `cairn.seeds` provider is installed — `cairn demo` seeds an empty "
+                               "no `cairn.seeds` provider is installed — `cairn admin demo` seeds an empty "
                                "workspace (reinstall cairn, or install a pack that ships one)",
                                category="packs"))
     return out

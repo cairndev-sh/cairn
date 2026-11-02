@@ -70,11 +70,27 @@ def _unbound_hint(reports: list[ValidationReport]) -> str:
     active = getenv("CAIRN_PROFILE", "") or "local-dev (the default; set CAIRN_PROFILE to use another)"
     lines = [f"\nhint: a capability has no binding in the active profile ({active}). "
              "Validate under the profile the pack runs with:",
-             "  CAIRN_PROFILE=<profile.toml> cairn validate …"]
+             "  CAIRN_PROFILE=<profile.toml> cairn pack check …"]
     shipped = _pack_profiles(failing)
     if shipped:
         lines.append("  profiles shipped with this pack: " + ", ".join(str(p) for p in shipped))
     return "\n".join(lines)
+
+
+def reports_for(paths: list[str], template_paths: Optional[list[str]]) -> list[ValidationReport]:
+    """One report per artifact under ``paths``; empty when there are none."""
+    tpaths = [Path(p) for p in template_paths] if template_paths else None
+    return [validate_path(f, template_search_paths=tpaths) for f in expand_paths([Path(p) for p in paths])]
+
+
+def strict_local_validation() -> None:
+    """What every validation runs under: a local compile gets local-dev (#2241 D), and ADR-0103:
+    anything that runs an operator here reports STRICTLY, so an undeclared stage, series or scalar
+    raises here and never in a job."""
+    from cairn.profiles import default_dev_profile  # noqa: PLC0415
+
+    default_dev_profile()
+    os.environ.setdefault(STRICT_ENV, "1")
 
 
 def _run(
@@ -85,13 +101,11 @@ def _run(
     verbose: bool,
 ) -> int:
     """Shared implementation. Returns the exit code."""
-    tpaths = [Path(p) for p in template_paths] if template_paths else None
-    files = expand_paths([Path(p) for p in paths])
-    if not files:
+    reports = reports_for(paths, template_paths)
+    if not reports:
         print("no artifacts found", file=sys.stderr)
         return 1
 
-    reports = [validate_path(f, template_search_paths=tpaths) for f in files]
     for r in reports:
         print(_format(r, verbose=verbose))
 
@@ -128,12 +142,7 @@ def cmd(
     ),
 ) -> None:
     """Validate templates / skills / policies offline (no LLM, no backend)."""
-    from cairn.profiles import default_dev_profile  # noqa: PLC0415 — #2241 D: local compiles get local-dev
-
-    default_dev_profile()
-    # ADR-0103: anything that runs an operator under `cairn validate` reports
-    # STRICTLY — an undeclared stage/series/scalar raises here, never in a job.
-    os.environ.setdefault(STRICT_ENV, "1")
+    strict_local_validation()
     rc = _run(
         paths=paths,
         strict=strict,

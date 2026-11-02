@@ -330,7 +330,7 @@ async def resolve_declared_compute(binding, *, op_name: str, is_mocked: bool,
     if conn is None:
         raise BindingEvalError(
             f"operator {op_name!r} compute_target {target!r} did not resolve to an "
-            f"enabled connection — add it with `cairn connect`"
+            f"enabled connection — add it with `cairn admin connect`"
         )
     return conn, str(target)
 

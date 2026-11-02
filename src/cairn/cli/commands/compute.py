@@ -55,15 +55,15 @@ def _run(coro):
 @app.command("status")
 def status(
     connection: Optional[str] = typer.Argument(
-        None, help="Name of the `compute.ssh` connection (list them: `cairn connect ls`)."),
+        None, help="Name of the `compute.ssh` connection (list them: `cairn admin connect ls`)."),
     json: bool = typer.Option(False, "--json", help="Emit the raw dict."),
 ) -> None:
     """What state is this box in, and what is it costing while it is up?"""
     if not connection:
         # #2536 — the usage error a missing argument always gave (exit 2), plus where
         # the names come from.
-        typer.echo("cairn compute status needs a `compute.ssh` connection name — list "
-                   "them with `cairn connect ls`", err=True)
+        typer.echo("cairn admin compute status needs a `compute.ssh` connection name — list "
+                   "them with `cairn admin connect ls`", err=True)
         raise typer.Exit(2)
     try:
         row = _run(_status(connection))

@@ -116,7 +116,7 @@ def _scoped_run(request: Request, subject: Optional[str]) -> Optional[str]:
 
 
 _NOT_A_WORKER = ("claiming or reporting pull-lane jobs needs a worker credential: the "
-                 "deployment admin's token or a worker-pool token (cairn remote worker-token)")
+                 "deployment admin's token or a worker-pool token (cairn admin worker-token)")
 
 
 def _is_worker_credential(request: Request, subject: Optional[str]) -> bool:
@@ -161,7 +161,7 @@ def build_jobs_router(store_factory=None) -> APIRouter:
             raise HTTPException(
                 status_code=403,
                 detail="a per-run worker token ingests that run's events; claiming work "
-                       "needs a worker credential (cairn worker --pull --token <worker-pool token>)")
+                       "needs a worker credential (cairn admin worker --pull --token <worker-pool token>)")
         if not _is_worker_credential(request, subject):
             raise HTTPException(status_code=403, detail=_NOT_A_WORKER)
         store = _store()

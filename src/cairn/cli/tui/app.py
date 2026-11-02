@@ -1,4 +1,4 @@
-"""``cairn remote console`` — a Toad-style Textual control-center over cairn (#56).
+"""``cairn admin console`` — a Toad-style Textual control-center over cairn (#56).
 
 A tabbed browser (Runs · Workflows · Connections · Profiles) + a command bar at
 the bottom that runs *any* cairn command: server verbs (`submit`/`approve`/`ps`)
@@ -11,7 +11,7 @@ tab and ``run``'s template completion — are offered only when a ``cairn.cli`` 
 mounted ``ask`` (:func:`_ask_provided`), and ``ask`` runs through that mounted command.
 
 Needs ``textual`` and ``textual-autocomplete``, which ``cairndev`` does not install
-(there is no ``tui`` extra); ``cairn remote console`` names the command that adds them.
+(there is no ``tui`` extra); ``cairn admin console`` names the command that adds them.
 """
 from __future__ import annotations
 
@@ -41,6 +41,9 @@ from textual_autocomplete import AutoComplete, DropdownItem, TargetState
 _SERVER_CMDS = {"submit", "ps", "watch", "status", "logs", "approve", "reject"}
 _LOCAL_CMDS = {"ls", "doctor", "validate", "run", "replay", "connect", "eval",
                "init", "lock", "visualize"}
+#: The console's verbs stay short; these are the CLI spellings they shell out to (ADR-0165 D10).
+_LOCAL_ARGV = {"ls": ["pack", "ls"], "validate": ["pack", "check"], "connect": ["admin", "connect"],
+               "init": ["pack", "new"], "lock": ["pack", "lock"]}
 COMMANDS: dict[str, str] = {
     "ask": 'ask "<natural-language intent>" — resolve to a governed plan (②)',
     "submit": "<skill> [--service S] [-i k=v ...]  — fire a skill (auto-watches)",
@@ -764,10 +767,20 @@ class CairnConsole(App):
             self.notify("approval required — ✓ Approve / ✗ Reject (click or a/r)", severity="warning")
 
     # ── local commands (shell out, stream Rich output) ────────────
+    @staticmethod
+    def _cli_argv(toks: list[str]) -> list[str]:
+        head, rest = toks[0], toks[1:]
+        if head == "replay":
+            return ["status", *rest, "--replay"]
+        if head == "visualize" and rest[:1] == ["template"]:
+            return ["pack", "show", "--graph", *rest[1:]]
+        return [*_LOCAL_ARGV.get(head, [head]), *rest]
+
     @work(group="shell")
     async def _shell(self, toks: list[str], *, env: Optional[dict] = None,
                      after: Optional[Callable[[], None]] = None) -> None:
         log = self._log()
+        toks = self._cli_argv(toks)
         log.write(Text.assemble(("$ cairn ", "bold green"), (" ".join(toks), "green")))
         try:
             proc = await asyncio.create_subprocess_exec(

@@ -70,7 +70,7 @@ def with_ask_provider(monkeypatch):
 
 def test_help_lists_no_ask_verb_without_an_ask_provider(without_ask_provider) -> None:
     names = _commands(without_ask_provider.app)
-    assert "run" in names and "pipeline" in names  # the panel was read
+    assert "run" in names and "pack" in names  # the panel was read
     assert "ask" not in names
 
 

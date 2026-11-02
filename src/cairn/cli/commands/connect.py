@@ -55,8 +55,8 @@ from cairn.services.mcp import presets
 # #68
 app = typer.Typer(
     help="Manage typed infra connections (model APIs, compute, MCP). "
-    "`cairn connect presets` lists the shipped MCP connector presets "
-    "(github, slack, notion); add one with `cairn connect add --preset <name>`.",
+    "`cairn admin connect presets` lists the shipped MCP connector presets "
+    "(github, slack, notion); add one with `cairn admin connect add --preset <name>`.",
     no_args_is_help=True,
 )
 console = Console()
@@ -199,7 +199,7 @@ def add_cmd(
     scope: list[str] = typer.Option(None, "--scope", help="oauth scope (repeatable)"),
     preset: str = typer.Option(
         None, "--preset", help="build an MCP connection from a shipped connector "
-        "preset (see `cairn connect presets`); --name/--set/--secret/--description "
+        "preset (see `cairn admin connect presets`); --name/--set/--secret/--description "
         "override its values"
     ),
 ) -> None:
@@ -218,8 +218,8 @@ def add_cmd(
         _save_and_probe(conn, force)
         return
     if provider is None:
-        console.print("[red]missing provider[/] — `cairn connect add <provider>` "
-                      "(see [bold]cairn connect providers[/]) or `--preset <name>`.")
+        console.print("[red]missing provider[/] — `cairn admin connect add <provider>` "
+                      "(see [bold]cairn admin connect providers[/]) or `--preset <name>`.")
         raise typer.Exit(2)
     if via is not None:
         _add_oauth(
@@ -235,8 +235,8 @@ def add_cmd(
         console.print(
             Panel(
                 f"unknown provider [red]{provider}[/]\n\nknown: {known}\n\n"
-                "(MCP/custom: use [bold]cairn connect add mcp --set url=…[/]; "
-                "OAuth: [bold]cairn connect add github --via oauth[/])",
+                "(MCP/custom: use [bold]cairn admin connect add mcp --set url=…[/]; "
+                "OAuth: [bold]cairn admin connect add github --via oauth[/])",
                 title="[red]no such provider[/]",
                 border_style="red",
             )
@@ -263,7 +263,7 @@ def _save_and_probe(conn: Connection, force: bool) -> None:
     # row shows a health dot immediately (best-effort — never blocks the add).
     _, result = asyncio.run(_probe_by_name(conn.name))
     _render_probe(result)
-    console.print(f"  [dim]re-check anytime with[/] [bold]cairn connect test {conn.name}[/]")
+    console.print(f"  [dim]re-check anytime with[/] [bold]cairn admin connect test {conn.name}[/]")
 
 
 def _from_preset(
@@ -364,14 +364,14 @@ def _add_oauth(
         console.print(
             f"[yellow]saved, but couldn't start authorization:[/] {exc}\n"
             f"  [dim]set the provider client creds (CAIRN_OAUTH_<P>_CLIENT_ID/SECRET) and retry:[/] "
-            f"[bold]cairn connect authorize {conn.name}[/]"
+            f"[bold]cairn admin connect authorize {conn.name}[/]"
         )
         return
     console.print(
         Panel(f"[bold]{session.redirect_url}[/]",
               title="authorize — open this URL", border_style="cyan")
     )
-    console.print(f"  [dim]then verify with[/] [bold]cairn connect test {conn.name}[/]")
+    console.print(f"  [dim]then verify with[/] [bold]cairn admin connect test {conn.name}[/]")
 
 
 @app.command("authorize")
@@ -408,7 +408,7 @@ def authorize_cmd(
         Panel(f"[bold]{session.redirect_url}[/]",
               title=f"authorize {name} — open this URL", border_style="cyan")
     )
-    console.print(f"  [dim]then verify with[/] [bold]cairn connect test {name}[/]")
+    console.print(f"  [dim]then verify with[/] [bold]cairn admin connect test {name}[/]")
 
 
 @app.command("ls")
@@ -428,8 +428,8 @@ def ls_cmd() -> None:
     if not conns:
         console.print(
             "[dim]no connections yet — add one with[/] "
-            "[bold]cairn connect add <provider>[/] "
-            "[dim](see[/] [bold]cairn connect providers[/][dim])[/]"
+            "[bold]cairn admin connect add <provider>[/] "
+            "[dim](see[/] [bold]cairn admin connect providers[/][dim])[/]"
         )
         return
     t = Table("name", "kind", "enabled", "secret keys", "description",
@@ -459,7 +459,7 @@ def _render_probe(result: ProbeResult) -> None:
 
 @app.command("test")
 def test_cmd(
-    name: str = typer.Argument(..., help="connection name (from `cairn connect ls`)"),
+    name: str = typer.Argument(..., help="connection name (from `cairn admin connect ls`)"),
 ) -> None:
     """Resolve a connection's secret refs via the SecretStore, then run the
     provider's **authenticated** health probe (the creds actually work) and
@@ -546,7 +546,7 @@ def rm_cmd(
 
 @app.command("providers")
 def providers_cmd() -> None:
-    """List the provider catalog — what you can `cairn connect add`."""
+    """List the provider catalog — what you can `cairn admin connect add`."""
     t = Table("provider", "kind", "secret keys", "description",
               title="connectable providers")
     for key in sorted(PROVIDER_CATALOG):
@@ -559,14 +559,14 @@ def providers_cmd() -> None:
         )
     console.print(t)
     console.print(
-        "  [dim]add with[/] [bold]cairn connect add <provider>[/]"
+        "  [dim]add with[/] [bold]cairn admin connect add <provider>[/]"
         "  [dim]· aliases: hf, claude, google, k8s[/]"
     )
 
 
 @app.command("presets")
 def presets_cmd() -> None:
-    """List the shipped MCP connector presets — what you can `cairn connect add --preset`."""
+    """List the shipped MCP connector presets — what you can `cairn admin connect add --preset`."""
     t = Table("preset", "provider", "transport", "required env", "description",
               title="MCP connector presets")
     for key in presets.list_presets():
@@ -579,4 +579,4 @@ def presets_cmd() -> None:
             spec.get("connector", {}).get("description", ""),
         )
     console.print(t)
-    console.print("  [dim]add with[/] [bold]cairn connect add --preset <name>[/]")
+    console.print("  [dim]add with[/] [bold]cairn admin connect add --preset <name>[/]")
