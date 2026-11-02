@@ -9,8 +9,8 @@ every kind of leg and gate. Install it with the `hello` extra
 (`pip install 'cairndev[hello]'`), then inspect a pipeline before you run it:
 
 ```bash
-cairn pipeline show hello-cairn/profile-and-publish      # inputs, legs and gates
-cairn pipeline explain hello-cairn/profile-and-publish   # what each leg will do, the gates, the budget
+cairn pack show hello-cairn/profile-and-publish      # inputs, legs and gates
+cairn run --dry-run hello-cairn/profile-and-publish   # what each leg will do, the gates, the budget
 ```
 
 **Legs** counts the pipeline's top-level legs. **Gates** counts data gates and
@@ -63,7 +63,7 @@ engine.
 
 The example's gates name `data-owners`, `ml-owners` and `ops`. Those are
 neither users nor roles on a fresh deployment, so only an owner or admin can
-decide them; `cairn dev`'s `dev` user can. Name your own users or roles in
+decide them; `cairn setup`'s `dev` user can. Name your own users or roles in
 your pipelines (see [Who decides](/concepts/gates/#who-decides)).
 
 ## Next

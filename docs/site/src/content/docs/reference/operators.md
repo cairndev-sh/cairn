@@ -14,7 +14,7 @@ extras), and the training stack `train/lora` needs is the `train` extra.
 :::note[From the manifests]
 Every row comes from the operator package's `pack.toml` manifest
 (`packages/cairn-operator-*`). The manifest is what the engine reads, and tests
-check that it matches the operator code. `cairn ls operators` prints the same
+check that it matches the operator code. `cairn pack ls operators` prints the same
 map for what is installed where you run it.
 :::
 
@@ -160,7 +160,7 @@ for its SSH port. Put an approval gate before it; a profile that gates
 `paid_compute` also pauses it for its own approval. `compute/release` stops the
 instance, and an instance already stopped is a success, so declare it
 `finalizer: true` with its `connection` wired from `$input`: it then runs when the
-pipeline ends done, failed or cancelled (in-process and DBOS pipeline owners). `cairn compute sweep --apply` stops a box
+pipeline ends done, failed or cancelled (in-process and DBOS pipeline owners). `cairn admin compute sweep --apply` stops a box
 whose lease expired when the control plane that acquired it is gone.
 
 ### `cairn-operator-secrets-env`
@@ -190,7 +190,7 @@ LoRA fine-tuning on CPU — provides train.finetune (train/lora, stage train.lor
 
 Operators for GPU providers, managed training, evaluation, serving and the
 other domains are part of cairn-platform. Your own operators ship as a package
-with a `cairn.operators` entry point; `cairn init operator <name>` scaffolds
+with a `cairn.operators` entry point; `cairn pack new operator <name>` scaffolds
 one.
 
 ## Next

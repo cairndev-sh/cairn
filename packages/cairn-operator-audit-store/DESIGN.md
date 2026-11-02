@@ -107,7 +107,7 @@ before that field existed reads as `default`.
 | No audit rows at all, no error | `audit.sink` unbound in the active profile | n/a — `audit_emit` no-ops on `NullAuditSink` | No, by design (ADR-0028) |
 | No audit rows, "audit binding 'audit/store' unresolved" in the log | The binding resolved **before the operator packs were loaded**, so the registry was empty and the null sink was cached for the process lifetime | n/a | No — fixed 2026-09-03 (#1970): the resolver now loads the packs once and retries before caching |
 | Rows exist but vanish after a deploy | `CAIRN_AUDIT_LOG` unset, chain written inside the container | n/a | No — set the path (§4) |
-| A row's hash does not verify | The file was edited or concatenated | n/a — verification is the reader's | The chain is tamper-**evident**, not tamper-proof. Rows removed from the END leave a chain that still verifies; quote a row's `hash` (the receipt) and pass it to `cairn lineage --expect-head` to see them |
+| A row's hash does not verify | The file was edited or concatenated | n/a — verification is the reader's | The chain is tamper-**evident**, not tamper-proof. Rows removed from the END leave a chain that still verifies; quote a row's `hash` (the receipt) and pass it to `cairn admin lineage --expect-head` to see them |
 | A corrupt line mid-file | Partial write, or a hand edit | Skipped when the head is read; the chain continues from the last parseable row | No, deliberately: one bad line must not stop auditing |
 | An emitting seam raises | Any sink error | Logged and dropped by `audit_emit` | No — auditing never breaks the operation being audited |
 

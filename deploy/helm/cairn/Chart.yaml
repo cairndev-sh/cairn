@@ -10,7 +10,7 @@ type: application
 version: 0.1.0
 
 # The default engine image tag. Overridden by `image.tag`; pin it in prod
-# (`cairn deploy doctor --values … --strict` fails on `latest`).
+# (`cairn admin deploy doctor --values … --strict` fails on `latest`).
 appVersion: "latest"
 
 home: https://cairndev.sh

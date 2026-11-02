@@ -25,7 +25,7 @@ pack, `hello-cairn`, with five pipelines to try. Without the script:
 pip install 'cairndev[hello]'   # inside a virtual environment, Python 3.12 or later
 ```
 
-Check it: `cairn --version`, then `cairn pipeline ls` lists the example's
+Check it: `cairn --version`, then `cairn pack ls --pipelines` lists the example's
 pipelines.
 
 ## 2. Get a dataset to check
@@ -44,10 +44,10 @@ export CAIRN_PROFILE=$PWD/hello.toml
 ## 3. See what will happen before anything runs
 
 ```bash
-cairn pipeline explain hello-cairn/profile-and-publish -e sandbox -i path=$PWD/sample.jsonl
+cairn run --dry-run hello-cairn/profile-and-publish -e sandbox -i path=$PWD/sample.jsonl
 ```
 
-`explain` resolves everything a launch would, and runs nothing. For each leg
+`--dry-run` resolves everything a launch would, and runs nothing. For each leg
 it prints the operator or flow file it will run, the engine, the gate that
 answers it, and where each input value comes from:
 
@@ -63,21 +63,20 @@ answers it, and where each input value comes from:
 ## 4. Start an engine
 
 ```bash
-cairn dev --engine-only --port 8471 &
-cairn remote login -u dev -p dev -e http://localhost:8471
+cairn setup --port 8471
 ```
 
-`cairn dev` starts the engine on a local SQLite database (`~/.cairn/dev.db`
+`cairn setup` starts the engine in the background on a local SQLite database (`~/.cairn/dev.db`
 unless you pass `--db`), with the in-process runtime and sign-in on, as the
-user `dev` with the password `dev`. `remote login` stores the token, so the
-next commands need no flags. `hello.toml` binds `audit.sink`, which the default
+user `dev` with the password `dev`. It also signs the CLI in, so the
+next commands need no flags; `cairn setup --stop` stops the engine. `hello.toml` binds `audit.sink`, which the default
 `local-dev` profile leaves off.
 
 ## 5. Launch the pipeline
 
 ```bash
-cairn remote launch hello-cairn/profile-and-publish \
-  -i path=$PWD/sample.jsonl --environment sandbox --watch
+cairn run hello-cairn/profile-and-publish \
+  -i path=$PWD/sample.jsonl --environment sandbox
 ```
 
 The pipeline profiles the file, passes its **data gate** (the profile must
@@ -96,7 +95,14 @@ summary, and stops at `review`, a **person gate**:
     promote            pending              run=None
     publish            pending              run=None
     audit              pending              run=None
-⏸ paused — 1 step(s) waiting on a human
+  gate review  (approvers: data-owners)
+    profile.verdict       pass
+    profile.record_count  20
+    …
+→ approve   cairn decide pl_3f5b6ec6a25d414d approve --step review --approver you
+→ findings  cairn status pl_3f5b6ec6a25d414d --results
+→ watch     cairn status pl_3f5b6ec6a25d414d --follow
+Approve this step? [a]pprove / [r]eject / [s]kip (detach)
 ```
 
 Every leg that did work has its own run. The data gate has none: it was
@@ -104,9 +110,12 @@ decided from the profile's numbers, so nobody was asked.
 
 ## 6. Decide at the gates
 
+`cairn run` is asking: answer `a`, and `a` again at the next stop. With `s`, or with no
+terminal to ask on, the pipeline stays waiting, and these answer from any shell:
+
 ```bash
-cairn remote advance <pipeline_id> review       # the person gate
-cairn remote advance <pipeline_id> promote      # the operator's own gate
+cairn decide <pipeline_id> approve --step review       # the person gate
+cairn decide <pipeline_id> approve --step promote      # the operator's own gate
 ```
 
 The pipeline stops a second time, at `promote`. That leg moves the governed
@@ -121,8 +130,8 @@ audit row, and ends `done`.
 ## 7. Read the record
 
 ```bash
-cairn remote findings <pipeline_id>     # what every leg produced
-cairn remote pipeline <pipeline_id>     # the whole record: plan, inputs, every step's state
+cairn status <pipeline_id> --results  # what every leg produced
+cairn status <pipeline_id> --json     # the whole record: plan, inputs, every step's state
 ```
 
 ```text
@@ -144,7 +153,7 @@ The audit trail is in `./audit.jsonl`, next to where the engine runs
 (`CAIRN_AUDIT_LOG` moves it). It has rows for the launch, each step and each decision
 a person made (`pipeline.gate_approved`, with the signed-in user as `actor`), and the
 row the pipeline's own `audit` step writes, whose hash the record above shows. Each row is
-chained to the one before it by its hash, and `cairn audit verify` checks the file.
+chained to the one before it by its hash, and `cairn admin audit verify` checks the file.
 [The audit trail](/concepts/runs/) lists every row. The
 staged and published summaries are under `~/.cairn/artifacts`
 (`CAIRN_ARTIFACTS_DIR`).

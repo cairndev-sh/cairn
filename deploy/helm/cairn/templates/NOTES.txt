@@ -3,7 +3,7 @@ cairn {{ .Chart.AppVersion }} — release {{ .Release.Name }} in {{ .Release.Nam
   runtime      {{ .Values.runtime }}
   image        {{ include "cairn.image" . }}
   database     {{ if .Values.postgres.enabled }}bundled StatefulSet ({{ include "cairn.postgresName" . }}){{ else }}external DSN{{ end }}
-  api          https://{{ .Values.ingress.host }} (cairn remote login --endpoint https://{{ .Values.ingress.host }})
+  api          https://{{ .Values.ingress.host }} (cairn setup --server https://{{ .Values.ingress.host }})
 
 Next:
 
@@ -13,5 +13,5 @@ Next:
 {{- if eq (include "cairn.imageTag" .) "latest" }}
 
 WARNING: image.tag is `latest`. Pin a tag or digest so "what is deployed" is
-answerable by SHA; `cairn deploy doctor --values … --strict` fails on this.
+answerable by SHA; `cairn admin deploy doctor --values … --strict` fails on this.
 {{- end }}

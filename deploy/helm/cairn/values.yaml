@@ -5,7 +5,7 @@
 # tests/deploy/test_helm_chart.py fails if the two drift apart.
 #
 # Validate a values file BEFORE installing:
-#   cairn deploy doctor --values my-values.yaml --strict
+#   cairn admin deploy doctor --values my-values.yaml --strict
 
 # ── image ────────────────────────────────────────────────────────────────
 image:
@@ -30,7 +30,7 @@ fullnameOverride: ""
 runtime: dbos
 
 # postgres | sqlite | memory. `memory` with a durable runtime is refused by
-# `cairn deploy doctor` — DBOS recovery would replay the whole graph (#390).
+# `cairn admin deploy doctor` — DBOS recovery would replay the whole graph (#390).
 checkpointer: postgres
 
 # ── control-plane server ─────────────────────────────────────────────────
@@ -68,15 +68,15 @@ worker:
   tolerations: []
   affinity: {}
 
-# ── pull worker (`cairn worker --pull`, #565) ─────────────────────────────
+# ── pull worker (`cairn admin worker --pull`, #565) ─────────────────────────────
 # A machine that dials OUT to the control plane, claims jobs and reports over
 # the job channel. The chart has no default command; supply one:
 #   pullWorker:
 #     enabled: true
-#     command: ["cairn", "worker", "--pull", "--engine-url", "https://cairn.example.com"]
+#     command: ["cairn", "admin", "worker", "--pull", "--engine-url", "https://cairn.example.com"]
 # With auth on (the chart's default) claiming needs a worker credential: a
 # worker-pool token, minted where CAIRN_JWT_SECRET is set with
-#   cairn remote worker-token --name <pool>
+#   cairn admin worker-token --name <pool>
 # and read from CAIRN_ENGINE_TOKEN (or `--token`). A signed-in user's token gets
 # 403 on /jobs/claim. The worker reads the token from a Secret of its OWN and
 # its settings from a ConfigMap of its own (an allowlist plus extraEnv), and runs
@@ -95,7 +95,7 @@ pullWorker:
   # worker; rotating the token inside an existingSecret does not (restart it:
   # kubectl rollout restart deployment/<release>-pull-worker). A Secret you
   # already have named <release>-pull-worker collides with the rendered one.
-  token: ""            # a worker-pool token (`cairn remote worker-token --name <pool>`)
+  token: ""            # a worker-pool token (`cairn admin worker-token --name <pool>`)
   existingSecret: ""
   # CAIRN_ENGINE_URL in the worker's ConfigMap (empty → env.extra.CAIRN_ENGINE_URL,
   # else env.extra.OBS_ENGINE_URL, else none; the command's --engine-url works
@@ -187,7 +187,7 @@ service:
 secrets:
   existingSecret: ""
   obsJwtSecret: ""          # REQUIRED — auth is ON (issue #2)
-  obsApiPasswordHash: ""    # REQUIRED — `cairn remote hash-password`
+  obsApiPasswordHash: ""    # REQUIRED — `cairn admin hash-password`
   openaiApiKey: ""
   # remote/exec + durable remote-job polling (#565/#918) — server AND worker.
   sshPrivateKey: ""

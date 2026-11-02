@@ -2,12 +2,12 @@
 
 A **connection** is one reusable, typed binding to external infra — a model API,
 a compute target, an MCP server, or an OAuth-brokered SaaS. Connections are
-managed with `cairn connect` and consumed at runtime via `resolve_connection`.
+managed with `cairn admin connect` and consumed at runtime via `resolve_connection`.
 
 Two principles hold for every kind:
 
 - **Secrets are references, never values.** A connection stores a SecretStore
-  reference (e.g. `OPENAI_API_KEY`), resolved at use time. `cairn connect` never
+  reference (e.g. `OPENAI_API_KEY`), resolved at use time. `cairn admin connect` never
   reads, prints, or persists a raw secret value.
 - **Durable by default.** Connections live in sqlite at `~/.cairn/connections.db`
   (override with `CAIRN_CONNECTIONS_DB`; `=:memory:` opts into a volatile store).
@@ -16,17 +16,17 @@ Two principles hold for every kind:
 ## The CLI
 
 ```bash
-cairn connect providers              # what you can connect (the catalog)
-cairn connect add openai             # zero-config: refs OPENAI_API_KEY
-cairn connect add docker --set host=tcp://host:2375
-cairn connect add anthropic --name claude-prod --secret API_KEY=MY_ANTHROPIC_KEY
-cairn connect ls                     # names + kinds + secret KEYS (never values)
-cairn connect test <name>            # resolves refs; reports presence only
-cairn connect rm <name>
+cairn admin connect providers              # what you can connect (the catalog)
+cairn admin connect add openai             # zero-config: refs OPENAI_API_KEY
+cairn admin connect add docker --set host=tcp://host:2375
+cairn admin connect add anthropic --name claude-prod --secret API_KEY=MY_ANTHROPIC_KEY
+cairn admin connect ls                     # names + kinds + secret KEYS (never values)
+cairn admin connect test <name>            # resolves refs; reports presence only
+cairn admin connect rm <name>
 ```
 
 `add` builds from the **provider catalog** — each entry knows the connection
-`kind` and the secret refs a provider needs, so `cairn connect add openai`
+`kind` and the secret refs a provider needs, so `cairn admin connect add openai`
 produces a working `api_key` connection pointed at `OPENAI_API_KEY` with no
 flags. Aliases: `hf`→huggingface, `claude`→anthropic, `google`→gemini, `k8s`→kube.
 
@@ -55,7 +55,7 @@ that names no workspace, or a workspace no store holds, is refused rather than
 resolved as the deployment's, and so is a lookup made outside any workspace scope
 (no request and no run scoped from its record, as for a template's operation
 nodes on a durable runtime's worker): it raises `WorkspaceScopeRequired`. The
-deployment's own tools (`cairn connect test`, `cairn doctor`, `cairn compute
+deployment's own tools (`cairn admin connect test`, `cairn setup --check`, `cairn admin compute
 status`) look up the deployment's connections explicitly. Work an operator starts
 from inside a run (`ctx.launch`) starts in the run's workspace; with auth on and
 no workspace in scope it is refused. With auth on, a pipeline step whose record
@@ -136,10 +136,10 @@ request/response never leave your infra and every use still passes the
 `invoke_operator` chokepoint (cost / policy / redaction / audit / HITL).
 
 ```bash
-cairn connect add github --via oauth          # persists a kind=oauth connection,
+cairn admin connect add github --via oauth          # persists a kind=oauth connection,
                                               # starts the flow, prints a redirect URL
-cairn connect authorize github                # re-run the flow (retry / re-consent)
-cairn connect test github                     # ✓ once the token exists at the broker
+cairn admin connect authorize github                # re-run the flow (retry / re-consent)
+cairn admin connect test github                     # ✓ once the token exists at the broker
 ```
 
 Flags: `--broker <name>` (pins the broker per-connection; otherwise the global
@@ -208,10 +208,10 @@ This is Nango's job, not cairn's, and it needs *your* GitHub OAuth app:
 This cannot be claimed from cairn's hermetic tests — run it against the real
 sidecar (steps 1–3 above first):
 
-1. `cairn connect add github --via oauth` → prints a redirect URL.
+1. `cairn admin connect add github --via oauth` → prints a redirect URL.
 2. Open the URL, complete GitHub consent → Nango stores the connection.
-3. `cairn connect test github` → **✓ usable** (cairn fetched a fresh token).
-4. `cairn connect rm github` to clean up.
+3. `cairn admin connect test github` → **✓ usable** (cairn fetched a fresh token).
+4. `cairn admin connect rm github` to clean up.
 
 > Verified so far against Nango v0.70.8: the sidecar boots from this compose, the
 > secret key authenticates, and cairn's `--via oauth` reaches `POST /connect/sessions`

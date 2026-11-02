@@ -42,7 +42,7 @@ Metaflow local | k8s | Batch compute, S3 datastore, metadata service
   `dataflow_engine` to it independently (ADR-0082 D7).
 - **One static flow.** The bridge is never code-generated (ADR-0082 D1): it reads the spec from
   `CAIRN_DATAFLOW_SPEC` and runs the core kernel runner, so stage contracts, budgets and
-  checkpoints are core's. `cairn flow export --to metaflow` is the separate, one-way projection.
+  checkpoints are core's. `cairn pack export --to metaflow` is the separate, one-way projection.
 - **Shared helpers are core's** (`cairn.core.dataflow.resources`, ADR-0134 D3b): the resource
   envelope (`aggregate_resources`), the gang size (`gang_workers`), and the environment
   allowlist this engine extends with its own `METAFLOW_` / `CAIRN_METAFLOW_` / `OBS_METAFLOW_`
@@ -70,7 +70,7 @@ None. The pack registers one `cairn.dataflow_engines` entry, `metaflow` →
 | `metaflow_retry_times` | backend field | deployment | 0 | `@retry` count; a non-integer is refused at `validate()` |
 | `metaflow_secrets` | backend field | deployment | none | the connections a run may receive (`CAIRN_CONN_*`), and nothing else |
 | `metaflow_env_isolation` | backend field | deployment | `auto` | how much of the control plane's environment a task inherits |
-| `metaflow_metadata_service` | backend field | deployment | none | the metadata service URL that removes box affinity (`cairn doctor` checks it is reachable) |
+| `metaflow_metadata_service` | backend field | deployment | none | the metadata service URL that removes box affinity (`cairn setup --check` checks it is reachable) |
 
 The backend fields are read through `cairn.core.operator.selected_backend` (profile → env →
 default); a worker box receives them as the env vars named in `factory._SELECTION_ENV`.
