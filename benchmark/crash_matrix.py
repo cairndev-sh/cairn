@@ -6,8 +6,8 @@ cell counts only when its case passed in that run's junit and it left a receipt
 (``tests/e2e/hello/_receipts.py``). Any cell that failed, was skipped or didn't run is shown as
 such, exits non-zero and writes no result.
 
-A passing cell doesn't mean the work survived. Its table entry says what happened: only the
-template leg on DBOS resumes.
+A passing cell doesn't mean the work survived. Its table entry says what happened: of these
+cells, only the template leg on DBOS resumes.
 
     # run the cells, then write the result; the Postgres cells need CAIRN_PROOF_PG_DSN answering
     .venv/bin/python benchmark/crash_matrix.py [--out benchmark/results]
@@ -19,9 +19,11 @@ from __future__ import annotations
 import argparse
 import importlib.metadata
 import os
+import re
 import subprocess
 import sys
 import tempfile
+import tomllib
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -72,7 +74,8 @@ SCENARIOS = {
         when="While the `review` person gate waits for a decision, after the three legs before it have finished.",
         required="The gate is still waiting after the restart and no finished leg has a new run. Approving it "
                  "finishes the pipeline with one run per leg and one published artifact.",
-        how="A step waiting for approval has no process to lose, so ADR-0125 D3 leaves it out of the liveness check.",
+        how="A person gate has no Run: it is a step waiting in the pipeline's stored record, with no process behind "
+            "it. ADR-0125's liveness check judges leg Runs, so it has nothing to judge here.",
     ),
     "crash.mid-leg": Scenario(
         column="Killed inside a flow leg",
@@ -181,7 +184,7 @@ def columns() -> dict[str, str]:
 
 def notes() -> list[str]:
     """What the root README carries beside the table; the full words are in ``benchmark/README.md``."""
-    return ["Each entry is what that cell's test required and saw in this run. Only the template leg on DBOS resumes; "
+    return ["Each entry is what that cell's test required and saw in this run. Of these cells, only the template leg on DBOS resumes; "
             "a flow leg killed on the builtin engine fails, and so does its pipeline. What each cell checks, where this holds, and what no cell "
             "tests: [What happens when the server is killed](./benchmark/README.md#what-happens-when-the-server-is-killed)."]
 
@@ -195,6 +198,27 @@ def _junit_ran_at(junit: Path) -> Optional[datetime]:
 
 def _head_committed_at() -> datetime:
     return datetime.fromisoformat(_git("log", "-1", "--format=%cI"))
+
+
+def _pack_entry_points() -> list[Any]:
+    return list(importlib.metadata.entry_points(group="cairn.packs"))
+
+
+def _normalized(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _locked_distributions() -> set[str]:
+    lock = tomllib.loads((REPO / "uv.lock").read_text(encoding="utf-8"))
+    return {_normalized(package["name"]) for package in lock["package"]}
+
+
+def _unlocked_pack_count() -> int:
+    """How many installed packs ``uv.lock`` doesn't have. Only a count: their names can be private,
+    and neither a result nor this script's output may carry one. A pushed name can't be recalled."""
+    locked = _locked_distributions()
+    dists = [getattr(e, "dist", None) for e in _pack_entry_points()]
+    return sum(1 for d in dists if d is None or _normalized(d.metadata["Name"] or "") not in locked)
 
 
 def _uncommitted_cells() -> str:
@@ -217,6 +241,9 @@ def refusals(junit: Path, cases: list[dict], verdicts: list[dict], *, now: Optio
             problems.append(f"{junit} is from {ran_at.isoformat()}, too old to be this run's")
         elif ran_at < _head_committed_at():
             problems.append(f"{junit} is from {ran_at.isoformat()}, before this commit, so it ran on other code")
+    unlocked = _unlocked_pack_count()
+    if unlocked:
+        problems.append(f"{unlocked} installed pack(s) aren't in uv.lock; this needs the locked install")
     dirty = _uncommitted_cells()
     if dirty:
         problems.append(f"the cells under tests/e2e have uncommitted changes:\n{dirty}")
@@ -246,7 +273,7 @@ def _print_table(rows: list[dict[str, str]]) -> None:
 def _publish(out: Path, verdicts: list[dict]) -> Path:
     # a pack's policy can gate an operator a cell runs, so this says what the result held with
     inputs: dict[str, Any] = {"cells": str(CELLS_FILE.relative_to(REPO)), "cells_sha256": sha256_file(CELLS_FILE),
-                              "installed_packs": sorted(e.name for e in importlib.metadata.entry_points(group="cairn.packs"))}
+                              "installed_packs": sorted(e.name for e in _pack_entry_points())}
     return write_result(out, "crash_matrix", title="What happens when the server is killed", inputs=inputs,
                         results=table_rows(verdicts), extra={
                             "columns": columns(),
@@ -279,7 +306,8 @@ def _report(junit: Path, receipts: Path, out: Path, *, exit_code: int = 0) -> in
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--junit", type=Path, help="the junit of a run that already happened; needs --receipts. It's refused if older than "
-                             "this commit, but a junit holds no commit, so a newer one from other code isn't caught")
+                             "this commit, but a junit holds no commit, so a newer one from other code isn't caught. Run this "
+                             "where the cells ran: the result records this machine and its packs")
     parser.add_argument("--receipts", type=Path, help="that run's CAIRN_PROOF_RECEIPTS file")
     parser.add_argument("--out", type=Path, default=RESULTS)
     args = parser.parse_args()

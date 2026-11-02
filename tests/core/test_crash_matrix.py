@@ -7,6 +7,7 @@ import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Callable, Optional
 
 import pytest
@@ -22,11 +23,17 @@ MODULE = "tests.e2e.hello.test_crash"
 ALL_CASES = 8 + 8 + 4
 
 
+def _pack(name: str, distribution: Optional[str]) -> SimpleNamespace:
+    return SimpleNamespace(name=name, dist=SimpleNamespace(metadata={"Name": distribution}) if distribution else None)
+
+
 @pytest.fixture
 def matrix(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.syspath_prepend(str(render.REPO / "benchmark"))
     module = importlib.import_module("crash_matrix")
     monkeypatch.setattr(module, "_uncommitted_cells", lambda: "")
+    # the public job doesn't install the hello extra, so nothing here may read this machine's packs
+    monkeypatch.setattr(module, "_pack_entry_points", lambda: [_pack("hello-cairn", "cairn-pack-hello")])
     monkeypatch.setattr(module, "_head_committed_at", lambda: datetime.now(timezone.utc) - timedelta(hours=1))
     monkeypatch.setattr(sys.modules["_common"], "provenance", lambda: {
         "cairndev_version": "1.2.3", "uv_lock_sha256": "a" * 64, "git_sha": "b" * 40, "code_clean": True,
@@ -104,7 +111,7 @@ def test_a_run_where_every_cell_passed_is_published(run: _Run) -> None:
     assert len(result["results"]) == len(CELLS) == 8
     assert {c["state"] for c in result["cells"]} == {"passed"} and len(result["cells"]) == ALL_CASES
     assert any(c["evidence"] == f"evidence of {GATE_SQLITE}" for c in result["cells"])
-    assert "hello-cairn" in result["inputs"]["installed_packs"]
+    assert result["inputs"]["installed_packs"] == ["hello-cairn"]
 
 
 def test_the_table_says_what_happened_and_not_that_a_cell_passed(run: _Run) -> None:
@@ -124,7 +131,7 @@ def test_the_root_readme_gets_the_table_and_a_link_and_not_the_words(run: _Run, 
     assert run.report() == 0
     block = render.render_block(render.load_results(run.out, render.REPO))
     assert "./benchmark/README.md#what-happens-when-the-server-is-killed" in block
-    assert "Only the template leg on DBOS resumes" in block
+    assert "Of these cells, only the template leg on DBOS resumes" in block
     assert "The Temporal runtime" not in block
     assert all(s.required not in block and s.how not in block for s in matrix.SCENARIOS.values())
     result = json.loads((run.out / "crash_matrix.json").read_text())
@@ -243,6 +250,35 @@ def test_edited_cells_fail(run: _Run, matrix, monkeypatch: pytest.MonkeyPatch, c
     assert run.report() == 1
     assert not run.written
     assert "uncommitted" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("packs", [
+    [_pack("hello-cairn", "cairn-pack-hello"), _pack("not-for-publishing", "cairn-pack-not-for-publishing")],
+    [_pack("not-for-publishing", None)],
+])
+def test_a_pack_not_in_the_lock_fails_and_is_never_named(
+        run: _Run, matrix, monkeypatch: pytest.MonkeyPatch, capsys, packs: list) -> None:
+    monkeypatch.setattr(matrix, "_pack_entry_points", lambda: packs)
+    assert run.report() == 1
+    assert not run.written
+    out = capsys.readouterr()
+    assert "1 installed pack(s) aren't in uv.lock" in out.err
+    assert "not-for-publishing" not in out.out + out.err
+
+
+def test_a_locked_pack_passes_however_its_name_is_spelled(run: _Run, matrix, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(matrix, "_pack_entry_points", lambda: [_pack("hello-cairn", "Cairn_Pack.Hello")])
+    assert run.report() == 0
+
+
+def test_no_packs_at_all_is_not_a_refusal(run: _Run, matrix, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(matrix, "_pack_entry_points", lambda: [])
+    assert run.report() == 0
+
+
+def test_the_real_lock_has_the_public_pack_and_is_read_whole(matrix) -> None:
+    locked = matrix._locked_distributions()
+    assert {"cairn-pack-hello", "cairndev"} <= locked and "cairn-pack-not-for-publishing" not in locked
 
 
 def test_a_failed_run_leaves_an_earlier_result_alone(run: _Run) -> None:

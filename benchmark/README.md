@@ -55,8 +55,8 @@ A cell counts only if its case passed in that run's junit and it left a receipt.
 skipped or didn't run, the script prints the table with that cell as it was, exits non-zero and writes no
 result. A skipped cell therefore never reads as passed, and a run without Postgres publishes nothing.
 
-A passing cell doesn't mean the work survived. Its entry in the table says what happened, and **only the
-template leg on DBOS resumes**.
+A passing cell doesn't mean the work survived. Its entry in the table says what happened, and **of these
+cells, only the template leg on DBOS resumes**.
 
 To run it on your machine, start Postgres on the port the cells expect, then run the script:
 
@@ -85,7 +85,7 @@ Table entry: `still waiting, then finishes`.
 - **What is killed:** The server process, with SIGKILL, running the `hello-crash/slow-publish` pipeline.
 - **When:** While the `review` person gate waits for a decision, after the three legs before it have finished.
 - **What the cell requires afterwards:** The gate is still waiting after the restart and no finished leg has a new run. Approving it finishes the pipeline with one run per leg and one published artifact.
-- **How it works, which the cell doesn't assert:** A step waiting for approval has no process to lose, so ADR-0125 D3 leaves it out of the liveness check.
+- **How it works, which the cell doesn't assert:** A person gate has no Run: it is a step waiting in the pipeline's stored record, with no process behind it. ADR-0125's liveness check judges leg Runs, so it has nothing to judge here.
 
 ### Killed inside a flow leg
 
@@ -113,12 +113,12 @@ Postgres 16. All 20 have also passed once on an Intel Mac with Postgres 18.
 The cells need the locked install above, because a pack's policy can apply to every pipeline. If a pack requires
 a person for every high-risk operator, the DBOS cell fails at its 180 s limit: DBOS recovers the run, then the
 run stops at `memory/write` for an approval the cell never gives. That is the policy working, not a failed
-recovery.
+recovery. So the script refuses to write a result if an installed pack isn't in `uv.lock`, and it doesn't
+print the pack's name, which could be private.
 
 ### Not covered
 
-No cell tests these. Some have tests under `tests/core`, which drive the code in one process and don't kill a
-real server.
+No cell tests these. Some have tests under `tests/core`, which don't kill a real server.
 
 - The Temporal runtime. No cell runs it: the cells run on the in-process runtime and on DBOS.
 - Whether a node's side effects repeat. A node running at the kill runs again, which the DBOS integration leaves to operator idempotency. No cell shows that side effects aren't repeated or that earlier nodes are skipped.
