@@ -33,7 +33,7 @@ Four things, four responsibilities. None of them is a new execution abstraction:
    `hourly_usd × timeout`, times its loop's `max_iterations` and its attempts (the bounded
    worst case); a priced leg with no `timeout`, a price that cannot be read, or a total that
    does not fit the budget's `remaining_usd` (the cap alone when no `series` is set) is refused
-   (403 / exit 3) before the record, and the per-leg estimate is recorded under
+   (403 / `cairn run` exits 1) before the record, and the per-leg estimate is recorded under
    `admission.cost_estimate`; each attempt reserves one attempt's recorded figure.
 2. **Advance** — `_advance` (`:783`) submits every ready step by kind (`_submit_step`,
    `:862`): a `flow:` leg becomes its own `Run` (`_submit_flow_leg`, `:957`) and runs

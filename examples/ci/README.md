@@ -1,6 +1,6 @@
-# `cairn gate` in CI: copy-paste workflows
+# `cairn run --check` in CI: copy-paste workflows
 
-`cairn gate` runs a check **read-only**, prints a machine-readable JSON verdict, and
+`cairn run --check` runs a check **read-only**, prints a machine-readable JSON verdict, and
 **exits non-zero on FAIL**, so a bad dataset blocks the PR or merge before it reaches a
 training run. It needs no cairn server and no GitHub or GitLab integration. Because
 "non-zero exit blocks the pipeline" is universal, the same command works in GitHub
@@ -14,14 +14,14 @@ repository and edit the roles it expects. cairn looks for a bare template name i
 
 ```bash
 pip install cairndev
-cairn gate dataset-check --set path=data/train.jsonl --json
+cairn run --check dataset-check --set path=data/train.jsonl --json
 echo "exit: $?"   # 0 = PASS, 1 = gate FAIL, 2 = error
 ```
 
 To try it from this directory on a file that passes:
 
 ```bash
-cairn gate dataset-check --set path=../hello-cairn/data/sample.jsonl --json
+cairn run --check dataset-check --set path=../hello-cairn/data/sample.jsonl --json
 ```
 
 ## What the check does
@@ -39,7 +39,7 @@ and no API key are involved. It's a quick check, not a full validation: it reads
 
 ## Writing your own check
 
-`cairn gate` reads `verdict`, `blocking` and `warnings` from the top of the run's state, so
+`cairn run --check` reads `verdict`, `blocking` and `warnings` from the top of the run's state, so
 write them to `$state.verdict`, not `$state.findings.verdict`. It also reads a list named
 `outcome` the same way.
 
@@ -57,11 +57,11 @@ which is why `dataset-check.md` ends in a fallback that blocks. Test yours on a 
 ## Flags
 
 - `-i, --input <file.json>`: typed input values (a JSON object).
-- `--set k=v`: inline string input override (repeatable). `--input` and `--set` merge.
+- `--set k=v`: inline input override, parsed as JSON when it can be (repeatable). `--input` and `--set` merge.
 - `--fail-on {fail,warn}`: the minimum severity that exits non-zero (default `fail`).
 - `--json`: emit the machine-readable verdict on stdout (the human summary always goes to stderr).
 - `--mock`: run operators in mock mode. A mocked `data/profile` always reports `pass`, so don't use it to gate on data.
-- `-p, --profile <name>`: resolve bindings under a named environment or profile.
+- To resolve bindings under a named profile, set `CAIRN_PROFILE`. `--profile` on `cairn run` names a sign-in profile, and `--check` does not use it.
 
 ## The JSON verdict (for a PR comment)
 

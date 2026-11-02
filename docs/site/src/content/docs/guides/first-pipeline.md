@@ -8,31 +8,31 @@ pipeline: it checks a JSONL file, stops if the check fails, and publishes a
 summary after a person approves. The same steps work for any pipeline in the
 [catalog](/reference/catalog/) or in your own pack.
 
-You need cairn installed with the `hello` extra and a running engine:
-`cairn dev --engine-only` from the [Quickstart](/quickstart/), or a deployed
-server.
+You need cairn installed with the `hello` extra. `cairn setup` from the
+[Quickstart](/quickstart/) starts an engine and signs you in. For a deployed server,
+connect with `cairn setup --server <url>` instead.
 
 ## 1. Find it and see what it will do
 
-`cairn pipeline ls` lists the installed pipelines with their legs and content
-hash, and `cairn pipeline show` prints one pipeline's inputs, legs and gates:
+`cairn pack ls --pipelines` lists the installed pipelines with their legs and content
+hash, and `cairn pack show` prints one pipeline's inputs, legs and gates:
 
 ```text
-$ cairn pipeline ls
+$ cairn pack ls --pipelines
   hello-cairn/ask-the-docs  3 legs (gate,task,template)  sha256:4d1cf10680a88e38
-  hello-cairn/nightly-ops  4 legs (flow,task,template)  sha256:d59da1bb89fa22e6
+  hello-cairn/nightly-ops  4 legs (flow,task,template)  sha256:63601bd0b441add9
   hello-cairn/over-budget  1 legs (flow)  sha256:6564ee0f0d22af39
   hello-cairn/profile-and-publish  9 legs (flow,gate,task)  sha256:52dccf2087b839f5
   hello-cairn/tiny-finetune  9 legs (flow,gate,task)  sha256:1c4102fa7e4528d0
 ```
 
-`cairn pipeline explain` goes further. For each leg it shows the file or
+`cairn run --dry-run` goes further. For each leg it shows the file or
 operator that will run, the engine, every gate on the way and why it applies,
 and each input and where its value comes from. It runs nothing and spends
 nothing:
 
 ```text
-$ cairn pipeline explain hello-cairn/profile-and-publish -e sandbox
+$ cairn run --dry-run hello-cairn/profile-and-publish -e sandbox
 pipeline:hello-cairn/profile-and-publish  —  Profile a small JSONL dataset, stop unless the profile passes, …
   environment: sandbox    runtime=inprocess  storage=…  bus=in-process
   governance:  {'budget': {'usd': 1}, 'series': 'hello', 'approvers': 'data-owners'}
@@ -54,12 +54,11 @@ repository.
 
 ## 2. Launch it
 
-**Against a server.** Sign in once, then launch:
+**Against an engine.** Once `cairn setup` has signed you in, launch:
 
 ```bash
-cairn remote login -e http://localhost:8471 -u dev -p dev
-cairn remote launch hello-cairn/profile-and-publish \
-  -i path=$PWD/sample.jsonl --environment sandbox --watch
+cairn run hello-cairn/profile-and-publish \
+  -i path=$PWD/sample.jsonl --environment sandbox
 ```
 
 Each `-i key=value` sets one input. `--preset <name>` starts from a saved set
@@ -69,17 +68,14 @@ time.
 **Over the HTTP API.** `POST /start` with `{"ref": "hello-cairn/profile-and-publish", "inputs": {…}}`
 goes through the same launch door.
 
-**In this process.** `cairn pipeline run <ref> -e sandbox -i key=value`
-launches through the same door without a server and stays attached until the
-pipeline ends. Set `CAIRN_STORAGE` first, so the record and any dataset
-versions it registers persist. It suits pipelines without person gates: a
-person gate pauses it, and the approval has to come through a server on the
-same storage.
+**With no engine running.** `cairn run <ref> -e sandbox -i key=value` starts a local
+engine on `~/.cairn/dev.db` for the length of the command, and goes through the same door.
+The record stays, and `cairn decide` starts the engine again to answer. An endpoint you
+have signed in to fails instead when it is down, so run `cairn setup` again after a reboot.
 
 ## 3. Follow it, and answer its gates
 
-`--watch` prints each leg as it changes, and stops when the pipeline pauses
-or ends:
+`cairn run` prints each leg as it changes, and asks at each gate:
 
 ```text
   paused
@@ -90,25 +86,33 @@ or ends:
     stage              done                 run=run-task-storage--put-1295cd
     review             awaiting_approval    run=None
     …
-⏸ paused — 1 step(s) waiting on a human
+  gate review  (approvers: data-owners)
+    profile.verdict       pass
+    profile.record_count  20
+    …
+→ approve   cairn decide pl_3f5b6ec6a25d414d approve --step review --approver you
+→ findings  cairn status pl_3f5b6ec6a25d414d --results
+→ watch     cairn status pl_3f5b6ec6a25d414d --follow
+Approve this step? [a]pprove / [r]eject / [s]kip (detach)
 ```
 
-Approve the waiting step, and follow the pipeline again:
+Answer `a` to approve or `r` to reject. With `s` the pipeline stays waiting. With no terminal
+to ask on it stays waiting too, and `cairn run` exits 2. These answer from any shell:
 
 ```bash
-cairn remote advance <pipeline_id> review
-cairn remote pipeline <pipeline_id>          # the record, with every step's state
+cairn decide <pipeline_id> approve --step review
+cairn status <pipeline_id> --json          # the record, with every step's state
 ```
 
-To stop instead, `cairn remote cancel-pipeline <pipeline_id>`. See
+To stop instead, `cairn decide <pipeline_id> cancel`. See
 [Gates and approvals](/concepts/gates/) for who may decide.
 
 ## 4. Read the outputs
 
-`cairn remote findings` prints every leg's outputs:
+`cairn status --results` prints every leg's outputs:
 
 ```text
-$ cairn remote findings pl_3f5b6ec6a25d414d
+$ cairn status pl_3f5b6ec6a25d414d --results
 pipeline pl_3f5b6ec6a25d414d  status=done
   profile  [done] run=run-task-data--profile-1f9a14
     note              20 records · format completion · all roles resolved

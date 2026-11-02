@@ -68,7 +68,7 @@ A pipeline that declares more than the ceiling is not refused for that. It
 runs under the ceiling, and its record says so. The launch door computes the
 cap once and writes it, with its source, to `admission.budget` on the
 pipeline record. The reservations, the Temporal activity, the approval
-gates' cost line and `cairn pipeline explain` read that figure. Changing the
+gates' cost line and `cairn run --dry-run` read that figure. Changing the
 profile later does not move the cap of a pipeline that is already running.
 Records written before this setting existed keep using their own
 `governance.budget.usd`.
@@ -77,7 +77,7 @@ The cap bounds what `governance.budget.usd` bounded before: the launch door's
 estimate of the priced legs, and the reservations of legs under a `series`. It
 does not make task legs or model-call legs priced at launch.
 
-With no `[profile.budget]`, nothing changes. `cairn pipeline explain` shows
+With no `[profile.budget]`, nothing changes. `cairn run --dry-run` shows
 the cap the launch door enforces: the pipeline's figure, or the deployment's
 default or ceiling. A workspace's `cost_cap_usd` variable is a run-dialog
 default for workflow runs and is not a layer of a pipeline's budget.

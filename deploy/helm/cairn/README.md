@@ -18,7 +18,7 @@ ADR-0104's Consequences say there are exactly two, and both run the same image:
 | Artifact | `docker-compose.yml` | this chart |
 | TLS | Caddy (automatic Let's Encrypt) | Ingress + cert-manager |
 | Optional services | compose `--profile` | `profiles.*` values |
-| Preflight | `cairn deploy doctor --env .env` | `cairn deploy doctor --values my.yaml` |
+| Preflight | `cairn admin deploy doctor --env .env` | `cairn admin deploy doctor --values my.yaml` |
 
 Compose is not deprecated. If one VM is enough, use one VM.
 
@@ -32,7 +32,7 @@ kubectl create namespace cairn
 cp deploy/helm/cairn/values-postgres.example.yaml my-values.yaml   # then edit every CHANGE-ME
 
 # 3. preflight BEFORE the cluster ever sees it
-cairn deploy doctor --values my-values.yaml --strict
+cairn admin deploy doctor --values my-values.yaml --strict
 
 # 4. install
 helm upgrade --install cairn deploy/helm/cairn -n cairn -f my-values.yaml
@@ -61,7 +61,7 @@ The full list with comments is `values.yaml`. The ones that decide the shape:
 | `ingress.certManager.clusterIssuer` | `letsencrypt-prod` | The cert-manager issuer that mints the TLS secret. |
 | `secrets.*` / `secrets.existingSecret` | `""` | `CAIRN_JWT_SECRET` + `CAIRN_API_PASSWORD_HASH` (+ `POSTGRES_PASSWORD` with a bundled database) either rendered into a chart-managed Secret, or taken from one you already have. |
 | `server.persistence` | `enabled, 5Gi` | `~/.cairn` — the SQLite-backed config stores that do not yet honour `CAIRN_STORAGE`. ReadWriteOnce, so keep `server.replicaCount: 1`. |
-| `pullWorker.enabled` / `.command` | `false` / `[]` | The `cairn worker --pull` dial-out worker (#565). No default command — see below. |
+| `pullWorker.enabled` / `.command` | `false` / `[]` | The `cairn admin worker --pull` dial-out worker (#565). No default command — see below. |
 | `pullWorker.token` / `.existingSecret` | `""` / `""` | The worker's own Secret: a worker-pool token (`CAIRN_ENGINE_TOKEN`). One is required when the worker is enabled. |
 | `env.extra` | `{}` | Any other variable, verbatim into the ConfigMap. Name cairn variables `CAIRN_*`. |
 | `env.extra.CAIRN_PUBLIC_URL` | unset | `https://<ingress.host>`. Set it behind the chart's TLS ingress: the console's `cairn_refresh` sign-in cookie is `Secure` only when it is https, and the OAuth callback is built from it. The example values files set it. |
@@ -118,13 +118,13 @@ default and has no default command**; enabling it without one refuses to render.
 ```yaml
 pullWorker:
   enabled: true
-  command: ["cairn", "worker", "--pull", "--engine-url", "https://cairn.example.com"]
+  command: ["cairn", "admin", "worker", "--pull", "--engine-url", "https://cairn.example.com"]
   token: "<worker-pool token>"        # or: existingSecret: cairn-pool-gpu
 ```
 
 With auth on (the chart's default), claiming work needs a worker credential: a
 worker-pool token, minted where `CAIRN_JWT_SECRET` is set with
-`cairn remote worker-token --name <pool>`, read from `CAIRN_ENGINE_TOKEN`. A
+`cairn admin worker-token --name <pool>`, read from `CAIRN_ENGINE_TOKEN`. A
 signed-in user's token gets `403` on `/jobs/claim`.
 
 The worker reads that token from a **Secret of its own**: `pullWorker.token` is
@@ -170,7 +170,7 @@ applies to the worker's pod.
 The token is trimmed. Rendering refuses an enabled worker with no token (empty
 or whitespace only) and no `existingSecret`, with both, with `existingSecret`
 set to the control plane's Secret, with a token equal to `secrets.obsJwtSecret`,
-or with a token that is not a string (use `--set-string`). `cairn deploy doctor
+or with a token that is not a string (use `--set-string`). `cairn admin deploy doctor
 --values` reports the same cases, and the `extraEnv` and ServiceAccount ones (it
 warns where the answer depends on the release name, which it does not know).
 
@@ -183,7 +183,7 @@ using `existingSecret` instead.
 
 ### Postgres connection assumptions (in-process leg liveness)
 
-Every server and every `cairn pipeline run` process holds a Postgres **session**
+Every server and every `cairn run` process holds a Postgres **session**
 advisory lock for its whole life; that lock is how other replicas, and the
 reconciler, tell that its in-process legs are still alive (ADR-0125). Losing
 the session for longer than one check interval (15 s) lets the reconciler
@@ -221,7 +221,7 @@ the DSN is the same database before and after.
 **Upgrading a chart with the pull worker enabled:**
 
 - *Token.* The worker no longer reads the control plane's Secret. Mint a
-  worker-pool token (`cairn remote worker-token --name <pool>`) and set
+  worker-pool token (`cairn admin worker-token --name <pool>`) and set
   `pullWorker.token`, or put `CAIRN_ENGINE_TOKEN` in a Secret of its own and set
   `pullWorker.existingSecret`; the render fails until one is set. If the token was
   in the control plane's Secret (or `env.extra`), move it. Anything else the
@@ -285,7 +285,7 @@ are public, so no pull secret is needed.
 **Verified:** `helm lint` clean; `helm template` renders for bundled Postgres,
 external DSN and the Temporal runtime; the rendered server env carries every
 `CAIRN_*` compose sets on `server` (and every one the dbos-postgres tier sets);
-each refusal in `_helpers.tpl` actually refuses; `cairn deploy doctor --values`
+each refusal in `_helpers.tpl` actually refuses; `cairn admin deploy doctor --values`
 passes the examples and fails a values file with a missing secret.
 
 **Not verified:** no `helm install` against a live cluster, no TLS issued (the 0.1.2

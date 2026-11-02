@@ -28,7 +28,7 @@ What you get:
 |---|---|---|
 | **Control box**: any small Linux machine | the cairn engine: runs, gates, budget, the data leg, and the box's start and stop | `cairndev`, the two packs |
 | **GPU box**: an EC2 GPU instance | only the trainer, started over SSH by the engine | `cairn-operator-training[gpu]` |
-| **Your laptop** (optional) | the `cairn remote …` CLI, through an SSH tunnel | `cairndev` |
+| **Your laptop** (optional) | the `cairn` CLI, through an SSH tunnel | `cairndev` |
 
 The engine never runs on the GPU box, and nothing listens on it: the
 control box reaches out over SSH. Datasets, checkpoints and the adapter cross
@@ -64,17 +64,17 @@ uv pip install "cairndev[ssh,storage-postgres]" \
 
 ## 2. Configure and start the engine
 
-`cairn ls finetune` prints the installed path of the pack's `finetune-ssh`
+`cairn pack ls finetune` prints the installed path of the pack's `finetune-ssh`
 profile. Put the settings in one file. Both the engine and the CLI must read
 the **same** `CAIRN_STORAGE`, or the CLI writes connections to a store the
-engine never reads. When the engine answers at the endpoint `cairn remote` uses
+engine never reads. When the engine answers at the endpoint `cairn` uses
 (`http://localhost:9090` unless a login or `CAIRN_REMOTE_ENDPOINT` names another),
-`cairn connect add` checks this and refuses with exit 3 when the stores differ;
-`cairn doctor` reports it as `engine_store`.
+`cairn admin connect add` checks this and refuses with exit 3 when the stores differ;
+`cairn setup --check` reports it as `engine_store`.
 
 ```bash
 # engine.env
-CAIRN_PROFILE=<path printed by `cairn ls finetune`>/finetune-ssh.toml
+CAIRN_PROFILE=<path printed by `cairn pack ls finetune`>/finetune-ssh.toml
 CAIRN_STORAGE=sqlite:///$HOME/.cairn/train.db        # or postgres://…
 CAIRN_ARTIFACT_S3_BUCKET=<bucket>
 CAIRN_ARTIFACT_S3_PREFIX=cairn/artifacts
@@ -97,10 +97,10 @@ read from the control box's own file and is never stored in a connection:
 ```bash
 set -a; . ./engine.env; set +a
 export GPU_SSH_KEY="$(cat ~/.ssh/<key-to-the-gpu-box>)"
-cairn dev --engine-only --port 9090 --db "$HOME/.cairn/train.db"
+cairn setup --port 9090 --db "$HOME/.cairn/train.db"
 ```
 
-`cairn dev` is the quickest way to start. For a server you keep, run the
+`cairn setup` is the quickest way to start. For a server you keep, run the
 [`deploy/light`](/install/) stack (Postgres, sign-in) instead.
 
 ## 3. Register the GPU box
@@ -111,23 +111,24 @@ uses. `instance_id` and `region` let cairn start and stop it.
 check:
 
 ```bash
-cairn connect add ssh --name gpu \
+cairn admin connect add ssh --name gpu \
   --set host=<gpu host or private ip> --set user=<ssh user> \
   --set known_hosts=$HOME/.ssh/known_hosts --secret PRIVATE_KEY=GPU_SSH_KEY \
   --set instance_id=<i-…> --set region=<region> --set hourly_usd=<rate>
-cairn doctor --strict
+cairn setup --check --strict
 ```
 
-`cairn doctor --strict` should show:
+`cairn setup --check --strict` should show:
 
 - `ml_target=gpu`, `remote_exec_mode=venv` and the forwarded `remote_env`;
 - every pack's `[compat]` satisfied;
 - `compute/acquire` and `compute/release` loaded.
 
-Log the CLI in to the engine. `cairn dev` prints its development login:
+Log the CLI in to the engine. `cairn setup` already signed in as its development
+user; for a server you keep, connect to it:
 
 ```bash
-cairn remote login -u <user> -p <password> -e http://127.0.0.1:9090
+cairn setup --server <url> -u <user> --password <password>
 ```
 
 ## 4. Prepare the dataset
@@ -138,15 +139,15 @@ related rows never straddle train and test, and registers three dataset
 versions: training, validation and test.
 
 ```bash
-cairn remote launch dataset-prep/prepare \
+cairn run dataset-prep/prepare \
   -i path=<hf dataset id | s3://… | local .jsonl/.csv/.parquet> \
   -i revision=<commit or tag, to pin a Hub dataset> \
   -i register=<name> --save-preset <name>
 ```
 
-`cairn remote presets dataset-prep/prepare` lists ready-made presets the pack
+`cairn admin preset ls dataset-prep/prepare` lists ready-made presets the pack
 ships; `--preset <name>` launches one. To see the plan a preset would launch
-first, `cairn pipeline explain <ref> --preset <name>` shows each input with the layer
+first, `cairn run --dry-run <ref> --preset <name>` shows each input with the layer
 it comes from and refuses what the launch would refuse.
 
 Rows may be in any of these formats:
@@ -156,11 +157,12 @@ Rows may be in any of these formats:
 - **Chat:** `messages`.
 
 The pipeline pauses at **`source-ok`**. A person checks the source, its pin
-and the split before anything is read:
+and the split before anything is read. `cairn run` asks at each gate in this guide, so
+answer `a` there. With `s`, or with no terminal to ask on, these answer from any shell:
 
 ```bash
-cairn remote advance <pl_id> source-ok --approver <you>
-cairn remote findings <pl_id>
+cairn decide <pl_id> approve --step source-ok --approver <you>
+cairn status <pl_id> --results
 ```
 
 **Read the findings before you train.** They are the evidence for every
@@ -194,7 +196,7 @@ stopped: `finetune/sft` starts it after you approve.
 ## 6. Launch the fine-tune
 
 ```bash
-cairn remote launch finetune/sft \
+cairn run finetune/sft \
   -i train_version=dataset:<name>-train@latest \
   -i val_version=dataset:<name>-val@latest \
   -i test_version=dataset:<name>-test@latest \
@@ -215,13 +217,13 @@ The run pauses at **`approve-run`**, showing that estimate and the training
 settings:
 
 ```bash
-cairn remote advance <pl_id> approve-run --approver <you>
+cairn decide <pl_id> approve --step approve-run --approver <you>
 ```
 
 Then, in order:
 
 1. **`acquire`** starts the box. It writes a lease tag first, so
-   `cairn compute sweep` can find an orphaned box.
+   `cairn admin compute sweep` can find an orphaned box.
 2. **`smoke`** runs a few steps on a small sample, the whole path on the
    box.
 3. **`train`** runs the full training. A killed process is retried once and
@@ -234,8 +236,8 @@ A final `release` step stops the box on every outcome, as a backstop.
 Follow it, and read the results:
 
 ```bash
-cairn remote pipeline <pl_id>
-cairn remote findings <pl_id>
+cairn status <pl_id> --json
+cairn status <pl_id> --results
 ```
 
 The training findings include:
@@ -252,15 +254,15 @@ promote, the `artifact/promote` operator asks for its own approval before it
 moves the tag:
 
 ```bash
-cairn remote advance <pl_id> promote-model --approver <you>
-cairn remote advance <pl_id> promote --approver <you>
+cairn decide <pl_id> approve --step promote-model --approver <you>
+cairn decide <pl_id> approve --step promote --approver <you>
 ```
 
 Each priced leg settles its real box time in `Run.cost.gpu_usd`, which you
 can compare with the estimate you approved. Check that the box is stopped:
 
 ```bash
-cairn compute status gpu
+cairn admin compute status gpu
 ```
 
 ## 8. Check it didn't forget (optional, outside cairn for now)
@@ -316,6 +318,6 @@ and recorded like training, is in progress.
   file is `CAIRN_AUDIT_LOG`, or `audit.jsonl` in the engine's working directory
   when that's unset, so keep it on durable disk.
 - **Token expiry:** the CLI's login expires and is not renewed. A command that
-  meets an expired login, a watch included, prints `session expired at HH:MM — run
-  cairn remote login` and exits 77; the pipeline keeps running on the server. Log in
-  again and re-attach with `cairn remote pipeline <id>`.
+  meets an expired login, a watch included, prints `session expired at HH:MM`, says to run
+  `cairn setup --server <url>`, and exits 77; the pipeline keeps running on the server. Log in
+  again and re-attach with `cairn status <id> --json`.

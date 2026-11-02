@@ -77,15 +77,15 @@ with the gate `awaiting_approval`. From the same pipeline:
   a restart of the server resumes the pipeline at the same pause.
 - **The evidence is on the record.** The step's `gate_context` holds the `show:`
   fields, the approvers, the spend against the budget cap, the cost estimate and
-  the admission decision. `cairn remote launch --watch` and `cairn remote advance`
-  print them at each pause, and `cairn remote pipeline <id>` includes them. They
+  the admission decision. `cairn run` and `cairn decide`
+  print them at each pause, and `cairn status <id> --json` includes them. They
   stay on the step after the decision, so the record says what was shown. Under
   the Temporal owner, a gate carries no evidence yet.
 - **Approving** releases the gate and records who approved, when, and any
-  rationale: `cairn remote advance <pipeline_id> <gate>`, or
+  rationale: `cairn decide <pipeline_id> approve --step <gate>`, or
   `POST /pipelines/<pipeline_id>/steps/<gate>/approve`.
 - **Rejecting** refuses the gate, with the person and the reason on the record:
-  `cairn remote reject <pipeline_id> <gate> --reason "…"`, or
+  `cairn decide <pipeline_id> reject --step <gate> --reason "…"`, or
   `POST /pipelines/<pipeline_id>/steps/<gate>/reject` with `{"reason": "…"}`.
   The same people may reject who may approve, and the reason is required. The
   gate's step ends `skipped` with the verdict `rejected` and the person as its
@@ -93,7 +93,7 @@ with the gate `awaiting_approval`. From the same pipeline:
   <person>: <reason>`, after any `finally:` steps have run; the gate's review is
   closed as rejected; and a `pipeline.rejected` event is published. Only a gate
   waiting for approval can be rejected; any other wait answers 409. A cancel is
-  different: `cairn remote cancel-pipeline <pipeline_id>` is the operator's abort,
+  different: `cairn decide <pipeline_id> cancel` is the operator's abort,
   not a decision on a gate.
 
 A gate can't have both `predicate:` and `approvers:`: the pipeline is refused
@@ -181,8 +181,8 @@ A typo in this table (an unknown key, mode or risk class) stops the profile
 from loading, so a misspelling never leaves the gate off.
 
 A task leg paused this way is approved with the same
-`cairn remote advance`. An approval inside an agentic flow pauses its run;
-decide it with `cairn remote approve <run_id>` or `cairn remote reject <run_id>`
+`cairn decide`. An approval inside an agentic flow pauses its run;
+decide it with `cairn decide <run_id> approve` or `cairn decide <run_id> reject`
 (a single run id: the run-level form, not the pipeline gate form above).
 
 ## Next

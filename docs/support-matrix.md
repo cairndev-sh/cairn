@@ -99,14 +99,14 @@ The five-command CLI (since 0.4.0, ADR-0165): `cairn setup`, `run`, `status`, `d
 A pipeline started by another (since 0.3.3): a pipeline's `outputs:` resolved when it ends `done`
 and published on its `emits:` topic (ADR-0161), a `kind: event` trigger that starts a pipeline on it
 and records the publisher on its `trigger`, and the switch that turns a declared trigger on or off
-(`cairn remote triggers` / `enable-trigger` / `disable-trigger`, ADR-0160): EXPERIMENTAL (CI TESTED in
+(`cairn admin trigger ls` / `enable` / `disable`, ADR-0160): EXPERIMENTAL (CI TESTED in
 `test_pipeline_outputs_emit.py`, `test_event_trigger_publisher.py`, `test_stored_trigger_switch.py`;
 no production run yet). A pipeline cancel that stops its running task legs before the teardown
 (ADR-0159): EXPERIMENTAL (CI TESTED in `test_pipeline_cancel_task_leg.py` and the `cairn-operator-remote`
 lifecycle tests with a fake EC2 client).
 
 A pipeline run's governance trail (since 0.3.2): its decisions and spend in the hash-chained audit
-log, `cairn audit verify`, an attributed gate reject (`POST /pipelines/{id}/steps/{step}/reject`,
-`cairn remote reject <pipeline> <step>`) and one OpenTelemetry trace per run: EXPERIMENTAL (CI TESTED in
+log, `cairn admin audit verify`, an attributed gate reject (`POST /pipelines/{id}/steps/{step}/reject`,
+`cairn decide <pipeline> reject --step <step>`) and one OpenTelemetry trace per run: EXPERIMENTAL (CI TESTED in
 `test_pipeline_audit_trail.py`, `test_audit_chain_writers.py`, `test_pipeline_reject.py`,
 `test_pipeline_trace.py`).
