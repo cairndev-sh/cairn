@@ -126,6 +126,8 @@ env -u CAIRN_STORAGE .venv/bin/pytest tests/core -q
 
 ## Other CI gates
 
+- **The published numbers** — the `public` job runs the measurements in `benchmark/`, and a test fails
+  if the README's table differs from `benchmark/results` ([`benchmark/README.md`](benchmark/README.md)).
 - **`uv.lock`** — the install is `uv sync --locked`, so a dependency or version
   change needs `uv lock` in the same PR (`uv lock --check` tells you).
 - **The wheels** — `scripts/check_folded_wheels.py` builds the five wheels and
