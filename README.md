@@ -78,8 +78,8 @@ work runs behind deterministic guardrails you can inspect afterward:
 - **Policy + human approval** — proposed actions pass declarative policy rules
   before any executor runs; high-risk ones (promote a model, destroy a
   resource) pause for a human and resume durably from a checkpoint.
-- **Recorded runs** — every run on an engine stores its inputs, the operator or flow
-  it ran, and its events. `cairn status <run-id> --replay` prints them. It doesn't
+- **Recorded runs** — every run on an engine stores its inputs, the operator, flow or
+  template it ran, and its events. `cairn status <run-id> --replay` prints them. It doesn't
   execute anything again: it shows what happened, and doesn't reproduce the result.
 - **Tamper-evident audit** — with `audit.sink` bound, approvals and every governed
   pipeline step land in a hash-chained, append-only log: what ran, what it cost, who

@@ -319,7 +319,7 @@ def status_cmd(
     events_only: bool = typer.Option(False, "--events-only", help="with --logs or --follow: only lifecycle and transition events"),
     follow: bool = typer.Option(False, "--follow", "-f", help="stay attached and ask at each gate"),
     replay: bool = typer.Option(False, "--replay", help="print the run's recorded inputs, operators and events; nothing runs again"),
-    source: str = typer.Option("auto", "--source", help="with --replay: auto, file or db"),
+    source: str = typer.Option("auto", "--source", help="with --replay: auto (local trace, configured store, engine, then local dev store), file or db"),
     decision: Optional[str] = typer.Option(None, "--decision", help="with --follow: answer each pause without asking (approve or reject)"),
     timeout: Optional[float] = typer.Option(None, "--timeout", help="with --follow: seconds to wait at a prompt before --on-timeout"),
     on_timeout: str = typer.Option("detach", "--on-timeout", help="with --follow: at a prompt timeout, detach, reject or abort"),
@@ -351,8 +351,6 @@ def status_cmd(
     if replay:
         from cairn.cli.commands import replay as replay_cmd  # noqa: PLC0415 — it pulls the run store
 
-        if _is_pipeline(target):
-            _fail(f"--replay takes a run, and {target} is a pipeline. Its runs: cairn status {target} --logs")
         raise typer.Exit(replay_cmd._run(target, json=json_out, source=source, endpoint=endpoint,
                                          token=token, profile=profile))
     if results:
