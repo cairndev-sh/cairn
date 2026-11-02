@@ -16,6 +16,9 @@
 #     binding refuses to compile; local-dev.toml binds none, so `cairn validate
 #     examples/hello-cairn` needs this profile. secrets/env reads the engine's
 #     environment; profiles/hello-infisical.toml binds Infisical.
+#   * `audit.sink` — the quickstart's audit trail: every governed step and each decision a person makes
+#     lands in the hash-chained log at CAIRN_AUDIT_LOG (default ./audit.jsonl), next to the
+#     row the pipeline's own `audit` leg writes. local-dev.toml leaves it unbound (ADR-0028).
 #   * the `hello-calc` MCP server, which pack.toml declares under [requires.mcp].
 #     This entry is what `cairn doctor`'s composition check and the strict tool
 #     allow-list read. The MCP client itself takes the server's command from the
@@ -33,6 +36,7 @@ visibility = "public"
 "rag.fetch"      = "rag/fetch"       # cairn-operator-rag-local
 "mcp.call"       = "mcp/call"        # cairn-operator-mcp
 "secrets.store"  = "secrets/env"     # cairn-operator-secrets-env
+"audit.sink"     = "audit/store"     # cairn-operator-audit-store
 
 [profile.mcp_servers.hello-calc]
 transport = "stdio"

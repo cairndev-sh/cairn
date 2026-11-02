@@ -40,8 +40,9 @@ pack declares no entry points, so the run-hook listener does not fire.
 mcp), but not local-dev's `eval.delta` binding (a platform operator) or its `llm_gateway` and
 `embedder` backend entries: the model and the embedder come from the engine's environment
 (step 3). It adds `secrets.store` → `secrets/env` (nightly-ops' secret check is a capability
-node and compiles only with a binding, which local-dev does not carry) and the `hello-calc`
-MCP server the pack declares. It pins no runtime, so `CAIRN_RUNTIME=dbos` selects DBOS.
+node and compiles only with a binding, which local-dev does not carry), `audit.sink` →
+`audit/store` (the audit trail, which local-dev leaves off) and the `hello-calc` MCP server the
+pack declares. It pins no runtime, so `CAIRN_RUNTIME=dbos` selects DBOS.
 
 ### 2. See what will happen before anything runs
 
@@ -90,9 +91,10 @@ The pipeline stops a second time at `promote`: `artifact/promote` declares
 
 The record ends `done`: `data-ok` has verdict `data`, `review` `approved`, `promote` the
 tag `hello-sample@published` on the flow leg's registered artifact, and `audit` a
-hash-chained row in `CAIRN_AUDIT_LOG` (default `./audit.jsonl`). `storage/put` writes under
+hash-chained row in `CAIRN_AUDIT_LOG` (default `./audit.jsonl`), beside the rows the profile's
+`audit.sink` binding adds for the launch, each step and each decision a person made. `storage/put` writes under
 `CAIRN_ARTIFACTS_DIR` (default `~/.cairn/artifacts`). With `-i min_rows=1000` the data gate
-stops the pipeline (`gate_blocked`) before anything is written. Launch with
+stops the pipeline (`gate_blocked`) before any later step starts. Launch with
 `--environment hello-prod` and the pack's policy
 (`policies/require-review-on-publish.yaml`) stops `stage` for an approval before it writes.
 
