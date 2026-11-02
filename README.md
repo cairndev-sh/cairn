@@ -78,9 +78,9 @@ work runs behind deterministic guardrails you can inspect afterward:
 - **Policy + human approval** — proposed actions pass declarative policy rules
   before any executor runs; high-risk ones (promote a model, destroy a
   resource) pause for a human and resume durably from a checkpoint.
-- **Reproducible runs** — every run stores its validated inputs, a content-
-  addressed schema hash, and the exact operators it resolved to. Replay any run;
-  explain any result.
+- **Recorded runs** — every run on an engine stores its inputs, the operator or flow
+  it ran, and its events. `cairn status <run-id> --replay` prints them. It doesn't
+  execute anything again: it shows what happened, and doesn't reproduce the result.
 - **Tamper-evident audit** — with `audit.sink` bound, approvals and every governed
   pipeline step land in a hash-chained, append-only log: what ran, what it cost, who
   approved it. So do direct model completions and `mcp/call` tool calls; a template's own
@@ -101,15 +101,15 @@ measured on: see [`benchmark/`](./benchmark/README.md).
 
 | Measured | Result |
 |---|---|
-| Engine start to answering | 33.7 s |
-| Launch to a pipeline paused at its person gate | 12.1 s (median of 5, after one warm-up run) |
-| Both approvals to a finished pipeline, nobody waiting | 1.4 s (median of 5, after one warm-up run) |
+| Engine start to answering | 2.0 s |
+| Launch to a pipeline paused at its person gate | 1.6 s (median of 5, after one warm-up run) |
+| Both approvals to a finished pipeline, nobody waiting | 0.9 s (median of 5, after one warm-up run) |
 | Nothing published before the person gate | held on all 6 runs |
 | A false data gate stops the pipeline before any later step starts, and is logged | held |
 | Each decision a person made is in the audit log with the signed-in user | held for all 12 decisions |
 | Audit chain verifies at the end | held (143 rows) |
 
-cairndev 0.3.1, `uv.lock` `43c69f31e985`, Darwin x86_64 with 8 CPUs and Python 3.13.12, 2026-11-02.
+cairndev 0.3.3, `uv.lock` `43c69f31e985`, Linux x86_64 with 4 CPUs and Python 3.13.13, 2026-11-02.
 
 <!-- benchmark:end -->
 
@@ -176,6 +176,27 @@ file. Try `-i min_rows=1000` to watch the data gate stop the pipeline before any
 step starts. The full walkthrough is the [Quickstart](https://docs.cairndev.sh/quickstart/);
 to look around without installing, use the live demo at https://demo.cairndev.sh (a
 shared sandbox, so don't enter real credentials).
+
+To watch a budget refuse a run, with no key and no spend, start a pipeline whose estimate
+is above its cap:
+
+```bash
+cairn run hello-cairn/over-budget --environment sandbox
+```
+
+```text
+pipeline_id=pl_592c6c850aec40a5 status=running
+  failed
+    engine-check       failed               run=run-flow-hello-cairn--engine-check-78f6c9
+  engine-check: series 'hello-over-budget': this run's estimate $5.00 would exceed the $1.00 cap ($0.00 spent, $0.00 reserved by in-flight runs). Raise the budget or start a new series.
+→ logs      cairn status run-flow-hello-cairn--engine-check-78f6c9 --logs   # leg engine-check
+→ findings  cairn status pl_592c6c850aec40a5 --results
+```
+
+The flow leg's reservation failed, so its engine never started, and the command exits 1. The
+$5 is a figure the pipeline file declares, not a measured price, and the flow itself would cost
+nothing. The refusal is the real one every flow leg under a `series` goes through. This pipeline
+needs the release after cairndev 0.4.0. See [Cost and budgets](https://docs.cairndev.sh/concepts/cost/).
 
 From source:
 

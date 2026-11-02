@@ -150,6 +150,15 @@ def test_following_with_no_terminal_and_no_decision_exits_2_and_says_the_command
     assert "cairn decide pl_a approve --step review" in r.output and _names(c) == []
 
 
+def test_following_a_failed_pipeline_says_why_its_leg_failed(wire):
+    """The reason is the run's own error, in the output of the command that followed it."""
+    wire([_record(status="failed", steps={"clean": {"status": "failed", "run_id": "run-1"}, "next": {"status": "pending"}},
+                  step_runs={"clean": {"error": "this run's estimate $5.00 would exceed the $1.00 cap"}})])
+    r = cli.invoke(app, ["status", "pl_a", "--follow"])
+    assert r.exit_code == 1
+    assert "clean: this run's estimate $5.00 would exceed the $1.00 cap" in r.output
+
+
 def test_following_a_failed_pipeline_exits_1(wire):
     wire([_record(status="failed", steps={"measure": {"status": "failed", "run_id": "run-1"}})])
     assert cli.invoke(app, ["status", "pl_a", "--follow"]).exit_code == 1
@@ -295,6 +304,11 @@ def test_an_old_name_still_works_and_says_the_new_one_on_stderr(wire, argv, new)
     assert r.exit_code == 0, r.output
     assert f"is now `{new}`" in r.stderr
     assert "is now" not in r.stdout, "stdout stays what a script reads"
+
+
+def test_replay_takes_a_run_not_a_pipeline():
+    r = cli.invoke(app, ["status", "pl_a", "--replay"])
+    assert r.exit_code == 1 and "cairn status pl_a --logs" in r.stderr
 
 
 def test_replay_still_works_as_an_alias(wire):

@@ -21,6 +21,7 @@ that file or run `render.py`; pass `--out DIR` to keep your result separate.
 | Script | What it measures | Takes |
 |---|---|---|
 | [`quickstart_path.py`](./quickstart_path.py) | The quickstart's pipeline on a local engine: time to the paused gate, approvals to done, the gates holding, each person's decision in the audit log, the audit chain verifying | a minute or two |
+| [`audit_tamper.py`](./audit_tamper.py) | Alterations to a real audit log: the ones `cairn admin audit verify` detects and the row it names, the ones it can't detect, and what a saved head adds and misses | 3 min 45 s, measured once on the author's 8-CPU Intel Mac; other machines differ |
 
 ## Where the published numbers come from
 

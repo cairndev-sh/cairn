@@ -75,6 +75,17 @@ def write_result(out: Path, measurement: str, *, title: str, inputs: dict[str, A
     return path
 
 
+def cairn_command() -> str:
+    """The ``cairn`` beside this Python, else the one on the PATH."""
+    cairn = Path(sys.executable).with_name("cairn")
+    return str(cairn) if cairn.exists() else shutil.which("cairn") or "cairn"
+
+
+def scrubbed_env() -> dict[str, str]:
+    """This environment without any setting that would change what a command under measurement does."""
+    return {k: v for k, v in os.environ.items() if not k.startswith(("CAIRN_", "OBS_"))}
+
+
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -98,10 +109,9 @@ class LocalEngine:
     def __enter__(self) -> "LocalEngine":
         import httpx  # noqa: PLC0415 — only a real run needs it
 
-        cairn = Path(sys.executable).with_name("cairn")
-        cmd = [str(cairn) if cairn.exists() else shutil.which("cairn") or "cairn", "dev", "--engine-only",
+        cmd = [cairn_command(), "dev", "--engine-only",
                "--port", str(self.port), "--db", str(self.home / "dev.db")]
-        env = {k: v for k, v in os.environ.items() if not k.startswith(("CAIRN_", "OBS_"))}
+        env = scrubbed_env()
         env.update({"HOME": str(self.home), "CAIRN_AUDIT_LOG": str(self.audit_log),
                     "CAIRN_PACK_PATH": str(REPO / "examples" / "hello-cairn")})
         if self.profile is not None:

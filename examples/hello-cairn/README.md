@@ -1,7 +1,7 @@
 # hello-cairn: the example pack
 
 `hello-cairn` is a domain pack: data plus a little glue, no operators. It runs on the cairn
-engine and its builtin operator packs alone. Its four pipelines each do one thing a new user
+engine and its builtin operator packs alone. Its five pipelines each do one thing a new user
 recognises, and together they exercise what the engine adds around a piece of work: gates
 answered by data or by a person, budgets, triggers, an agentic template, an MCP tool,
 retrieval, a run hook, SSH, secrets, and an audit record.
@@ -12,6 +12,7 @@ retrieval, a run hook, SSH, secrets, and an audit record.
 | `ask-the-docs` | agentic | Retrieve from the pack's docs, ask a model, measure the answer with a tool on the pack's own MCP server, remember it, check its length, ask a person. |
 | `nightly-ops` | operations | Check a secret, run a report on an SSH box, carry it through a flow, propose the follow-up to a person, audit it. Nightly once enabled; a run hook writes receipts. |
 | `tiny-finetune` | ml | Profile training rows, LoRA fine-tune a small model on CPU, gate on its held-out loss, tag it, ask a person, write its card. |
+| `over-budget` | data | Declare an estimate above the budget and watch the flow leg's reservation refuse it before the engine starts. No key, no spend. |
 
 ## Quickstart
 
@@ -161,6 +162,29 @@ pack: `test_tiny_finetune_is_runnable_on_the_public_core`
 and `tests/core/test_validate_author_gate.py` admits tiny-finetune like every other shipped
 pipeline.
 
+**over-budget**
+
+```bash
+cairn run hello-cairn/over-budget --environment sandbox
+```
+
+```text
+pipeline_id=pl_592c6c850aec40a5 status=running
+  failed
+    engine-check       failed               run=run-flow-hello-cairn--engine-check-78f6c9
+  engine-check: series 'hello-over-budget': this run's estimate $5.00 would exceed the $1.00 cap ($0.00 spent, $0.00 reserved by in-flight runs). Raise the budget or start a new series.
+→ logs      cairn status run-flow-hello-cairn--engine-check-78f6c9 --logs   # leg engine-check
+→ findings  cairn status pl_592c6c850aec40a5 --results
+```
+
+`governance` declares `estimated_usd: 5` against `budget: {usd: 1}` on the series
+`hello-over-budget`. Before a flow leg starts its engine it reserves that estimate, and the
+reservation fails, so the engine is never handed the job. The figure is declared in the file
+and the flow is one `noop` stage, so this shows the refusal, not a measured price. The launch
+itself is admitted, so the audit trail has `leg.budget_refused` (`estimated_usd`, `budget_usd`)
+and no `pipeline.refused`, and the leg still has its failed run on the record. Raise
+`budget.usd` to 5 and the same leg runs.
+
 ### Triggers
 
 The engine arms every declared trigger when it starts: it installs each discovered pipeline
@@ -206,7 +230,7 @@ waiting one stops at `review` with the later steps pending (#2608).
 ```
 pack.toml                         manifest (kind = domain): the docs corpus, the MCP server
 __init__.py                       the one-line shim the entry point targets
-pipelines/*.yaml                  the four pipelines (the runnable surface)
+pipelines/*.yaml                  the five pipelines (the runnable surface)
 flows/engine-check.yaml           data flow: one noop stage
 flows/summarise.yaml              data flow: noop + noop.slow
 flows/lora.yaml                   ml flow: train.lora
@@ -224,7 +248,7 @@ pyproject.toml                    builds the data wheel cairn-pack-hello
 ```
 
 Tests: `tests/examples/test_hello_cairn.py`, `tests/core/test_example_pipeline_governance.py`,
-`tests/cli/test_validate_example_pack.py`. The feature proof (ADR-0127 D1) runs all four pipelines
+`tests/cli/test_validate_example_pack.py`. The feature proof (ADR-0127 D1) runs every pipeline but `over-budget`
 on real servers in every storage × runtime × bus cell, plus the crash cells: `tests/e2e/hello`,
 driven by `scripts/oss/feature_proof.sh`, which writes `FEATURE_PROOF.md`. Its model is a keyless
 OpenAI-compatible stub, `tests/e2e/model_stub.py`.

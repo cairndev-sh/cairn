@@ -62,6 +62,11 @@ def _print_overview(pipes: list[dict], runs: list[dict]) -> None:
 # ── one pipeline, one run ─────────────────────────────────────────────────────
 
 
+def _leg_errors(p: dict) -> dict[str, str]:
+    """Why each leg's run ended badly, by step id, from the pipeline's record."""
+    return {sid: str((run or {}).get("error") or "") for sid, run in (p.get("step_runs") or {}).items()}
+
+
 def _print_pipeline(pipeline_id: str, p: dict) -> None:
     typer.secho(f"{p.get('pipeline_name') or ''}  {pipeline_id}  {p.get('status', '')}", bold=True)
     trigger = p.get("trigger") or {}
@@ -69,7 +74,7 @@ def _print_pipeline(pipeline_id: str, p: dict) -> None:
         by = str(trigger["publisher"]).removeprefix("pipeline:")
         typer.echo(f"Started by  {by}" + (f"  ({trigger['topic']})" if trigger.get("topic") else ""))
     typer.echo("")
-    errors = {sid: str((run or {}).get("error") or "") for sid, run in (p.get("step_runs") or {}).items()}
+    errors = _leg_errors(p)
     order = p.get("step_order") or list((p.get("step_state") or {}).keys())
     states = p.get("step_state") or {}
     for sid in order:
@@ -144,6 +149,10 @@ def follow_pipeline(c: Any, pipeline_id: str, *, decision: Optional[str], native
         status = p.get("status")
         if status in remote._TERMINAL:
             if status != "done" and not quiet:  # done: the results say it, and the chain may go on
+                errors = _leg_errors(p)
+                for sid, _run in remote._failed_steps(p):
+                    if errors.get(sid):
+                        typer.secho(f"  {sid}: {errors[sid][:200]}", fg="red")
                 remote._print_pipeline_next(pipeline_id, p)
             return 0 if status == "done" else 1
         waiting = [s for s, st in (p.get("step_state") or {}).items()
@@ -318,7 +327,7 @@ def status_cmd(
     after_seq: int = typer.Option(0, "--after-seq", help="with --logs: resume after this event"),
     events_only: bool = typer.Option(False, "--events-only", help="with --logs or --follow: only lifecycle and transition events"),
     follow: bool = typer.Option(False, "--follow", "-f", help="stay attached and ask at each gate"),
-    replay: bool = typer.Option(False, "--replay", help="replay the run's persisted trace"),
+    replay: bool = typer.Option(False, "--replay", help="print the run's recorded inputs, operators and events; nothing runs again"),
     source: str = typer.Option("auto", "--source", help="with --replay: auto, file or db"),
     decision: Optional[str] = typer.Option(None, "--decision", help="with --follow: answer each pause without asking (approve or reject)"),
     timeout: Optional[float] = typer.Option(None, "--timeout", help="with --follow: seconds to wait at a prompt before --on-timeout"),
@@ -351,8 +360,10 @@ def status_cmd(
     if replay:
         from cairn.cli.commands import replay as replay_cmd  # noqa: PLC0415 — it pulls the run store
 
-        replay_cmd.cmd(run_id=target, json=json_out, source=source)
-        return
+        if _is_pipeline(target):
+            _fail(f"--replay takes a run, and {target} is a pipeline. Its runs: cairn status {target} --logs")
+        raise typer.Exit(replay_cmd._run(target, json=json_out, source=source, endpoint=endpoint,
+                                         token=token, profile=profile))
     if results:
         remote._show_findings(target, json_out, endpoint, token, profile)
         return

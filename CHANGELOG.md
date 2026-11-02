@@ -4,6 +4,23 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 ### Added
+- The example pack's `over-budget` pipeline shows a budget refusing a run before its engine starts, with no key and no spend, and `cairn run` now prints why a leg failed (#368).
+
+
+## [0.4.0] - 2026-11-02
+
+The CLI is five commands: `cairn setup`, `run`, `status`, `decide` and `pack` (ADR-0165). `cairn run` stays with a pipeline to the end, asking at each gate and following any pipeline its events start. `cairn setup` starts a local engine and returns once it works. Every other command moved under `cairn admin` or into one of the five, and the old names still work for this one minor version.
+
+### Upgrade notes
+- **The old command names still work, are hidden from `--help`, and say the new name on stderr.** They go in the next minor version. A script that reads their stdout keeps working; one that merges stderr into stdout will see the extra line. The CLI reference has the new name for each.
+- **`cairn dev`, and the temporary engine `cairn run` starts when nothing is running, now listen on `127.0.0.1`.** To reach one from a container, a VM or another machine, set `CAIRN_TRIGGER_HOST`. A deployed engine (`cairn-server`, the image, the chart) is unchanged.
+- **`cairn pipeline run` now exits 2 at a human gate** instead of polling forever, with the record kept. `cairn run` asks at the gate instead.
+- **`cairn run <pipeline>` starts it,** where it used to refuse and point at `cairn pipeline run`. `cairn run <flow>` is still refused: a flow runs as a leg of a declared pipeline.
+- **`cairn run` exits 0, 1, 2 or 77.** A refused launch is 1, where `cairn pipeline run` gives 3; the old names keep their own codes. `-i K=V` parses the value as JSON everywhere, so `-i ticket=123` sends a number, where `remote launch`, `remote submit` and `gate --set` sent a string.
+- **A `cairn.cli` provider from a `cairn-pack-*`, `cairn-operator-*` or `cairn-contracts-*` distribution is now refused,** logged and listed by `cairn setup --check` (ADR-0165 D8). An app's provider still mounts.
+- No storage migration, no route changed. The example pack `cairn-pack-hello` is 0.2.7.
+
+### Added
 - `cairn --help` leads with the main commands, then the headings installed providers name, then `cairn admin`. `cairn pack` gains `new`, `test`, `lock`, `ls` (`--flows`, `--pipelines`), `show` (`--plan`, `--split`, `--graph`) and `export` (`--to pipeline|metaflow`), and `cairn pack check` takes paths and does `cairn validate`'s work. `cairn admin` holds `connect`, `trigger`, `preset`, `audit`, `lineage`, `compute`, `config`, `deploy`, `worker`, `worker-token`, `hash-password`, `console`, `demo`, `backfill` and `respell-packs`. The old names (`cairn init`, `ls`, `validate`, `test`, `lock`, `export`, `visualize`, `flow`, `pipeline ls` and `show`, `connect`, `audit`, `lineage`, `compute`, `config`, `deploy`, `worker`, `demo`, and the rest of `cairn remote`) still work for one more minor version, hidden, and say the new name on stderr. A test pins the command tree to the ADR's table. Part of #362 (ADR-0165). (#360)
 - A `cairn.cli` provider names its `--help` heading with Typer's `rich_help_panel`; without one, the heading comes from its entry-point name. A provider from a `cairn-pack-*`, `cairn-operator-*` or `cairn-contracts-*` distribution is refused before its code is imported, logged, and shown by the doctor check. (#360)
 - The example's `hello.toml` binds `audit.sink`, and the Quickstart runs under it, so a first run's `audit.jsonl` shows each step and each decision a person made, with the signed-in user. The `local-dev` default is unchanged (#367).
