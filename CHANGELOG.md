@@ -4,6 +4,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 ### Added
+- `cairn status [id]` and `cairn decide <id> approve|reject|cancel`: one door to look and one to decide, for a pipeline or a run (ADR-0165). `cairn status --follow` stays with a pipeline and asks at each gate. `cairn replay`, and `cairn remote pipelines`, `pipeline`, `ps`, `status`, `watch`, `findings`, `logs`, `advance`, `approve`, `reject`, `cancel` and `cancel-pipeline`, still work for one minor version and print the new spelling on stderr; they leave `--help` now. What the CLI suggests next uses the new names. (#357)
 - A pipeline gate's evidence is on its step: `step_state.<gate>.gate_context` holds the `show:` fields, the approvers, the spend against the budget cap, the cost estimate and the admission decision, so `GET /pipelines/{id}` and `cairn remote pipeline <id>` carry it, and `cairn remote launch --watch` and `cairn remote advance` print it at each pause. Before, it reached only the audit event and the review record, so someone approving from the CLI decided without the numbers. Under the Temporal owner, a gate carries no evidence yet (#212). (#258)
 
 ## [0.3.3] - 2026-10-30

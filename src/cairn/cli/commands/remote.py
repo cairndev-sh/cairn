@@ -40,11 +40,12 @@ from typing import Any, Optional
 
 import typer
 
+from cairn.cli.aliases import renamed
 from cairn.cli.commands.dev import dev_env
 
 app = typer.Typer(
     name="remote",
-    help="Drive a remote cairn-server: login / submit / ps / status / logs / cancel / approve / reject.",
+    help="Sign in to a server and launch pipelines. Older names for `cairn status` and `cairn decide` still work.",
     no_args_is_help=True,
     add_completion=False,
 )
@@ -342,7 +343,7 @@ def _poll_pipeline(c, pipeline_id: str) -> dict:
                 # ~60 min). Say so in one line with how to re-attach, and exit 77:
                 # the pipeline keeps running server-side.
                 _session_ended(c.token, then=(
-                    f", then re-attach: `cairn remote pipeline {pipeline_id}` "
+                    f", then re-attach: `cairn status {pipeline_id} --follow` "
                     "(it is still running server-side)"))
             _fail(f"{e.status_code}: {e.detail[:300]}")
     _fail("engine stopped responding (5 consecutive poll timeouts).")
@@ -373,7 +374,7 @@ def _print_event(seq, ev_type, data) -> None:
     typer.secho(line, fg=color or None)
 
 
-def _tail(endpoint: str, token: Optional[str], run_id: str, *, after_seq: int = 0) -> None:
+def _tail(endpoint: str, token: Optional[str], run_id: str, *, after_seq: int = 0, flow: bool = False) -> None:
     """Follow a run's SSE event stream, resuming with ``after_seq`` if the
     connection drops before the run reaches a terminal state."""
     import httpx
@@ -392,7 +393,8 @@ def _tail(endpoint: str, token: Optional[str], run_id: str, *, after_seq: int = 
                     for line in r.iter_lines():
                         if line == "":
                             if ev_type is not None:
-                                _print_event(seq, ev_type, data)
+                                if not flow or ev_type in _LIFECYCLE:
+                                    _print_event(seq, ev_type, data)
                                 if seq is not None:
                                     last = seq
                                 if ev_type in _TERMINAL:
@@ -494,7 +496,8 @@ def _runs_table(invs: list[dict]):
     return table
 
 
-@app.command()
+@app.command(hidden=True)
+@renamed("cairn remote ps", "cairn status")
 def ps(
     status: Optional[str] = typer.Option(None, "--status", help="queued|running|done|failed|cancelled"),
     limit: int = typer.Option(50, "--limit", "-n"),
@@ -512,7 +515,8 @@ def ps(
         typer.echo("(no runs)")
 
 
-@app.command()
+@app.command(hidden=True)
+@renamed("cairn remote watch", "cairn status --watch")
 def watch(
     interval: float = typer.Option(2.0, "--interval", "-n", help="refresh interval (seconds)"),
     status: Optional[str] = typer.Option(None, "--status", help="filter by status"),
@@ -545,7 +549,8 @@ def watch(
             pass
 
 
-@app.command()
+@app.command(hidden=True)
+@renamed("cairn remote status", "cairn status <run>")
 def status(
     run_id: str = typer.Argument(...),
     endpoint: Optional[str] = _EP,
@@ -558,7 +563,8 @@ def status(
         typer.echo(json.dumps(_call(c.run, run_id), indent=2))
 
 
-@app.command()
+@app.command(hidden=True)
+@renamed("cairn remote logs", "cairn status <run> --logs")
 def logs(
     run_id: str = typer.Argument(...),
     follow: bool = typer.Option(False, "--follow", "-f", help="tail live via SSE until terminal"),
@@ -578,7 +584,15 @@ def logs(
         _print_event(ev.get("seq"), ev.get("type"), ev.get("data"))
 
 
-@app.command()
+def _cancel_run(run_id: str, endpoint, token, profile) -> None:
+    ep, tok = _resolve(endpoint, token, profile)
+    with _api(ep, tok) as c:
+        out = _call(c.cancel_run, run_id)
+    typer.secho(f"status={(out or {}).get('status')}", fg="yellow")
+
+
+@app.command(hidden=True)
+@renamed("cairn remote cancel", "cairn decide <run> cancel")
 def cancel(
     run_id: str = typer.Argument(...),
     endpoint: Optional[str] = _EP,
@@ -586,10 +600,7 @@ def cancel(
     profile: Optional[str] = _PROF,
 ):
     """Cancel a running run (best-effort)."""
-    ep, tok = _resolve(endpoint, token, profile)
-    with _api(ep, tok) as c:
-        out = _call(c.cancel_run, run_id)
-    typer.secho(f"status={(out or {}).get('status')}", fg="yellow")
+    _cancel_run(run_id, endpoint, token, profile)
 
 
 # ─── interactive HITL watch loop (an internal issue) ──────────────
@@ -668,7 +679,7 @@ def _decide(*, decision_opt, native, timeout, on_timeout) -> Optional[str]:
     if not _is_interactive():
         typer.secho(
             "non-interactive (no TTY) — not prompting. Decide with "
-            "`cairn remote approve|reject <run_id>`, or pass --decision.",
+            "`cairn decide <id> approve|reject`, or pass --decision.",
             fg="yellow", err=True,
         )
         return None
@@ -794,7 +805,7 @@ def _watch_hitl(endpoint, token, run_id: str, *, approver, decision_opt,
         if decision is None:
             typer.secho(
                 f"detached — run {run_id} is still paused. Resume later:\n"
-                f"    cairn remote approve {run_id}   (or: reject {run_id})",
+                f"    cairn decide {run_id} approve   (or: reject)",
                 fg="yellow",
             )
             return 2
@@ -811,7 +822,7 @@ def _watch_hitl(endpoint, token, run_id: str, *, approver, decision_opt,
         # loop: re-subscribe from `last` for post-resume events (next gate / terminal)
 
 
-def _resume(run_id: str, decision: str, approver: str, endpoint, token, profile) -> None:
+def _resume(run_id: str, decision: str, approver: str, endpoint, token, profile, note: Optional[str] = None) -> None:
     """Deliver a HITL decision to a run paused at an operation gate (ADR-0034).
 
     Targets ``POST /runs/{id}/resume`` (an internal issue) — the run-level
@@ -821,12 +832,13 @@ def _resume(run_id: str, decision: str, approver: str, endpoint, token, profile)
     """
     ep, tok = _resolve(endpoint, token, profile)
     with _api(ep, tok) as c:
-        out = _call(c.resume_run, run_id, decision=decision, approver=approver)
+        out = _call(c.resume_run, run_id, decision=decision, approver=approver, note=note)
     typer.echo(json.dumps(out, indent=2))
 
 
 # ADR-0034; the interactive HITL loop: #53
-@app.command()
+@app.command(hidden=True)
+@renamed("cairn remote approve", "cairn decide <run> approve")
 def approve(
     run_id: str = typer.Argument(..., help="the paused run id (status awaiting_approval)"),
     watch: bool = typer.Option(False, "--watch", "-w", help="stream the run and prompt at each HITL pause"),
@@ -857,8 +869,22 @@ def approve(
     _resume(run_id, "approve", approver, endpoint, token, profile)
 
 
+def _reject_gate(pipeline_id: str, step: str, reason: Optional[str], approver: str, endpoint, token, profile) -> None:
+    """Reject a pipeline gate: the pipeline ends failed, the step's verdict is ``rejected``, and
+    the decider and reason are recorded (ADR-0156 D5)."""
+    if not (reason or "").strip():
+        _fail("--reason is required when rejecting a pipeline gate step")
+    with _session(endpoint, token, profile) as (ep, tok, _local):
+        with _api(ep, tok) as c:
+            out = _call(c.reject_step, pipeline_id, step, reason=reason.strip(), approver=approver)
+    typer.secho(
+        f"rejected — step {step} of {pipeline_id}; pipeline status={(out or {}).get('status')}",
+        fg="yellow")
+
+
 # the two forms: ADR-0156 D6
-@app.command()
+@app.command(hidden=True)
+@renamed("cairn remote reject", "cairn decide <id> reject")
 def reject(
     target: str = typer.Argument(
         ..., help="a paused run id (one argument), or a pipeline id (pl_…) followed by the gate step"),
@@ -881,17 +907,10 @@ def reject(
     if step is None:
         if target.startswith("pl_"):  # the pipeline store's id prefix, as `findings` tells them apart
             _fail(f"{target} is a pipeline — name the gate step: "
-                  f"cairn remote reject {target} <step> --reason TEXT")
+                  f"cairn decide {target} reject --step <step> --reason TEXT")
         _resume(target, "reject", approver, endpoint, token, profile)
         return
-    if not (reason or "").strip():
-        _fail("--reason is required when rejecting a pipeline gate step")
-    with _session(endpoint, token, profile) as (ep, tok, _local):
-        with _api(ep, tok) as c:
-            out = _call(c.reject_step, target, step, reason=reason.strip(), approver=approver)
-    typer.secho(
-        f"rejected — step {step} of {target}; pipeline status={(out or {}).get('status')}",
-        fg="yellow")
+    _reject_gate(target, step, reason, approver, endpoint, token, profile)
 
 
 @app.command()
@@ -972,7 +991,8 @@ def _pipeline_line(p: dict) -> str:
             f"{done}/{len(steps)} steps  {name}")
 
 
-@app.command()
+@app.command(hidden=True)
+@renamed("cairn remote pipelines", "cairn status")
 def pipelines(
     status: Optional[str] = typer.Option(None, "--status", help="filter: running|paused|done|failed"),
     endpoint: Optional[str] = _EP,
@@ -990,7 +1010,8 @@ def pipelines(
         typer.echo("(no pipelines)")
 
 
-@app.command()
+@app.command(hidden=True)
+@renamed("cairn remote pipeline", "cairn status <id> --json")
 def pipeline(
     pipeline_id: str = typer.Argument(...),
     endpoint: Optional[str] = _EP,
@@ -1078,16 +1099,15 @@ def _print_pipeline_next(pipeline_id: str, p: dict, *, approver: str = "") -> No
     if status == "paused":
         _print_gate_evidence(p)
         for sid in _waiting_steps(p) or ["<step>"]:
-            _next("approve", f"cairn remote advance {pipeline_id} {sid}{who}")
+            _next("approve", f"cairn decide {pipeline_id} approve --step {sid}{who}")
     for sid, run_id in _failed_steps(p):
-        _next("logs", f"cairn remote logs {run_id}"
+        _next("logs", f"cairn status {run_id} --logs"
                       + (f"   # leg {sid}" if sid else ""))
     if status in ("failed", "done", "paused"):
-        _next("findings", f"cairn remote findings {pipeline_id}")
+        _next("findings", f"cairn status {pipeline_id} --results")
     if status not in ("done", "failed", "cancelled"):
         # last line, deliberately: the one command that keeps you attached.
-        _next("watch", f"cairn remote pipeline {pipeline_id}"
-                       "    # or re-run launch with --watch to follow it live")
+        _next("watch", f"cairn status {pipeline_id} --follow")
 
 
 # ─── launch presets (#1789, ADR-0071 §6) ──────────────────────────────────
@@ -1243,9 +1263,8 @@ def launch(
                 # sessions to curl. The launch response carries no step_state
                 # (nothing has run), so these are the two reads that work at
                 # any state rather than a per-step advance line.
-                _next("findings", f"cairn remote findings {pid}")
-                _next("watch", f"cairn remote pipeline {pid}"
-                               "    # or re-run launch with --watch to follow it live")
+                _next("findings", f"cairn status {pid} --results")
+                _next("watch", f"cairn status {pid} --follow")
                 return
             last_render = ""
             while True:
@@ -1270,7 +1289,8 @@ def launch(
                 time.sleep(max(0.5, interval))
 
 
-@app.command()
+@app.command(hidden=True)
+@renamed("cairn remote advance", "cairn decide <id> approve --step <step>")
 def advance(
     pipeline_id: str = typer.Argument(...),
     step_id: str = typer.Argument(..., help="the step waiting on a human (gate / manual)"),
@@ -1282,9 +1302,12 @@ def advance(
     token: Optional[str] = _TOK,
     profile: Optional[str] = _PROF,
 ):
-    """Approve/advance a pipeline step that is waiting on a human.
+    """Approve/advance a pipeline step that is waiting on a human."""
+    _advance_step(pipeline_id, step_id, approver, endpoint, token, profile)
 
-    A gate (``awaiting_approval``) is decided through ``POST …/approve``, which
+
+def _advance_step(pipeline_id: str, step_id: str, approver: Optional[str], endpoint, token, profile) -> None:
+    """A gate (``awaiting_approval``) is decided through ``POST …/approve``, which
     records the approver; any other waiting step (``awaiting_advance``) is
     released through ``POST …/advance``."""
     with _session(endpoint, token, profile) as (ep, tok, local):
@@ -1325,7 +1348,15 @@ def advance(
                     time.sleep(2.0)
 
 
-@app.command(name="cancel-pipeline")
+def _cancel_pipeline(pipeline_id: str, endpoint, token, profile) -> None:
+    with _session(endpoint, token, profile) as (ep, tok, _local):
+        with _api(ep, tok) as c:
+            out = _call(c.cancel_pipeline, pipeline_id)
+    typer.secho(f"status={(out or {}).get('status')}", fg="yellow")
+
+
+@app.command(name="cancel-pipeline", hidden=True)
+@renamed("cairn remote cancel-pipeline", "cairn decide <id> cancel")
 def cancel_pipeline_cmd(
     pipeline_id: str = typer.Argument(...),
     endpoint: Optional[str] = _EP,
@@ -1333,10 +1364,7 @@ def cancel_pipeline_cmd(
     profile: Optional[str] = _PROF,
 ):
     """Cancel a whole pipeline (best-effort across its in-flight legs)."""
-    with _session(endpoint, token, profile) as (ep, tok, _local):
-        with _api(ep, tok) as c:
-            out = _call(c.cancel_pipeline, pipeline_id)
-    typer.secho(f"status={(out or {}).get('status')}", fg="yellow")
+    _cancel_pipeline(pipeline_id, endpoint, token, profile)
 
 
 # ─── findings (#1790) ─────────────────────────────────────────────────
@@ -1374,7 +1402,8 @@ def _findings_table(found: dict, indent: str = "") -> None:
                    + ("" if _scalar(v) else "   (--json for the full value)"))
 
 
-@app.command()
+@app.command(hidden=True)
+@renamed("cairn remote findings", "cairn status <id> --results")
 def findings(
     target_id: str = typer.Argument(..., help="a run id, or a pipeline id (pl_…)"),
     json_out: bool = typer.Option(False, "--json", help="print the raw JSON response"),
@@ -1382,7 +1411,12 @@ def findings(
     token: Optional[str] = _TOK,
     profile: Optional[str] = _PROF,
 ):
-    """Show a run's findings, or every step's findings for a pipeline.
+    """Show a run's findings, or every step's findings for a pipeline."""
+    _show_findings(target_id, json_out, endpoint, token, profile)
+
+
+def _show_findings(target_id: str, json_out: bool, endpoint, token, profile) -> None:
+    """A run's findings, or every non-pending step's for a pipeline.
 
     The id kind is auto-detected: `pl_…` is a pipeline (the store's id prefix),
     anything else is a run — and either way a 404 falls back to the other door,
