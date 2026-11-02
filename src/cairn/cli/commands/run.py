@@ -1066,7 +1066,7 @@ def _run_pipeline_file_sync(
 
 def preflight_cmd(
     template_ref: str = typer.Argument(
-        ..., help="Namespaced agentic template reference, e.g. 'dataset-readiness/check'. "
+        ..., help="Namespaced agentic template reference, e.g. 'hello-cairn/assistant'. "
                   "A pipeline is checked with `cairn run <pipeline> --dry-run`.",
     ),
     input_file: Optional[str] = typer.Option(

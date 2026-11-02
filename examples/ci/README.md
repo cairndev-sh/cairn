@@ -43,8 +43,14 @@ and no API key are involved. It's a quick check, not a full validation: it reads
 write them to `$state.verdict`, not `$state.findings.verdict`. It also reads a list named
 `outcome` the same way.
 
-**A check that leaves no verdict there exits 0.** That includes one whose operator failed,
-which is why `dataset-check.md` ends in a fallback that blocks. Test yours on a missing file.
+**A check that leaves no usable verdict there exits 2,** and so does one with a step that
+failed or that paused at an approval. cairndev 0.3.3 and earlier exit 0 in all of these, so
+test yours on a missing file. `dataset-check.md` ends in a fallback that blocks, so an unreadable
+file is a FAIL with a reason on every version.
+
+A selector recovers from a failed step only when all its children are single steps. With a
+compound child, a failed step exits 2 even if a later child recovered. A failure inside a
+`subgraph_node` isn't detected yet.
 
 ## Exit codes
 
@@ -52,7 +58,7 @@ which is why `dataset-check.md` ends in a fallback that blocks. Test yours on a 
 |------|---------|
 | `0`  | PASS (or WARN, unless `--fail-on warn`) |
 | `1`  | gate FAIL: a blocking check failed |
-| `2`  | error: bad inputs, or the check couldn't be found or compiled |
+| `2`  | error: nothing was decided. Bad inputs, the check couldn't be found or compiled, a step failed, it paused at an approval, or it gave no usable verdict |
 
 ## Flags
 
