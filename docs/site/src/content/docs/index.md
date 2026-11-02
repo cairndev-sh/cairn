@@ -58,12 +58,12 @@ cairn orchestrates and governs. The work itself runs on tools you choose.
 | Data processing | a dataflow engine: the built-in one, or Metaflow (`cairndev[metaflow]`) or SkyPilot (`cairndev[skypilot]`) |
 | Training | the built-in `train/lora` operator fine-tunes a small model on CPU; other training backends come as operator packs |
 | Model calls | any OpenAI-compatible endpoint, directly or through a LiteLLM gateway |
-| Durable execution | the in-process runtime, DBOS or Temporal |
+| Runtime | in-process, or DBOS or Temporal for durable execution |
 | State | SQLite or Postgres |
 
 The web console, and the operator packs for GPU providers and managed
-training, are part of cairn-platform. Everything on this site runs with the
-open-source `cairndev` package.
+training, are part of cairn-platform. Everything on this site runs on the
+open-source packages, unless a page says otherwise.
 
 ## Words used in these docs
 
