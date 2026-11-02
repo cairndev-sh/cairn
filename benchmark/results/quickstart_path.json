@@ -3,18 +3,18 @@
   "title": "The quickstart's path on a local engine",
   "script": "benchmark/quickstart_path.py",
   "provenance": {
-    "cairndev_version": "0.3.1",
+    "cairndev_version": "0.3.3",
     "uv_lock_sha256": "43c69f31e9856268c23e1fcde3d18fcf6a60814ffdb8af27e00576ee093cc9b0",
-    "git_sha": "73635a34e4f4842d50574cc4d7c52451d5c6e71e",
+    "git_sha": "1e067ede94f0cce76b626bac4c6562c583d5aa47",
     "code_clean": true,
     "machine": {
-      "os": "Darwin",
+      "os": "Linux",
       "arch": "x86_64",
-      "cpus": 8,
-      "python": "3.13.12"
+      "cpus": 4,
+      "python": "3.13.13"
     },
     "measured_at": "2026-11-02",
-    "ci_run": null
+    "ci_run": "https://github.com/cairndev-sh/cairn/actions/runs/41452065865"
   },
   "inputs": {
     "pipeline": "hello-cairn/profile-and-publish",
@@ -27,15 +27,15 @@
   "results": [
     {
       "what": "Engine start to answering",
-      "result": "33.7 s"
+      "result": "2.0 s"
     },
     {
       "what": "Launch to a pipeline paused at its person gate",
-      "result": "12.1 s (median of 5, after one warm-up run)"
+      "result": "1.6 s (median of 5, after one warm-up run)"
     },
     {
       "what": "Both approvals to a finished pipeline, nobody waiting",
-      "result": "1.4 s (median of 5, after one warm-up run)"
+      "result": "0.9 s (median of 5, after one warm-up run)"
     },
     {
       "what": "Nothing published before the person gate",
