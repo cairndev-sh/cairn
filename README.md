@@ -92,9 +92,9 @@ Walkthrough: [Fine-tune a model](https://docs.cairndev.sh/guides/fine-tune-a-mod
 This is what separates cairn from a bare agent loop or a black-box tool — the
 work runs behind deterministic guardrails you can inspect afterward:
 
-- **Hard budget** — a template's model calls stop at its `budget.max_cost_usd`, or at the
+- **Budget cap** — a template's model calls stop at its `budget.max_cost_usd`, or at the
   deployment's `MAX_COST_USD` ($1 by default) if that's lower: the call that crosses the cap
-  has been paid for, the leg fails, and the pipeline stops. A flow checks its own
+  has been paid for, calls already in flight can pass it further, the leg fails, and the pipeline stops. A flow checks its own
   `budget.max_cost_usd` between stages, and a leg in a series reserves its estimate first.
 - **Policy + human approval** — proposed actions pass declarative policy rules
   before any executor runs; high-risk ones (promote a model, destroy a
