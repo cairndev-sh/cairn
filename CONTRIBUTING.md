@@ -140,6 +140,9 @@ env -u CAIRN_STORAGE .venv/bin/pytest tests/core -q
   README's Quickstart section with `scripts/check_quickstart.py`: it starts an engine, answers both gates, trips the data
   gate and verifies the audit log. It reads the commands from the README, so edit them there; a line the script can't
   run fails the check until the script is taught it.
+- **Coverage** — the `coverage` workflow (`coverage.yml`, not a required check) runs the public tests under coverage on
+  pushes to `main`, and publishes the report and the README badge to GitHub Pages. There's no threshold. It doesn't count
+  `tests/e2e` or subprocesses, so the figure is a floor.
 - **The Compose stack** — the `compose` workflow (`compose.yml`, not a required check) builds the engine image, starts
   `deploy/light` from a clean checkout with `scripts/check_compose.py`, and runs a pipeline through it with and without
   auth. It runs nightly and on changes to the stack.
