@@ -130,6 +130,59 @@ pipeline pl_3f5b6ec6a25d414d  status=done
 `--json` prints the full values. The field names here are what a later leg
 wires with `$steps.<leg>.<field>`, and what a gate's `show:` lists.
 
+## What was recorded
+
+The launch in step 2 wrote to the engine's store (`~/.cairn/dev.db` under
+`cairn setup`). The `--dry-run` in step 1 wrote nothing: `cairn run --dry-run`,
+`--mock` and `--interactive` start no pipeline and leave no record.
+
+**The pipeline record** (`pl_…`) holds the plan of nine legs (`profile`,
+`data-ok`, `redact`, `engine-check`, `stage`, `review`, `promote`, `publish`,
+`audit`), the inputs you passed, the governance (budget $1, series `hello`,
+approvers `data-owners`) and, for each step, its status, run id, verdict and
+approver. Read it with `cairn status <pipeline_id> --json`.
+
+**Runs.** The seven legs that did work each have their own run, such as
+`run-task-data--profile-…` and `run-flow-hello-cairn--engine-check-…`. The gates
+`data-ok` and `review` have none. `cairn status <run-id> --logs` prints a run's
+event log.
+
+**Artifacts.**
+
+- `engine-check` registers the file you passed as an artifact, whose id is its
+  content hash, and as a version of the dataset `hello-sample`. Its findings
+  `artifact_ids`, `dataset_versions` and `noop_content_hash` name them. A file
+  that has not changed adds no new version.
+- `promote` points the tag `hello-sample@published` at that artifact once you
+  approve it (`promote.artifact_id`, `promote.tag`).
+- `stage` and `publish` write the redacted summary, as `summary`, to the stores
+  `hello-staging` and `hello-published` under `~/.cairn/artifacts`
+  (`CAIRN_ARTIFACTS_DIR`). `stage.uri` and `publish.uri` say where.
+
+`cairn status <pipeline_id> --results` prints all of these.
+
+**Audit rows.** These exist only when the profile the engine runs under binds
+`audit.sink`. The `hello.toml` from the Quickstart does; `local-dev` does not.
+With it, the log (`./audit.jsonl`, or `CAIRN_AUDIT_LOG`) gets `pipeline.admitted`
+at launch, `leg.submitted` and `leg.finished` for each of the seven legs,
+`pipeline.gate_approved` for `review` and again for `promote`, each with the
+signed-in user as `actor`, `leg.promoted` for `promote`, and `pipeline.finished`
+at the end. [What a pipeline run writes](/concepts/runs/#what-a-pipeline-run-writes)
+lists the fields.
+
+The `audit` leg adds a row of its own, `hello.dataset.published`, whose target
+is `publish.uri`. It is an operator call, so it is written whether or not a
+sink is bound, and `audit.hash` in the results is its hash. Check the chain
+with:
+
+```bash
+cairn admin audit verify
+```
+
+If you reject at `review`, the pipeline ends `failed`, and `pipeline.gate_rejected`
+joins the rows. If `data-ok` is false (`-i min_rows=1000`), no later leg starts,
+so there is no dataset version and no summary.
+
 ## Next
 
 - [Write a pipeline](/guides/write-a-pipeline/): your own, with gates.

@@ -321,3 +321,76 @@ and recorded like training, is in progress.
   meets an expired login, a watch included, prints `session expired at HH:MM`, says to run
   `cairn setup --server <url>`, and exits 77; the pipeline keeps running on the server. Log in
   again and re-attach with `cairn status <id> --json`.
+
+## What was recorded
+
+The guide launches two pipelines, `dataset-prep/prepare` and `finetune/sft`, and
+each leaves its own pipeline record in the engine's store. `--dry-run` writes
+nothing, and a launch the door refuses (a swapped dataset role, training data that
+overlaps an eval set, a GPU estimate above the budget) creates no record.
+
+**Pipeline records** (`pl_…`) hold the plan, the inputs, the governance (budget
+and approvers) and each step's status, run id, verdict and approver.
+
+- `prepare`: `source-ok` (a person), `prepare` (the flow leg), `data-review` (a
+  person, and only when exact or near deduplication dropped more than
+  `review_drop_ratio` of the rows), `format` (`dataset/format`) and `data-ok`
+  (a data gate).
+- `sft`: `approve-run` (a person), `acquire`, `smoke`, `smoke-ok`, `train`,
+  `eval`, `release-box`, `improved`, `promote-model` (a person), `promote` and the
+  finalizer `release`. The record also holds the launch door's admission (data roles,
+  intake verdicts, holdout check, GPU estimate), and `approve-run`'s evidence has the
+  `estimate_usd` and `estimate_basis` you approved.
+
+`cairn status <pl_id> --json` prints a record, and `--results` prints every leg's findings.
+
+**Runs.** Each leg that did work has its own: for `prepare`, the `prepare` and
+`format` legs; for `sft`, `acquire`, `smoke`, `train`, `eval`, `release-box`,
+`promote` and `release`. A retried leg stays one run, with its attempts counted. Gates
+have no run. A run's cost is split into model calls, GPU and storage, and the GPU
+legs settle their box time in `cost.gpu_usd`, the figure to compare with the
+estimate. `cairn status <run-id> --json` prints a run, `--logs` its event log.
+
+**Artifacts.**
+
+- `prepare` registers the three dataset versions, `<name>-train`, `<name>-val`
+  and `<name>-test`, with the roles training, validation and test. The pipeline's
+  outputs `train_version`, `val_version` and `test_version` name them, and
+  `verdicts` and `manifest` carry their intake verdicts and the manifest. The
+  `dataset:<name>-train@latest` refs in step 6 resolve to them.
+- `train` produces the adapter. Its findings give `candidate_artifact_id`,
+  `train_qlora_adapter_uri` and the losses, and `smoke` produced a separate
+  adapter, `sft-smoke`, so the two never share a name. Where the adapter's
+  bytes are kept depends on `artifact_target`: `local` (the default) leaves them
+  on the GPU box, out of the control plane's reach, and `s3` keeps them in
+  `CAIRN_CHECKPOINT_BUCKET`.
+- `eval` reports its figures and a results file (`eval_lm_eval_results_uri`) in its findings.
+- `promote` points the tag `sft-adapter@candidate` (the `tag` input) at
+  `candidate_artifact_id` once you approve it.
+- `acquire` stamps the instance with the `cairn:managed` and `cairn:release-after`
+  tags before it starts the box, so the lease is recorded on the instance too.
+
+**Audit rows.** The `finetune-ssh` profile binds `audit.sink`, so both pipelines
+write them to the log (`CAIRN_AUDIT_LOG`, else `audit.jsonl` in the engine's working
+directory). For `sft` that is:
+
+- `pipeline.admitted` with the verdict, `estimated_usd` and `budget_usd`, or
+  `pipeline.refused` with its reasons;
+- `pipeline.gate_approved`, with the signed-in user as `actor`, for `approve-run`,
+  `promote-model` and `promote`, and for `source-ok` in `prepare`;
+- `leg.submitted` and `leg.finished` for each leg, the latter with `settled_usd`,
+  `gpu_usd` and the attempts, and `leg.retrying` for a second attempt;
+- `leg.compute_acquired` and `leg.compute_released` for `acquire`, `release-box`
+  and `release`, and `leg.promoted` for `promote`;
+- `leg.budget_refused` if a reservation would pass the cap, and `pipeline.finished`
+  with `spent_usd` against `budget_usd`.
+
+[What a pipeline run writes](/concepts/runs/#what-a-pipeline-run-writes) lists every
+row. The log holds ids, refs, states and amounts, never inputs, outputs or
+prompts, so no training text. The box's state is not in the
+record: ask the instance with `cairn admin compute status gpu`. Check the log's chain
+with:
+
+```bash
+cairn admin audit verify
+```

@@ -220,6 +220,46 @@ approved — pipeline status=done
 With `-i min_rows=1000` the data gate is false and the pipeline fails at
 `enough-rows`; `keep` never runs.
 
+## What was recorded
+
+`cairn pack check` and `cairn run --dry-run` write nothing. The launch in step 6
+writes one pipeline record to the engine's store.
+
+**The pipeline record** (`pl_…`) holds the plan of four steps (`profile`,
+`enough-rows`, `keep`, `accept`), the inputs (`path`, `name`, `min_rows`,
+`expectation`), the governance (budget $1, series `acme-check`, approvers
+`data-team`) and each step's status, run id, verdict and approver. If you kept the scaffold's
+`policies/default.yaml`, the plan also holds the extra approvals it adds.
+`cairn status <pipeline_id> --json` prints it.
+
+**Runs.** Two: `run-task-data--profile-…` for `profile` and
+`run-flow-acme--keep-…` for `keep`. `enough-rows` is decided from the
+profile's numbers and `accept` by a person, so neither has a run.
+
+**Artifacts.** `keep` registers the file as an artifact (its id is the content
+hash) and as a version of the dataset named by the `name` input,
+`acme-sample` by default. `keep.noop_content_hash` is the hash `accept` shows
+you, and `artifact_ids` and `dataset_versions` in the leg's findings name what
+was registered. The pipeline has no `artifact/promote` or `storage/put` leg,
+so it moves no tag and writes no file of its own. With `-i min_rows=1000` the
+pipeline fails at `enough-rows`: the record shows the failed gate, `keep` has no run, and no
+version is registered.
+
+`cairn status <pipeline_id> --results` prints the findings of each leg.
+
+**Audit rows.** Only when the engine's profile binds `audit.sink`. `local-dev`
+does not, so a bare `cairn setup` writes none here; `secure` and the example's
+`hello.toml` do. With a sink, the log holds `pipeline.admitted`, `leg.submitted`
+and `leg.finished` for `profile` and `keep`, `pipeline.gate_approved` for
+`accept` with the signed-in user as `actor`, and `pipeline.finished`. This
+pipeline has no `audit/store` leg, so nothing else is written.
+[What a pipeline run writes](/concepts/runs/#what-a-pipeline-run-writes) lists
+the fields, and this checks the chain:
+
+```bash
+cairn admin audit verify
+```
+
 ## Next
 
 - [Write a flow](/guides/write-a-flow/): stages, placeholders and findings.

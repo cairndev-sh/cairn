@@ -4,6 +4,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+- The example pack's `tiny-finetune` takes an `output_dir`, so its promoted adapter can live somewhere the system won't delete. Without it the adapter stays in the engine's temp workdir, and the README says so. (#253)
+
 ## [0.5.0] - 2026-11-03
 
 The old command names are gone, and a cost cap now stops a run.
