@@ -14,6 +14,7 @@ from types import SimpleNamespace
 os.environ.setdefault("OPENAI_API_KEY", "sk-validate-offline")
 
 import pytest  # noqa: E402
+from langchain_openai.chat_models import _client_utils  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
 from cairn.core import obs  # noqa: E402
@@ -24,11 +25,14 @@ from cairn.core.engine import runner as runner_module  # noqa: E402
 from cairn.core.engine import skill_engine  # noqa: E402
 from cairn.core.engine.compiler import compile_template  # noqa: E402
 from cairn.core.engine.python_function_registry import python_function  # noqa: E402
-from cairn.core.engine.runner import run_within_budget  # noqa: E402
+from cairn.core.engine.runner import Runner, run_within_budget  # noqa: E402
 from cairn.core.engine.schema import TriggerEvent  # noqa: E402
+from cairn.core.guards import critique as critique_module  # noqa: E402
+from cairn.core.guards.critique import CritiqueVerdict  # noqa: E402
 from cairn.core.obs import audit as audit_module  # noqa: E402
 from cairn.core.obs import cost as obs_cost  # noqa: E402
 from cairn.core.operator import Operation, OperationContext  # noqa: E402
+from cairn.core.policy.engine import PolicyEngine  # noqa: E402
 from cairn.core.operator import default_registry as op_registry  # noqa: E402
 from cairn.core.operator.registry import OperatorEntry  # noqa: E402
 from cairn.core.runtime.inprocess import InProcessRuntime  # noqa: E402
@@ -44,6 +48,9 @@ MODEL = "gpt-4o-mini"
 
 @pytest.fixture
 def stub(monkeypatch):
+    # LangChain caches its async client for the process, and each test here has its own event
+    # loop, so a client from an earlier test would fail with "Event loop is closed".
+    _client_utils._cached_async_httpx_client.cache_clear()
     model = ModelStub().start()
     monkeypatch.setenv("OPENAI_BASE_URL", model.base_url)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
@@ -547,3 +554,149 @@ async def test_a_real_resume_holds_the_template_cap_for_direct_spend(harness, tr
     run = await harness.store.get("r1")
     assert run.status == "failed" and "over budget" in run.error
     assert [r["action"] for r in trail.audit if "budget" in r["action"]] == ["run.budget_exceeded"]
+
+
+# ── a skill run: the same cap, through the Runner ────────────────────
+
+
+class _SkillEngine:
+    """Activates ``loaded`` for the first event, and counts every event a cascade sends."""
+
+    def __init__(self, loaded):
+        self.loaded = loaded
+        self.events = []
+
+    def activate(self, event):
+        self.events.append(event)
+        return [self.loaded] if len(self.events) == 1 else []
+
+
+def _skill(path: Path, *, candidates=(), chain=()) -> SimpleNamespace:
+    return SimpleNamespace(
+        spec=SimpleNamespace(name="capped-skill", memory_enabled=False, effective_chain_skills=lambda: list(chain)),
+        compiled_template=compile_template(path),
+        trigger=TriggerEvent(source="manual", payload={"question": "q"}),
+        action_candidates=list(candidates), custom_logic=None)
+
+
+async def _skill_run(loaded, trail) -> tuple[Run, _SkillEngine]:
+    runner = Runner()
+    engine = _SkillEngine(loaded)
+    runner.skill_engine = engine
+    dispatcher = RunDispatcher(runner, store=InMemoryRunStore())
+    run = await dispatcher.submit(TriggerEvent(source="manual", payload={"question": "q"}), wait=True)
+    return await dispatcher.store.get(run.id), engine
+
+
+async def test_a_capped_skill_run_fails_and_keeps_what_it_spent(stub, one_call_usd, trail, tmp_path):
+    run, _ = await _skill_run(_skill(_six_calls(tmp_path, round(one_call_usd * 2.5, 6))), trail)
+
+    assert stub.calls[CHAT] == 3
+    assert run.status == "failed" and "over budget" in run.error
+    assert run.cost["llm_usd"] == pytest.approx(one_call_usd * 3, abs=2e-6)
+    assert run.result_payloads[0]["raw_output"]["budget_exceeded"] is True
+    (row,) = [r for r in trail.audit if "budget" in r["action"]]
+    assert row["action"] == "run.budget_exceeded" and row["outcome"] == "deny"
+    assert row["spent_usd"] == pytest.approx(one_call_usd * 3, abs=2e-6)
+
+
+async def test_a_skill_run_under_its_cap_is_done_and_records_its_spend(stub, one_call_usd, trail, tmp_path):
+    run, _ = await _skill_run(_skill(_six_calls(tmp_path, round(one_call_usd * 7, 6))), trail)
+
+    assert stub.calls[CHAT] == 6
+    assert run.status == "done" and not run.error
+    assert run.cost["llm_usd"] == pytest.approx(one_call_usd * 6, abs=2e-6)
+    assert not [r for r in trail.audit if "budget" in r["action"]]
+
+
+async def test_a_capped_skill_run_does_not_cascade(stub, one_call_usd, trail, tmp_path):
+    _, engine = await _skill_run(_skill(_six_calls(tmp_path, round(one_call_usd * 2.5, 6)), chain=["next"]), trail)
+    assert len(engine.events) == 1
+
+
+async def test_a_skill_run_under_its_cap_still_cascades(stub, one_call_usd, trail, tmp_path):
+    _, engine = await _skill_run(_skill(_six_calls(tmp_path, round(one_call_usd * 7, 6)), chain=["next"]), trail)
+    assert len(engine.events) == 2
+
+
+async def test_a_capped_skill_run_decides_no_actions(stub, one_call_usd, trail, tmp_path, monkeypatch):
+    def _never(self, request):
+        raise AssertionError("a stopped run must not evaluate an action")
+
+    monkeypatch.setattr(PolicyEngine, "evaluate", _never)
+    candidate = SimpleNamespace(id="a1", type="notify")
+    run, _ = await _skill_run(_skill(_six_calls(tmp_path, round(one_call_usd * 2.5, 6)), candidates=[candidate]), trail)
+    assert run.status == "failed" and run.result_payloads[0]["actions"] == []
+
+
+def _with_critique(path: Path) -> Path:
+    text = path.read_text(encoding="utf-8")
+    path.write_text(text.replace("flow:\n", "critique:\n  enabled: true\n  model: gpt-4o-mini\n  max_passes: 1\nflow:\n", 1),
+                    encoding="utf-8")
+    return path
+
+
+def _fake_critique(monkeypatch, spend: bool):
+    calls = []
+
+    async def _once(output_text, config):
+        calls.append(output_text)
+        if spend:
+            obs.record_llm(MODEL, 1000, 1000, 0.0)
+        return CritiqueVerdict(acceptable=True, confidence=1.0)
+
+    monkeypatch.setattr(critique_module, "_critique_once", _once)
+    return calls
+
+
+async def test_a_capped_skill_run_gets_no_critique(stub, one_call_usd, trail, tmp_path, monkeypatch):
+    calls = _fake_critique(monkeypatch, spend=False)
+    run, _ = await _skill_run(_skill(_with_critique(_six_calls(tmp_path, round(one_call_usd * 2.5, 6)))), trail)
+    assert run.status == "failed" and calls == []
+
+
+async def test_a_critique_counts_towards_the_run_cap(stub, one_call_usd, trail, tmp_path, monkeypatch):
+    """Six calls fit, and the critique's spend on top of them doesn't. From $0 it would have."""
+    calls = _fake_critique(monkeypatch, spend=True)
+    run, _ = await _skill_run(_skill(_with_critique(_six_calls(tmp_path, round(one_call_usd * 6.5, 6)))), trail)
+
+    assert calls and stub.calls[CHAT] == 6
+    assert run.status == "failed" and "over budget" in run.error
+    assert run.cost["llm_usd"] > one_call_usd * 6.5
+    assert [r["action"] for r in trail.audit if "budget" in r["action"]] == ["run.budget_exceeded"]
+
+
+async def test_a_critique_under_the_cap_adds_its_spend_once(stub, one_call_usd, trail, tmp_path, monkeypatch):
+    _fake_critique(monkeypatch, spend=False)
+    run, _ = await _skill_run(_skill(_with_critique(_six_calls(tmp_path, round(one_call_usd * 7, 6)))), trail)
+    assert run.status == "done"
+    assert run.cost["llm_usd"] == pytest.approx(one_call_usd * 6, abs=2e-6)
+
+
+async def test_spend_a_handler_swallowed_fails_a_skill_run(trail, tmp_path, monkeypatch):
+    loaded = _skill(_template(tmp_path, "    type: python_node\n    function: _over_the_cap\n", "  nodes: {}\n", budget_usd=0.01))
+
+    async def _swallowing(compiled, inputs):
+        try:
+            obs.record_llm(MODEL, 1_000_000, 1_000_000, 0.0)
+        except obs.BudgetExceeded:
+            pass
+        return {"output": "looks fine"}
+
+    monkeypatch.setattr(runner_module, "run_within_budget", _swallowing)
+    run, _ = await _skill_run(loaded, trail)
+    assert run.status == "failed" and "over budget" in run.error
+    assert run.result_payloads[0]["raw_output"]["output"] == "looks fine"
+
+
+async def test_the_wall_clock_limit_still_ends_done(trail, tmp_path, monkeypatch):
+    """A separate decision: this pins that #417 didn't change it by accident."""
+    loaded = _skill(_template(tmp_path, "    type: python_node\n    function: _over_the_cap\n", "  nodes: {}\n"))
+
+    async def _timed_out(compiled, inputs):
+        return {"type": "budget_exceeded", "budget_exceeded": True, "limit_wall_seconds": 1.0, "output": ""}
+
+    monkeypatch.setattr(runner_module, "run_within_budget", _timed_out)
+    run, _ = await _skill_run(loaded, trail)
+    assert run.status == "done"
+
