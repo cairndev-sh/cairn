@@ -141,6 +141,22 @@ def test_missing_ingress_host_fails_like_a_missing_caddy_domain():
     assert "CADDY_DOMAIN" in _fails(_full(values))
 
 
+def test_disabled_ingress_without_a_host_passes():
+    """#76: the chart renders with ingress.enabled=false and no host, so the doctor must too."""
+    values = _good()
+    values["ingress"] = {"enabled": False}
+    results = _full(values)
+    assert _fails(results) == set(), [(r.name, r.detail) for r in results if r.status == "fail"]
+    assert exit_code(results) == 0
+
+
+def test_enabled_ingress_without_a_host_still_fails():
+    """#76: the chart refuses ingress.enabled=true with an empty host at render time."""
+    values = _good()
+    values["ingress"] = {"enabled": True}
+    assert "CADDY_DOMAIN" in _fails(_full(values))
+
+
 def test_temporal_runtime_without_the_temporal_profile_fails():
     """The canonical compose rule, reached through values."""
     values = dict(_good(), runtime="temporal")

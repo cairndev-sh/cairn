@@ -29,6 +29,11 @@ from cairn.core.pack import CheckResult
 #: "not verifiable here" instead of failing a hash it was never given.
 EXTERNAL_SECRET = "<supplied by existingSecret>"
 
+#: What ``env_from_values`` writes for ``CADDY_DOMAIN`` when ``ingress.enabled`` is
+#: false and no host is set: the chart renders without a host then (it only requires
+#: one with the ingress on), so the compose-derived REQUIRED check must not fail it.
+INGRESS_DISABLED = "<ingress disabled>"
+
 # Vars the unified compose declares with `${VAR:?...}` — the stack refuses to
 # start without them, so surface them as hard failures here first.
 REQUIRED: dict[str, str] = {
@@ -518,7 +523,9 @@ def env_from_values(values: dict) -> dict[str, str]:
     Mirrors ``templates/configmap.yaml`` + ``templates/secret.yaml``. The one
     translation that is not a rename: the chart has no Caddy, so the INGRESS
     HOST plays ``CADDY_DOMAIN``'s role — it is the public name TLS is issued
-    for, which is exactly what that check is about.
+    for, which is exactly what that check is about. With ``ingress.enabled=false``
+    the chart needs no host (port-forward, or an ingress managed outside it), so an
+    empty host maps to ``INGRESS_DISABLED`` instead of failing the REQUIRED check.
 
     The chart also renders the DSN family's ``OBS_*`` twin until 1.0 (#2429) so an
     ``existingSecret`` in either spelling wins; this env carries the ``CAIRN_*`` name
@@ -536,8 +543,12 @@ def env_from_values(values: dict) -> dict[str, str]:
             return str(val)
         return EXTERNAL_SECRET if existing else ""
 
+    host = str(_get(values, "ingress", "host", default=""))
+    if not host and not _get(values, "ingress", "enabled", default=True):
+        host = INGRESS_DISABLED
+
     env: dict[str, str] = {
-        "CADDY_DOMAIN": str(_get(values, "ingress", "host", default="")),
+        "CADDY_DOMAIN": host,
         "CAIRN_TRIGGER_PORT": str(_get(values, "server", "port", default=9090)),
         "CAIRN_BACKEND": str(_get(values, "env", "backend", default="mock")),
         "CAIRN_RUNTIME": runtime,
