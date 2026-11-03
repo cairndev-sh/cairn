@@ -4,6 +4,9 @@ contact_links:
   - name: Question or idea
     url: https://github.com/cairndev-sh/cairn/discussions
     about: Ask, share and discuss in GitHub Discussions. Issues are for bugs and concrete feature requests.
+  - name: Chat on Discord
+    url: https://discord.gg/CPyC6bzTJW
+    about: Live chat and quick questions. Bugs and feature requests go in issues.
   - name: Security report
     url: https://github.com/cairndev-sh/cairn/security/policy
     about: Never a public issue. Follow SECURITY.md.
