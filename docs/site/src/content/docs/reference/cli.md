@@ -3,9 +3,9 @@ title: CLI
 description: The cairn commands you use day to day — run cairn locally, inspect and launch pipelines, develop a flow, connect providers, read the record, and deploy.
 ---
 
-The `cairn` command is installed with cairn. This page covers the commands for
-everyday work, with the options the code defines. Every command takes
-`--help` for its full option list.
+The `cairn` command is installed with cairn. This page lists every core
+command, with the options you reach for most. Every command takes `--help` for
+its full option list.
 
 Commands that touch the engine's data read the same settings as the server, so
 set them first when you run outside `cairn setup`:
@@ -20,7 +20,7 @@ set them first when you run outside `cairn setup`:
 
 | Command | What it does |
 |---|---|
-| `cairn setup` | Starts the engine in the background on SQLite with the in-process runtime, signs in as `dev`/`dev`, runs the checks and returns once it all works. The engine listens on this machine only, on port 9090 (`--port`), with its log in `~/.cairn/engine.log`. `--db` sets the SQLite file (default `~/.cairn/dev.db`), `--seed` fills a demo workspace first, and `--profile` names the deployment profile: a file, or a name cairn or an installed pack ships. A second `cairn setup` reports the running engine and starts no other. |
+| `cairn setup` | Starts the engine in the background on SQLite with the in-process runtime, signs in as `dev`/`dev`, runs the checks and returns once it all works. The engine listens on this machine only, on port 9090 (`--port`), with its log in `~/.cairn/engine.log`. `--db` sets the SQLite file (default `~/.cairn/dev.db`), `--seed` fills a demo workspace first (from a checkout with no profile set, the example pack runs under its own `profiles/hello.toml`, so the audit log goes to `./audit.jsonl`), and `--profile` names the deployment profile: a file, or a name cairn or an installed pack ships. A second `cairn setup` reports the running engine and starts no other. |
 | `cairn setup --enable <pipeline>` | Also turns on the triggers that pipeline declares. Repeatable. Nothing else turns a declared trigger on, so installing a pack or choosing a profile starts nothing. |
 | `cairn setup --stop` | Stops the background engine and gives the CLI back its previous default server. |
 | `cairn setup --foreground` | Stays attached until Ctrl-C, with the console dev server when the checkout has one. `--engine-only` and `--web-only` start just that part. |
@@ -53,8 +53,6 @@ These names were removed in 0.5.0, and typing one says what's here:
 | `cairn pipeline backfill`, `respell-packs` | `cairn admin backfill`, `respell-packs` |
 
 <!-- /old-names -->
-
-Each old name keeps working for one more minor version, and says its new name on stderr.
 
 `cairn pack check` with no paths checks the installed operator packs' manifests against their classes. With paths, it also validates those files offline, as the old `validate` did. `--strict` and `--template-path` apply to the paths. `--json` prints a list of findings with no paths, and `{"artifacts": [...], "drift": [...]}` with them.
 
@@ -119,7 +117,12 @@ governed pipeline.
 |---|---|
 | `cairn pack new pack <name>` | Scaffolds a pack: `pack.toml`, `pyproject.toml`, `pipelines/`, `flows/`, `policies/`. |
 | `cairn pack new operator <name>` | Scaffolds an operator pack: a package bundling one or more operators. |
-| `cairn pack new template` · `skill` · `policy` | Adds one stub to the current pack. |
+| `cairn pack new template` · `cairn pack new skill` · `cairn pack new policy` | Adds one stub to the current pack. |
+| `cairn pack add [dir]` | Makes a scaffolded pack discoverable. `--dev` only prints the `CAIRN_PACK_PATH` export, with no install and no file edits. Without it, the pack is wired into the root `pyproject.toml` and the command prints the one sync command to run. |
+| `cairn pack sync [dir]` | Regenerates an operator pack's `[operator."<name>"]` tables and entry-point line from its classes. `--check` reports drift without writing and exits 1 when there is any. |
+| `cairn pack schema <ref>` | Emits a template's UI contract: inputs and outputs, plan, steps and integrations. Exits 0 when the template can run. `-i key=value`, `--profile`, `--json`. |
+| `cairn pack lock` | Writes `cairn.lock`, pinning the shipped pack closure. `--check` fails when the file is missing or stale. |
+| `cairn pack export <ref> --to pipeline` | Renders a workflow as one runnable pipeline file. `--to metaflow` renders a flow as a Metaflow file instead. `-o` sets where it goes. |
 | `cairn pack test [pack]` | Runs a pack's tests with pytest. |
 
 ## Connections
@@ -131,6 +134,8 @@ governed pipeline.
 | `cairn admin connect test <name>` | Resolves the connection's secrets and runs the provider's authenticated health check. Exit 0 when it connects. |
 | `cairn admin connect ls` | Lists connections: names, kinds and secret keys, never values. |
 | `cairn admin connect rm <name>` | Deletes a connection, leaving the secret itself untouched. |
+| `cairn admin connect authorize <name>` | Starts the OAuth flow again for an existing `kind=oauth` connection. |
+| `cairn admin connect presets` | Lists the shipped MCP connector presets you can pass to `cairn admin connect add --preset`. |
 
 `connect add` and `connect rm` write this CLI's store: the one `CAIRN_STORAGE` names,
 else the `CAIRN_CONNECTIONS_DB` file, else `~/.cairn/cairn.db`. Before writing, they ask the engine at the endpoint
@@ -162,7 +167,10 @@ running on the server; log in again and re-attach with `cairn status <id> --foll
 | `cairn status <id>` | One pipeline (`pl_…`) or run: its state, who decided what, and what started it. `--results` for every step's findings, `--logs` for the event log (`--after-seq`, `--events-only`), `--follow` to stay attached and answer each gate (`--decision`, `--timeout`, `--on-timeout`, `--native`, `--dump`), `--replay` for a run's persisted trace (`--source`), `--json` for the raw form. Following exits 0 when done, 1 when failed or cancelled, and 2 when it's waiting on a person with no terminal to ask on. |
 | `cairn decide <id> approve\|reject\|cancel` | Decides what a pipeline or run is waiting on, or cancels it. The id picks the route. `--step` names the gate when a pipeline waits at more than one, `--reason` is required to reject a pipeline gate, and `--approver` is recorded when sign-in is off. |
 | `cairn admin trigger ls` | Lists this workspace's stored triggers (event and webhook), whether each is on, and which pipeline declared it. |
-| `cairn admin trigger enable <id>` / `disable <id>` | Turns a stored trigger on or pauses it. A trigger a pipeline declares starts paused; an event trigger applies to the next event, a webhook trigger at the next server start. |
+| `cairn admin trigger enable <id>` / `cairn admin trigger disable <id>` | Turns a stored trigger on or pauses it. A trigger a pipeline declares starts paused; an event trigger applies to the next event, a webhook trigger at the next server start. |
+| `cairn admin preset ls <ref>` | Lists a pipeline's launch presets, saved and pack-shipped. |
+| `cairn admin preset rm <ref> <name>` | Deletes a saved preset. A pack-shipped preset of the same name reappears. |
+| `cairn admin console` | Opens the interactive terminal console: a live runs view, a command bar with autocomplete, and approve and reject. It needs `textual` and `textual-autocomplete`, which cairn doesn't install; the error says how to add them. |
 
 `cairn run`, `cairn status`, `cairn decide` and `cairn admin trigger`, `preset` and `console` take `--endpoint`, `--token` and `--profile`, long form only. `-e` is the environment on `cairn run`.
 
@@ -174,6 +182,16 @@ running on the server; log in again and re-attach with `cairn status <id> --foll
 | `cairn admin hash-password` | Prints the password hash for `CAIRN_API_PASSWORD_HASH` (the `auth` extra). |
 | `cairn admin worker-token --name <name>` | Prints a worker-pool token for `cairn admin worker --pull --token`. Run it where the control plane's `CAIRN_JWT_SECRET` is set: it signs the token with that secret. `--days` sets how long it is valid (default 30). The token claims and heartbeats pull-lane jobs and gets `403` on every other route. |
 | `cairn admin worker --pull` | Runs a worker that claims jobs from the control plane over HTTP: `--engine-url`, `--token`, `-c gpu=T4` to say what the machine offers, `--once` for a single job. With sign-in on, `--token` must be a worker credential: a worker-pool token from `cairn admin worker-token`, or the deployment admin's (`CAIRN_API_USER`) token. A signed-in user's token gets `403`, whatever their role. The per-run token the engine hands a job's container can only post that run's events, read its control requests and heartbeat its job, and gets `403` anywhere else. Without `--pull` it polls a Temporal task queue. |
+
+## Compute and maintenance
+
+| Command | What it does |
+|---|---|
+| `cairn admin compute status [connection]` | What state a `compute.ssh` box is in, and what it costs while it's up. `--json` for the raw shape. |
+| `cairn admin compute sweep` | Finds every cairn-managed box whose lease has expired and only reports them. `--apply` stops them. Exits 1 when it finds any, so a cron job can alert. `--region` sets the AWS region. |
+| `cairn admin config workflow <ref>` | Shows a workflow's composed configuration: the settings of the operators it can reach, split into governance and operational. `--json` for the raw shape. |
+| `cairn admin backfill` | Gives every run with no pipeline its one-leg pipeline, so the history matches how runs start now. It only reports unless you pass `--apply`. `--revert` undoes it. |
+| `cairn admin respell-packs` | Rewrites recorded refs of the three hyphenated packs to the spelling in their `pack.toml`. It only reports unless you pass `--apply --server-stopped`. On an upgrade: stop the server and workers, install the new version, take a backup, run this, then start. |
 
 ## Next
 

@@ -226,3 +226,25 @@ def test_a_marked_block_is_exempt_and_the_page_after_it_is_not():
 def test_current_commands_and_other_programs_are_not_hits():
     page = "```\ncairn pack ls\ncairn run x\ncairn-server --port 1\ncairn-worker\n```\n`cairn pack check`\n"
     assert stale_uses(page) == []
+
+
+def _names(cmd, prefix: str) -> list[str]:
+    found = []
+    for name, sub in getattr(cmd, "commands", {}).items():
+        if not sub.hidden:
+            found += [f"{prefix} {name}", *_names(sub, f"{prefix} {name}")]
+    return found
+
+
+def test_the_cli_reference_names_every_core_command() -> None:
+    """Providers add commands of their own, so only the core's are held to this page."""
+    from typer.main import get_command
+
+    from cairn.cli.main import app
+
+    page = (ROOT / "docs/site/src/content/docs/reference/cli.md").read_text(encoding="utf-8")
+    page = re.sub(f"{OPEN_MARK}.*?{CLOSE_MARK}", "", page, flags=re.S)
+    root = get_command(app)
+    core = [name for top in ("setup", "run", "status", "decide", "pack", "admin")
+            for name in (f"cairn {top}", *_names(root.commands[top], f"cairn {top}"))]
+    assert [name for name in core if name not in page] == []
