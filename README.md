@@ -29,7 +29,8 @@
   <a href="https://docs.cairndev.sh/install/">Install</a> ·
   <a href="https://docs.cairndev.sh/reference/catalog/">Pipeline catalog</a> ·
   <a href="https://docs.cairndev.sh/concepts/gates/">Gates and approvals</a> ·
-  <a href="https://github.com/cairndev-sh/cairn-extensions">Extensions</a>
+  <a href="https://github.com/cairndev-sh/cairn-extensions">Extensions</a> ·
+  <a href="https://github.com/cairndev-sh/cairn/discussions">Discussions</a>
 </p>
 
 <p align="center">
