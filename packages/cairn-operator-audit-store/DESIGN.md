@@ -7,7 +7,7 @@
 
 ## 1. Purpose
 
-Give cairn a **tamper-evident record of every governed act** — which model was
+Give cairn a **hash-chained record of the governed acts at its seams** — which model was
 called, which tool ran, which action was requested and executed, which gate a
 human decided — using nothing but the standard library, so that auditing is
 available in every deployment including an air-gapped one.

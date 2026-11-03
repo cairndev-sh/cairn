@@ -190,6 +190,7 @@ pipelines/t.yaml: gate 'g' declares both `predicate:` and `approvers:` — a gat
 ## 6. Run it
 
 ```bash
+curl -LsSfO https://raw.githubusercontent.com/cairndev-sh/cairn/main/examples/hello-cairn/data/sample.jsonl
 cairn run acme/check-and-keep -i path=$PWD/sample.jsonl --environment sandbox
 ```
 

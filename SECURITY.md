@@ -47,7 +47,9 @@ The parts where a defect matters most:
   that lands in logs, artifacts, audit records, or an error message.
 - **The operator sandbox** — escaping mock/sandbox mode into real side effects.
 - **Policy and budget enforcement** — evading a cost cap or a policy gate.
-- **The audit trail** — forging, deleting, or breaking the hash chain.
+- **The audit trail** — forging, deleting, or breaking the hash chain. Someone who can write
+  the log file can rewrite it so the chain still verifies: that limit is known and
+  [documented](https://docs.cairndev.sh/concepts/runs/#verify-the-audit-trail).
 
 ## Out of scope
 
