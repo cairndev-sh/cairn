@@ -147,18 +147,13 @@ the log's writer can't reach, and check the log against it:
 
 ```console
 $ saved="$(cat saved-head)"
-$ test "${#saved}" -eq 64 && cairn admin lineage --json --audit-log audit.jsonl --expect-head "$saved"
+$ test "${#saved}" -eq 64 && cairn admin lineage --audit-log audit.jsonl --expect-head "$saved"
 ```
 
-A log that no longer ends at that hash exits 2, with `chain_ok: false`. How you
-call the check matters:
-
-- **Use the full 64-character hash.** `--expect-head` also accepts a prefix of at least 12
-  characters, but a prefix is a weaker check. An empty or shorter value is refused with exit 2.
-- **Don't let the value come out empty.** An empty or blank value compares nothing, so
-  a log with rows cut exits 0. The `test` above refuses one.
-- **Pass `--json`.** Without it, a log with no lineage records exits 1 even when the
-  head matches, and a public install writes no lineage records.
+A log that no longer ends at that hash exits 2, with `chain_ok: false`. Use the full
+64-character hash: `--expect-head` also accepts a prefix of at least 12 characters, but a
+prefix is a weaker check. An empty or shorter value is refused with exit 2, and the `test`
+above stops one before the command runs.
 
 A saved head has limits of its own:
 
