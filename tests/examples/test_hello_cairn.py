@@ -320,3 +320,28 @@ async def test_the_same_pipeline_runs_once_its_cap_covers_the_estimate(hello_pac
         assert len(engine_submits) == 1
     finally:
         bridge.stop()
+
+
+# ── where tiny-finetune's adapter lives (#253) ──────────────────────────
+
+
+def test_tiny_finetune_can_keep_its_adapter_outside_the_temp_workdir():
+    pipeline = _tiny_finetune_def()
+    train = next(s for s in pipeline.steps if s.id == "train")
+    assert train.inputs["output_dir"] == "$input.output_dir"
+    flow = parse_flow_def((PACK_DIR / "flows" / "lora.yaml").read_text(), where="lora.yaml")
+    assert flow.stages[0].config["output_dir"] == "$config.output_dir"
+
+
+def test_the_readme_says_where_the_adapter_lives():
+    readme = (PACK_DIR / "README.md").read_text()
+    assert "temp workdir" in readme and "-i output_dir=" in readme
+
+
+def test_an_empty_output_dir_means_the_workdir(tmp_path):
+    from operator_train_local.stages import train_lora
+
+    data = PACK_DIR / "data" / "train.jsonl"
+    out = train_lora(tmp_path, {"dataset": str(data), "base_model": "m", "output_dir": "", "mock": True}, [])
+    assert out["mock"] is True
+
