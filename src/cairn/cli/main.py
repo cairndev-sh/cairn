@@ -35,7 +35,7 @@ from cairn.cli.providers import MAIN_COMMANDS, OTHER_COMMANDS, mount_cli_provide
 app = typer.Typer(
     cls=MovedGroup,
     name="cairn",
-    help="cairn — engine + community packs for declarative agent workflows.",
+    help="Cairn runs your AI and ML pipelines behind budgets, policy, approvals and an audit trail.",
     no_args_is_help=True,
     add_completion=False,
 )
@@ -60,7 +60,7 @@ def _root(
         help="Print the installed cairndev version and exit.",
     ),
 ) -> None:
-    """cairn — engine + community packs for declarative agent workflows."""
+    """Cairn runs your AI and ML pipelines behind budgets, policy, approvals and an audit trail."""
 
 
 # ADR-0165 D1 — `--help` leads with these. Typer lists a heading where it first meets it, and

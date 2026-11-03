@@ -3,7 +3,7 @@
 # `cairn` command do not change.
 name = "cairndev"
 version = "0.5.0"
-description = "A governed control plane for AI and ML work: pipelines that fine-tune, evaluate, compress and serve models, with approval, policy, budget and lineage on every step"
+description = "Cairn runs your AI and ML pipelines behind budgets, policy, approvals and an audit trail."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
