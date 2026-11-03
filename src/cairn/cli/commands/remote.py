@@ -855,6 +855,8 @@ def _watch_hitl(endpoint, token, run_id: str, *, approver, decision_opt,
                 reconnect.after_close(lost=refused or st is None, progressed=last != before)
                 continue  # transient close — reconnect from `last`
             paused, data = True, None  # missed the event but the run is parked
+            if refused:  # a stream that keeps refusing must not turn answers into a tight loop
+                time.sleep(1.0)
 
         _render_pause(endpoint, token, run_id, data, dump)
         decision = _decide(decision_opt=decision_opt, native=native,

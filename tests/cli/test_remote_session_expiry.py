@@ -360,3 +360,37 @@ def test_a_stream_refused_while_the_status_check_answers_gives_up_too(monkeypatc
     with pytest.raises(typer.Exit) as exc:
         _follow("tail")
     assert exc.value.exit_code == 1 and "Re-attach" in capsys.readouterr().err
+
+
+def test_a_stream_that_cannot_connect_is_reconnected_like_any_other_loss(monkeypatch, waits):
+    """The stream itself raising, not only the status check: the follow still comes back."""
+    import httpx
+
+    class _Down(_Stream):
+        def __enter__(self):
+            raise httpx.ConnectError("down")
+
+    script = ["running", "running", "done"]
+    _offline(monkeypatch, 200, script)
+    monkeypatch.setattr(_Sse, "stream", lambda self, *a, **k: _Down(self._code))
+    _follow("tail")
+    assert script == [] and waits == [1.0, 1.0]
+
+
+def test_a_refused_stream_at_a_gate_still_asks_and_does_not_spin(monkeypatch, waits):
+    """The status says the run is parked: that's a person's decision, never a lost connection."""
+    import httpx
+
+    class _Refused(_Stream):
+        def raise_for_status(self):
+            raise httpx.HTTPStatusError("500", request=None, response=None)
+
+    asked = []
+    script = ["awaiting_approval", "done"]
+    _offline(monkeypatch, 500, script)
+    monkeypatch.setattr(_Sse, "stream", lambda self, *a, **k: _Refused(self._code))
+    monkeypatch.setattr(remote, "_render_pause", lambda *a, **k: asked.append("shown"))
+    monkeypatch.setattr(remote, "_decide", lambda **k: asked.append("asked") or "approve")
+    monkeypatch.setattr(_RunClient, "resume_run", lambda self, *a, **k: {"status": "running"}, raising=False)
+    assert _follow("watch_hitl") == 0
+    assert asked == ["shown", "asked"] and 1.0 in waits
