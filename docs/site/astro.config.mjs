@@ -146,6 +146,7 @@ export default defineConfig({
         {
           label: 'Concepts',
           items: [
+            { label: 'How cairn fits together', slug: 'concepts/architecture' },
             { label: 'Pipelines, legs and steps', slug: 'concepts/pipelines' },
             { label: 'Flows', slug: 'concepts/flows' },
             { label: 'Capabilities and environments', slug: 'concepts/capabilities' },
@@ -153,6 +154,7 @@ export default defineConfig({
             { label: 'LLM judges are advisory', slug: 'concepts/judges' },
             { label: 'Cost and budgets', slug: 'concepts/cost' },
             { label: 'Runs and the record', slug: 'concepts/runs' },
+            { label: 'Glossary', slug: 'concepts/glossary' },
             { label: 'How cairn compares', slug: 'compare' },
           ],
         },
