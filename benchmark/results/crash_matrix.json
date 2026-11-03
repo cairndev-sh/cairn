@@ -3,9 +3,9 @@
   "title": "What happens when the server is killed",
   "script": "benchmark/crash_matrix.py",
   "provenance": {
-    "cairndev_version": "0.4.0",
-    "uv_lock_sha256": "2f3a08bed7ab6e047e088d2185067267f6024637bbe0af1de3462c8729426faa",
-    "git_sha": "aa27363546895ac0fe1406b7e2081e9a31170ea1",
+    "cairndev_version": "0.5.0",
+    "uv_lock_sha256": "b71bfd534f0d8180fe71a967d6079853e7c110d27abd6c7c4ca0ce8e10333cd2",
+    "git_sha": "5f6769f4a07933a642b7f79a2db16b24a3d613e3",
     "code_clean": true,
     "machine": {
       "os": "Linux",
@@ -13,8 +13,8 @@
       "cpus": 4,
       "python": "3.13.13"
     },
-    "measured_at": "2026-11-02",
-    "ci_run": "https://github.com/cairndev-sh/cairn/actions/runs/41511935945"
+    "measured_at": "2026-11-03",
+    "ci_run": "https://github.com/cairndev-sh/cairn/actions/runs/41642348580"
   },
   "inputs": {
     "cells": "tests/e2e/hello/test_crash.py",
@@ -146,140 +146,140 @@
       "feature": "crash.gate",
       "test": "test_killed_at_the_person_gate[sqlite-inprocess-inprocess]",
       "state": "passed",
-      "evidence": "killed at review, restarted, approved; runs {'profile': 'run-task-data--profile-256604', 'slow': 'run-flow-hello-crash--slow-6f5a75', 'stage': 'run-task-storage--put-fdbbb8', 'publish': 'run-task-storage--put-6a0fb3'}; artifact written once"
+      "evidence": "killed at review, restarted, approved; runs {'profile': 'run-task-data--profile-a08739', 'slow': 'run-flow-hello-crash--slow-05c629', 'stage': 'run-task-storage--put-c8723c', 'publish': 'run-task-storage--put-8b6ef3'}; artifact written once"
     },
     {
       "cell": "sqlite-inprocess-inprocess",
       "feature": "crash.mid-leg",
       "test": "test_killed_mid_flow_leg[sqlite-inprocess-inprocess]",
       "state": "passed",
-      "evidence": "killed mid-leg; re-mapped (running) right after restart, then DEAD \u2192 re-attached \u2192 failed (\"EngineError: unknown builtin job 'builtin-3744' (process tab\"), same run, owner rewritten, pipeline=failed, stage/publish never fired"
+      "evidence": "killed mid-leg; re-mapped (running) right after restart, then DEAD \u2192 re-attached \u2192 failed (\"EngineError: unknown builtin job 'builtin-3788' (process tab\"), same run, owner rewritten, pipeline=failed, stage/publish never fired"
     },
     {
       "cell": "sqlite-inprocess-postgres",
       "feature": "crash.gate",
       "test": "test_killed_at_the_person_gate[sqlite-inprocess-postgres]",
       "state": "passed",
-      "evidence": "killed at review, restarted, approved; runs {'profile': 'run-task-data--profile-655d13', 'slow': 'run-flow-hello-crash--slow-e50517', 'stage': 'run-task-storage--put-2c7258', 'publish': 'run-task-storage--put-3f8f3e'}; artifact written once"
+      "evidence": "killed at review, restarted, approved; runs {'profile': 'run-task-data--profile-255763', 'slow': 'run-flow-hello-crash--slow-ad796f', 'stage': 'run-task-storage--put-6a662a', 'publish': 'run-task-storage--put-56ce7f'}; artifact written once"
     },
     {
       "cell": "sqlite-inprocess-postgres",
       "feature": "crash.mid-leg",
       "test": "test_killed_mid_flow_leg[sqlite-inprocess-postgres]",
       "state": "passed",
-      "evidence": "killed mid-leg; re-mapped (running) right after restart, then DEAD \u2192 re-attached \u2192 failed (\"EngineError: unknown builtin job 'builtin-3056' (process tab\"), same run, owner rewritten, pipeline=failed, stage/publish never fired"
+      "evidence": "killed mid-leg; re-mapped (running) right after restart, then DEAD \u2192 re-attached \u2192 failed (\"EngineError: unknown builtin job 'builtin-4176' (process tab\"), same run, owner rewritten, pipeline=failed, stage/publish never fired"
     },
     {
       "cell": "sqlite-dbos-inprocess",
       "feature": "crash.gate",
       "test": "test_killed_at_the_person_gate[sqlite-dbos-inprocess]",
       "state": "passed",
-      "evidence": "killed at review, restarted, approved; runs {'profile': 'run-task-data--profile-0651d9', 'slow': 'run-flow-hello-crash--slow-034f3b', 'stage': 'run-task-storage--put-196a5a', 'publish': 'run-task-storage--put-329892'}; artifact written once"
+      "evidence": "killed at review, restarted, approved; runs {'profile': 'run-task-data--profile-bf62eb', 'slow': 'run-flow-hello-crash--slow-aa63ec', 'stage': 'run-task-storage--put-15d6c0', 'publish': 'run-task-storage--put-85c67a'}; artifact written once"
     },
     {
       "cell": "sqlite-dbos-inprocess",
       "feature": "crash.mid-leg",
       "test": "test_killed_mid_flow_leg[sqlite-dbos-inprocess]",
       "state": "passed",
-      "evidence": "killed mid-leg; re-mapped (running) right after restart, then DEAD \u2192 re-attached \u2192 failed (\"EngineError: unknown builtin job 'builtin-3442' (process tab\"), same run, owner rewritten, pipeline=failed, stage/publish never fired"
+      "evidence": "killed mid-leg; re-mapped (running) right after restart, then DEAD \u2192 re-attached \u2192 failed (\"EngineError: unknown builtin job 'builtin-4567' (process tab\"), same run, owner rewritten, pipeline=failed, stage/publish never fired"
     },
     {
       "cell": "sqlite-dbos-inprocess",
       "feature": "crash.dbos-resume",
       "test": "test_dbos_resumes_a_template_run_after_a_crash[sqlite-dbos-inprocess]",
       "state": "passed",
-      "evidence": "killed while assistant run run-hello-cairn--assistant-2700e5 (DBOS workflow PENDING) waited on its model call; DBOS recovered it at boot, model called again (2 calls), same run done, review approved, pipeline done, one run per leg"
+      "evidence": "killed while assistant run run-hello-cairn--assistant-98fc7b (DBOS workflow PENDING) waited on its model call; DBOS recovered it at boot, model called again (2 calls), same run done, review approved, pipeline done, one run per leg"
     },
     {
       "cell": "sqlite-dbos-postgres",
       "feature": "crash.gate",
       "test": "test_killed_at_the_person_gate[sqlite-dbos-postgres]",
       "state": "passed",
-      "evidence": "killed at review, restarted, approved; runs {'profile': 'run-task-data--profile-bdad39', 'slow': 'run-flow-hello-crash--slow-04a048', 'stage': 'run-task-storage--put-48b419', 'publish': 'run-task-storage--put-09afaa'}; artifact written once"
+      "evidence": "killed at review, restarted, approved; runs {'profile': 'run-task-data--profile-fd5ab7', 'slow': 'run-flow-hello-crash--slow-b416bf', 'stage': 'run-task-storage--put-44d749', 'publish': 'run-task-storage--put-592821'}; artifact written once"
     },
     {
       "cell": "sqlite-dbos-postgres",
       "feature": "crash.mid-leg",
       "test": "test_killed_mid_flow_leg[sqlite-dbos-postgres]",
       "state": "passed",
-      "evidence": "killed mid-leg; re-mapped (running) right after restart, then DEAD \u2192 re-attached \u2192 failed (\"EngineError: unknown builtin job 'builtin-3806' (process tab\"), same run, owner rewritten, pipeline=failed, stage/publish never fired"
+      "evidence": "killed mid-leg; re-mapped (running) right after restart, then DEAD \u2192 re-attached \u2192 failed (\"EngineError: unknown builtin job 'builtin-5067' (process tab\"), same run, owner rewritten, pipeline=failed, stage/publish never fired"
     },
     {
       "cell": "sqlite-dbos-postgres",
       "feature": "crash.dbos-resume",
       "test": "test_dbos_resumes_a_template_run_after_a_crash[sqlite-dbos-postgres]",
       "state": "passed",
-      "evidence": "killed while assistant run run-hello-cairn--assistant-aa1e51 (DBOS workflow PENDING) waited on its model call; DBOS recovered it at boot, model called again (2 calls), same run done, review approved, pipeline done, one run per leg"
+      "evidence": "killed while assistant run run-hello-cairn--assistant-73dac2 (DBOS workflow PENDING) waited on its model call; DBOS recovered it at boot, model called again (2 calls), same run done, review approved, pipeline done, one run per leg"
     },
     {
       "cell": "postgres-inprocess-inprocess",
       "feature": "crash.gate",
       "test": "test_killed_at_the_person_gate[postgres-inprocess-inprocess]",
       "state": "passed",
-      "evidence": "killed at review, restarted, approved; runs {'slow': 'run-flow-hello-crash--slow-9d5e57', 'stage': 'run-task-storage--put-ecc14b', 'profile': 'run-task-data--profile-f9ea0c', 'publish': 'run-task-storage--put-8d7ffa'}; artifact written once"
+      "evidence": "killed at review, restarted, approved; runs {'slow': 'run-flow-hello-crash--slow-bb4787', 'stage': 'run-task-storage--put-c8b75d', 'profile': 'run-task-data--profile-a21e45', 'publish': 'run-task-storage--put-3f746d'}; artifact written once"
     },
     {
       "cell": "postgres-inprocess-inprocess",
       "feature": "crash.mid-leg",
       "test": "test_killed_mid_flow_leg[postgres-inprocess-inprocess]",
       "state": "passed",
-      "evidence": "killed mid-leg; re-mapped (running) right after restart, then DEAD \u2192 re-attached \u2192 failed (\"EngineError: unknown builtin job 'builtin-4025' (process tab\"), same run, owner rewritten, pipeline=failed, stage/publish never fired"
+      "evidence": "killed mid-leg; re-mapped (running) right after restart, then DEAD \u2192 re-attached \u2192 failed (\"EngineError: unknown builtin job 'builtin-5626' (process tab\"), same run, owner rewritten, pipeline=failed, stage/publish never fired"
     },
     {
       "cell": "postgres-inprocess-postgres",
       "feature": "crash.gate",
       "test": "test_killed_at_the_person_gate[postgres-inprocess-postgres]",
       "state": "passed",
-      "evidence": "killed at review, restarted, approved; runs {'slow': 'run-flow-hello-crash--slow-31bba0', 'stage': 'run-task-storage--put-dbf24d', 'profile': 'run-task-data--profile-572750', 'publish': 'run-task-storage--put-eb117c'}; artifact written once"
+      "evidence": "killed at review, restarted, approved; runs {'slow': 'run-flow-hello-crash--slow-04c55b', 'stage': 'run-task-storage--put-b9835f', 'profile': 'run-task-data--profile-13cfb5', 'publish': 'run-task-storage--put-543078'}; artifact written once"
     },
     {
       "cell": "postgres-inprocess-postgres",
       "feature": "crash.mid-leg",
       "test": "test_killed_mid_flow_leg[postgres-inprocess-postgres]",
       "state": "passed",
-      "evidence": "killed mid-leg; re-mapped (running) right after restart, then DEAD \u2192 re-attached \u2192 failed (\"EngineError: unknown builtin job 'builtin-4483' (process tab\"), same run, owner rewritten, pipeline=failed, stage/publish never fired"
+      "evidence": "killed mid-leg; re-mapped (running) right after restart, then DEAD \u2192 re-attached \u2192 failed (\"EngineError: unknown builtin job 'builtin-3824' (process tab\"), same run, owner rewritten, pipeline=failed, stage/publish never fired"
     },
     {
       "cell": "postgres-dbos-inprocess",
       "feature": "crash.gate",
       "test": "test_killed_at_the_person_gate[postgres-dbos-inprocess]",
       "state": "passed",
-      "evidence": "killed at review, restarted, approved; runs {'slow': 'run-flow-hello-crash--slow-b466d4', 'stage': 'run-task-storage--put-d768e7', 'profile': 'run-task-data--profile-d2e738', 'publish': 'run-task-storage--put-d50e18'}; artifact written once"
+      "evidence": "killed at review, restarted, approved; runs {'slow': 'run-flow-hello-crash--slow-4d49e4', 'stage': 'run-task-storage--put-08ba6f', 'profile': 'run-task-data--profile-0d0eb3', 'publish': 'run-task-storage--put-c1b66f'}; artifact written once"
     },
     {
       "cell": "postgres-dbos-inprocess",
       "feature": "crash.mid-leg",
       "test": "test_killed_mid_flow_leg[postgres-dbos-inprocess]",
       "state": "passed",
-      "evidence": "killed mid-leg; re-mapped (running) right after restart, then DEAD \u2192 re-attached \u2192 failed (\"EngineError: unknown builtin job 'builtin-5119' (process tab\"), same run, owner rewritten, pipeline=failed, stage/publish never fired"
+      "evidence": "killed mid-leg; re-mapped (running) right after restart, then DEAD \u2192 re-attached \u2192 failed (\"EngineError: unknown builtin job 'builtin-4200' (process tab\"), same run, owner rewritten, pipeline=failed, stage/publish never fired"
     },
     {
       "cell": "postgres-dbos-inprocess",
       "feature": "crash.dbos-resume",
       "test": "test_dbos_resumes_a_template_run_after_a_crash[postgres-dbos-inprocess]",
       "state": "passed",
-      "evidence": "killed while assistant run run-hello-cairn--assistant-54d90f (DBOS workflow PENDING) waited on its model call; DBOS recovered it at boot, model called again (2 calls), same run done, review approved, pipeline done, one run per leg"
+      "evidence": "killed while assistant run run-hello-cairn--assistant-7f49b9 (DBOS workflow PENDING) waited on its model call; DBOS recovered it at boot, model called again (2 calls), same run done, review approved, pipeline done, one run per leg"
     },
     {
       "cell": "postgres-dbos-postgres",
       "feature": "crash.gate",
       "test": "test_killed_at_the_person_gate[postgres-dbos-postgres]",
       "state": "passed",
-      "evidence": "killed at review, restarted, approved; runs {'slow': 'run-flow-hello-crash--slow-6455e2', 'stage': 'run-task-storage--put-66c188', 'profile': 'run-task-data--profile-24b3f4', 'publish': 'run-task-storage--put-41bc8c'}; artifact written once"
+      "evidence": "killed at review, restarted, approved; runs {'slow': 'run-flow-hello-crash--slow-cf47a0', 'stage': 'run-task-storage--put-07404b', 'profile': 'run-task-data--profile-2fe21d', 'publish': 'run-task-storage--put-275448'}; artifact written once"
     },
     {
       "cell": "postgres-dbos-postgres",
       "feature": "crash.mid-leg",
       "test": "test_killed_mid_flow_leg[postgres-dbos-postgres]",
       "state": "passed",
-      "evidence": "killed mid-leg; re-mapped (running) right after restart, then DEAD \u2192 re-attached \u2192 failed (\"EngineError: unknown builtin job 'builtin-5784' (process tab\"), same run, owner rewritten, pipeline=failed, stage/publish never fired"
+      "evidence": "killed mid-leg; re-mapped (running) right after restart, then DEAD \u2192 re-attached \u2192 failed (\"EngineError: unknown builtin job 'builtin-4668' (process tab\"), same run, owner rewritten, pipeline=failed, stage/publish never fired"
     },
     {
       "cell": "postgres-dbos-postgres",
       "feature": "crash.dbos-resume",
       "test": "test_dbos_resumes_a_template_run_after_a_crash[postgres-dbos-postgres]",
       "state": "passed",
-      "evidence": "killed while assistant run run-hello-cairn--assistant-6b7aa0 (DBOS workflow PENDING) waited on its model call; DBOS recovered it at boot, model called again (2 calls), same run done, review approved, pipeline done, one run per leg"
+      "evidence": "killed while assistant run run-hello-cairn--assistant-6d1a05 (DBOS workflow PENDING) waited on its model call; DBOS recovered it at boot, model called again (2 calls), same run done, review approved, pipeline done, one run per leg"
     }
   ]
 }
