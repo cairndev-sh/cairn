@@ -88,7 +88,7 @@ def cost_cap_reason(output: Any) -> str:
     return ""
 
 
-def _over_budget(reason: str) -> dict[str, Any]:
+def budget_exceeded_output(reason: str) -> dict[str, Any]:
     """The output of a run a cost cap stopped, which `cairn gate` and scoring read."""
     return {"type": "budget_exceeded", "budget_exceeded": True, "reason": reason, "output": ""}
 
@@ -394,7 +394,7 @@ class Runner:
                 )
             except obs.BudgetExceeded as be:
                 _log.warning("skill %s aborted on cost budget: %s", loaded.spec.name, be)
-                template_output = _over_budget(str(be))
+                template_output = budget_exceeded_output(str(be))
             template_output = _mark_if_over_cap(template_output, cost_ctx)
             if isinstance(template_output, dict):
                 template_output["cost_usd"] = round(cost_ctx.cost_usd, 6)
@@ -445,15 +445,16 @@ class Runner:
                         invocation_input,
                         max_iterations_cap=max_iters,
                     )
-                    template_output = _mark_if_over_cap(template_output, crit_ctx)
             except obs.BudgetExceeded as be:
                 _log.warning("skill %s critique aborted on cost budget: %s",
                              loaded.spec.name, be)
-                template_output = _over_budget(str(be))
+                template_output = budget_exceeded_output(str(be))
             except Exception as e:  # critique must never break an investigation
                 _log.warning("critique loop raised %s; ignoring", e)
-            if crit_ctx is not None and isinstance(template_output, dict):
-                template_output["cost_usd"] = round(crit_ctx.cost_usd, 6)
+            if crit_ctx is not None:
+                template_output = _mark_if_over_cap(template_output, crit_ctx)
+                if isinstance(template_output, dict):
+                    template_output["cost_usd"] = round(crit_ctx.cost_usd, 6)
 
         # Stream the evidence as soon as the investigation produced it — this
         # is the "partial output" a follower sees before the run completes.

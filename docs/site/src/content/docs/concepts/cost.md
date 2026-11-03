@@ -53,7 +53,8 @@ run can pass the cap by that call. Calls in flight in a parallel `map` can pass 
 and one cancelled as the run stops can be billed without being counted. No later call
 starts, the leg fails with the spend and the cap in its error, and the pipeline stops. What
 the leg spent still counts against its series. A leg that resumes after an approval counts
-what it spent before the pause.
+what it spent before the pause. A skill run fails the same way and skips its critique, actions
+and cascade, and a critique that does run counts towards the same cap.
 
 **The deployment's limit applies too, and the lower figure wins.** `MAX_COST_USD` is $1 by
 default, so a template declaring `max_cost_usd: 5` still stops at $1 until you raise it. Set

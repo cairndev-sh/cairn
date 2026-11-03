@@ -52,7 +52,7 @@ from cairn.core.storage import (
     new_run_id,
 )
 from cairn.core.storage.protocols import PIPELINE_ID_KEY, _now
-from cairn.core.engine.runner import Runner, cost_cap_reason, template_cost_cap
+from cairn.core.engine.runner import Runner, budget_exceeded_output, cost_cap_reason, template_cost_cap
 from cairn.core.engine.schema import TriggerEvent
 from cairn.core.obs.metrics import record_run
 from cairn.core.obs.telemetry import current_trace_id, span
@@ -162,11 +162,6 @@ def _aggregate_cost(payloads: list[dict]) -> dict[str, float]:
         "storage_usd": round(storage, 6),
         "total_usd": round(llm + gpu + storage, 6),
     }
-
-
-def _budget_exceeded_output(reason: str) -> dict[str, Any]:
-    """The output of a run a cost cap stopped, which `cairn gate` and scoring read."""
-    return {"type": "budget_exceeded", "budget_exceeded": True, "reason": reason, "output": ""}
 
 
 async def _audit_over_budget(run: Any, template_ref: str, reason: str, cost: dict[str, Any]) -> None:
@@ -1237,7 +1232,7 @@ class RunDispatcher:
                             # #395: a cap is a governance stop, so the run fails and
                             # its pipeline stops. The output stays for what reads it.
                             over_budget = str(be)
-                            output = _budget_exceeded_output(over_budget)
+                            output = budget_exceeded_output(over_budget)
                     run_llm_usd = round(cost_ctx.cost_usd, 6)
 
                 paused = isinstance(output, dict) and "__interrupt__" in output
@@ -1454,7 +1449,7 @@ class RunDispatcher:
                 result = await runtime.resume(graph, decision, run_id=run_id)
             except obs.BudgetExceeded as be:
                 over_budget = str(be)
-                result = _budget_exceeded_output(over_budget)
+                result = budget_exceeded_output(over_budget)
         run_llm_usd = round(cost_ctx.cost_usd, 6)
         still_paused = isinstance(result, dict) and "__interrupt__" in result
         # ADR-0065: if the resume re-paused on a remote job, that's RUNNING, not

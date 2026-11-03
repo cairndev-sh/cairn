@@ -673,6 +673,20 @@ async def test_a_critique_under_the_cap_adds_its_spend_once(stub, one_call_usd, 
     assert run.cost["llm_usd"] == pytest.approx(one_call_usd * 6, abs=2e-6)
 
 
+async def test_a_critique_that_breaks_after_swallowing_the_cap_still_fails_the_run(
+        stub, one_call_usd, trail, tmp_path, monkeypatch):
+    async def _once(output_text, config):
+        try:
+            obs.record_llm(MODEL, 1_000_000, 1_000_000, 0.0)
+        except obs.BudgetExceeded:
+            pass
+        raise ValueError("bad verdict")
+
+    monkeypatch.setattr(critique_module, "_critique_once", _once)
+    run, _ = await _skill_run(_skill(_with_critique(_six_calls(tmp_path, round(one_call_usd * 7, 6)))), trail)
+    assert run.status == "failed" and "over budget" in run.error
+
+
 async def test_spend_a_handler_swallowed_fails_a_skill_run(trail, tmp_path, monkeypatch):
     loaded = _skill(_template(tmp_path, "    type: python_node\n    function: _over_the_cap\n", "  nodes: {}\n", budget_usd=0.01))
 
