@@ -42,6 +42,10 @@ EVAL_CUTOFF_KEY = "eval_cutoff"
 #: The field every dated row and every dated registry version carries.
 DATED_AT_KEY = "dated_at"
 
+#: What the cutoff and ``dated_at`` grammar accepts, in words, for every refusal to quote.
+ACCEPTED_FORM = ("an ISO-8601 date or timestamp "
+                 "(e.g. '2026-06-01' or '2026-06-01T10:00:00+00:00')")
+
 
 class CutoffError(ValueError):
     """A date the cutoff filter refuses. A ``ValueError`` so the API turns it
@@ -66,9 +70,7 @@ def _parse(value: Any, *, what: str) -> tuple[datetime, bool]:
     try:
         parsed = datetime.fromisoformat(normalized)
     except ValueError:
-        raise CutoffError(
-            f"{what} {value!r} is not an ISO-8601 date or timestamp "
-            "(e.g. '2026-06-01' or '2026-06-01T10:00:00+00:00')") from None
+        raise CutoffError(f"{what} {value!r} is not {ACCEPTED_FORM}") from None
     date_only = len(text) == 10 and text.count("-") == 2
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
@@ -120,7 +122,12 @@ def _cutoff_instant(cutoff: Any) -> datetime:
     """The first instant that is AFTER the cutoff — a date-only cutoff covers
     its own whole day, so the boundary is the start of the next one."""
     instant, date_only = _parse(cutoff, what="eval cutoff")
-    return instant + timedelta(days=1) if date_only else instant
+    if not date_only:
+        return instant
+    try:
+        return instant + timedelta(days=1)
+    except OverflowError:  # 9999-12-31 has no next day, and nothing can be after it
+        return datetime.max.replace(tzinfo=timezone.utc)
 
 
 def after_cutoff(dated_at: Optional[Any], cutoff: Optional[Any]) -> bool:
@@ -206,6 +213,7 @@ def describe_exclusion(excluded: int, cutoff: Optional[Any]) -> str:
 
 
 __all__ = [
+    "ACCEPTED_FORM",
     "DATED_AT_KEY",
     "EVAL_CUTOFF_KEY",
     "CutoffError",

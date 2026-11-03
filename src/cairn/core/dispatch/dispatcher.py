@@ -812,12 +812,15 @@ class RunDispatcher:
         # intersects a golden or test version in this workspace is refused HERE —
         # before the run record exists, so the caller gets the overlapping row ids
         # (HTTP → 409/400) and no GPU is ever bought for a contaminated fine-tune.
-        # Same fail-closed shape as the config preflight above; the verdict is
-        # stamped on the run below either way, so a clean run records WHICH eval
-        # sets, at which hashes, it was held out from.
+        # Same fail-closed shape as the config preflight above; a malformed
+        # eval_cutoff is refused here too (#396). What the door found is stamped on
+        # the run below, so a clean run records WHICH eval sets, at which hashes, it
+        # was held out from, and a run it could not check records why.
         from cairn.core.holdout import check_holdout_for_inputs  # noqa: PLC0415 — off the hot import path
 
         _holdout = await check_holdout_for_inputs(inputs, workspace_id=current_workspace())
+        if _holdout.refusal:
+            raise ValueError(f"holdout door: {_holdout.refusal}")
         if not _holdout.ok:
             raise ValueError(
                 "holdout door: this run's training data overlaps a held-out set — "
@@ -961,7 +964,9 @@ class RunDispatcher:
             parent_run=parent_run,  # #989 (ADR-0076): ad-hoc run lineage (`--from`)
             sandbox=sandbox,  # ADR-0073 (#826): Playground run → operator mock mode
             # #2020 — the eval-set version hashes this run was held out from.
-            holdout=_holdout.as_record() if _holdout.checked else {},
+            # #396 — and a warning from a door that could not check is kept; only
+            # a door with nothing to say (no training version to check) leaves this empty.
+            holdout=_holdout.as_record() if _holdout.checked or _holdout.warnings else {},
             # #2021 — the intake verdict of every dataset version this run
             # reads. A `degraded` version runs; its reasons live HERE, so the
             # finding is attached to the result rather than lost at the door.
