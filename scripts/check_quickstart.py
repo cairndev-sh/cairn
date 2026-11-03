@@ -293,6 +293,11 @@ def run(readme: str, cairn: str) -> None:
                 _stopped(q, home)
 
 
+def absolute_command(cairn: str) -> str:
+    """The commands run from a scratch directory, so a relative path has to be made absolute first."""
+    return os.path.abspath(cairn) if os.sep in cairn else cairn
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     default = REPO / ".venv" / "bin" / "cairn"
@@ -301,7 +306,7 @@ def main() -> int:
     parser.add_argument("--readme", type=Path, default=REPO / "README.md")
     args = parser.parse_args()
     try:
-        run(args.readme.read_text(encoding="utf-8"), args.cairn)
+        run(args.readme.read_text(encoding="utf-8"), absolute_command(args.cairn))
     except (QuickstartError, subprocess.TimeoutExpired) as exc:
         print(f"quickstart check FAILED: {exc}", file=sys.stderr)
         return 1

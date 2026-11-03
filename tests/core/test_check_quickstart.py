@@ -98,3 +98,11 @@ def test_the_readme_badge_points_at_the_quickstart_workflow():
     assert ("https://github.com/cairndev-sh/cairn/actions/workflows/quickstart.yml?query=branch%3Amain" in README)
     assert "actions/workflow/status/cairndev-sh/cairn/quickstart.yml?branch=main" in README
     assert (WORKFLOWS / "quickstart.yml").is_file()
+
+
+def test_a_relative_cairn_path_still_works_from_the_scratch_directory(monkeypatch, tmp_path):
+    """The workflow passes `.venv/bin/cairn`, and the commands run from a scratch directory."""
+    monkeypatch.chdir(tmp_path)
+    assert cq.absolute_command(".venv/bin/cairn") == str(tmp_path / ".venv" / "bin" / "cairn")
+    assert cq.absolute_command("/opt/bin/cairn") == "/opt/bin/cairn"
+    assert cq.absolute_command("cairn") == "cairn"
