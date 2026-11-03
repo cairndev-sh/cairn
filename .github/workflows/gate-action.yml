@@ -1,0 +1,74 @@
+# The composite action in actions/gate, used the way a caller uses it (`uses: ./actions/gate`):
+# a passing check passes the job, a failing one fails it with the exit code and verdict as outputs.
+# It installs cairndev from PyPI, so the version pinned here must be a release that has
+# `cairn run --check` with its exit code 2 (0.4.1 or later). Raise it with the action's default.
+name: gate-action
+'on':
+  push:
+    branches:
+    - main
+    paths:
+    - actions/gate/**
+    - examples/ci/**
+    - examples/hello-cairn/data/**
+    - .github/workflows/gate-action.yml
+  pull_request:
+    paths:
+    - actions/gate/**
+    - examples/ci/**
+    - examples/hello-cairn/data/**
+    - .github/workflows/gate-action.yml
+permissions:
+  contents: read
+concurrency:
+  group: gate-action-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  gate-action:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: A check that passes passes the job
+      id: good
+      uses: ./actions/gate
+      with:
+        check: dataset-check
+        set: path=../hello-cairn/data/sample.jsonl
+        working-directory: examples/ci
+        cairndev-version: 0.4.1
+
+    - name: A file the check cannot read fails the job
+      id: bad
+      continue-on-error: true
+      uses: ./actions/gate
+      with:
+        check: dataset-check
+        set: |
+          path=data/missing.jsonl
+        working-directory: examples/ci
+        cairndev-version: 0.4.1
+
+    - name: A check that is not there decides nothing, and exits 2
+      id: error
+      continue-on-error: true
+      uses: ./actions/gate
+      with:
+        check: no-such-check
+        working-directory: examples/ci
+        cairndev-version: 0.4.1
+
+    - name: The outputs and the outcomes are what the action promises
+      env:
+        GOOD_VERDICT: ${{ steps.good.outputs.verdict }}
+        GOOD_CODE: ${{ steps.good.outputs.exit-code }}
+        BAD_OUTCOME: ${{ steps.bad.outcome }}
+        BAD_VERDICT: ${{ steps.bad.outputs.verdict }}
+        BAD_CODE: ${{ steps.bad.outputs.exit-code }}
+        ERROR_OUTCOME: ${{ steps.error.outcome }}
+        ERROR_VERDICT: ${{ steps.error.outputs.verdict }}
+        ERROR_CODE: ${{ steps.error.outputs.exit-code }}
+      run: |
+        test "$GOOD_VERDICT/$GOOD_CODE" = pass/0
+        test "$BAD_OUTCOME/$BAD_VERDICT/$BAD_CODE" = failure/fail/1
+        test "$ERROR_OUTCOME/$ERROR_VERDICT/$ERROR_CODE" = failure/error/2

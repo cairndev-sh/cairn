@@ -1,0 +1,112 @@
+name: cairn check
+description: >-
+  Run a read-only check with `cairn run --check` and fail the job on a bad verdict.
+  Installs a pinned cairndev from PyPI. Needs cairndev 0.4.1 or later (earlier versions
+  exit 0 when a check does not finish).
+author: cairndev-sh
+
+inputs:
+  check:
+    description: >-
+      The check to run: a template name looked up in ./templates of the working directory,
+      or a namespaced ref `<pack>/<name>` of an installed pack.
+    required: true
+  set:
+    description: >-
+      Inputs for the check, one `key=value` per line, passed as repeated `--set`. A value is
+      parsed as JSON when it can be.
+    required: false
+    default: ''
+  fail-on:
+    description: "The severity that exits non-zero: `fail` or `warn`."
+    required: false
+    default: fail
+  working-directory:
+    description: The directory to run in. A bare check name is looked up in `templates/` there.
+    required: false
+    default: .
+  cairndev-version:
+    description: >-
+      The exact cairndev release to install from PyPI, such as `0.5.0`. A range, `latest`
+      or an empty value is refused.
+    required: false
+    default: 0.5.0
+  python-version:
+    description: The Python version to run cairndev on.
+    required: false
+    default: '3.12'
+
+outputs:
+  verdict:
+    description: >-
+      What the check decided: `pass`, `warn` or `fail`, or `error` when it decided nothing
+      (exit 2).
+    value: ${{ steps.check.outputs.verdict }}
+  exit-code:
+    description: "The exit code of `cairn run --check`: 0 pass or warn, 1 fail, 2 error."
+    value: ${{ steps.check.outputs.exit-code }}
+  report:
+    description: The path of the JSON verdict that `--json` printed.
+    value: ${{ steps.check.outputs.report }}
+
+runs:
+  using: composite
+  steps:
+    - uses: astral-sh/setup-uv@v7
+      with:
+        version: 0.11.9
+        python-version: ${{ inputs.python-version }}
+
+    # Every input reaches the script through env:, never through the script text, so a value
+    # is data and cannot become shell syntax.
+    - id: check
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        CHECK: ${{ inputs.check }}
+        SETS: ${{ inputs.set }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        CAIRNDEV_VERSION: ${{ inputs.cairndev-version }}
+      run: |
+        if [[ ! "$CAIRNDEV_VERSION" =~ ^[0-9]+(\.[0-9]+)*([abrc]+[0-9]+|\.post[0-9]+)?$ ]]; then
+          echo "::error::cairndev-version must be one exact release such as 0.5.0, got '$CAIRNDEV_VERSION'"
+          exit 2
+        fi
+        if [[ -z "$CHECK" ]]; then
+          echo "::error::check is required"
+          exit 2
+        fi
+
+        args=(run --check --json --fail-on "$FAIL_ON")
+        while IFS= read -r line || [[ -n "$line" ]]; do
+          line="${line%$'\r'}"
+          [[ -z "${line//[[:space:]]/}" ]] && continue
+          args+=(--set "$line")
+        done <<< "$SETS"
+        # `--` ends the options: a check named like a flag is a name, not a flag.
+        args+=(-- "$CHECK")
+
+        report="$RUNNER_TEMP/cairn-check-report.json"
+        rc=0
+        uv tool run --from "cairndev==$CAIRNDEV_VERSION" cairn "${args[@]}" > "$report" || rc=$?
+        cat "$report"
+
+        verdict=$(python3 - "$report" <<'PY'
+        import json, sys
+        try:
+            line = open(sys.argv[1]).read().strip().splitlines()[-1]
+            print(json.loads(line).get("verdict") or "error")
+        except Exception:
+            print("error")
+        PY
+        )
+        if [[ "$rc" -eq 2 ]]; then verdict=error; fi
+        {
+          echo "verdict=$verdict"
+          echo "exit-code=$rc"
+          echo "report=$report"
+        } >> "$GITHUB_OUTPUT"
+
+        # The exit code is the check's own, so a failed check fails the job and a check that
+        # did not finish (2) does too.
+        exit "$rc"
