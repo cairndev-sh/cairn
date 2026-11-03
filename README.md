@@ -316,6 +316,7 @@ The same governed core is driven from two places in this repository:
 | [Architecture](./docs/architecture/00-overview.md) | Engine, packs, profiles, request lifecycle |
 | [Write a pipeline](https://docs.cairndev.sh/guides/write-a-pipeline/) · [Capabilities and operators](https://docs.cairndev.sh/concepts/capabilities/) | Packs, and how operators pick up a provider |
 | [Gates and approvals](https://docs.cairndev.sh/concepts/gates/) · [Cost and budgets](https://docs.cairndev.sh/concepts/cost/) | Policies, HITL gates, budget, audit |
+| [Gate CI on a check](https://docs.cairndev.sh/guides/gate-ci/) | Fail a pull request on a bad dataset with `cairn run --check` |
 | [Pipelines](https://docs.cairndev.sh/concepts/pipelines/) | Chain governed workflows with gates and events |
 | [Install and deploy](https://docs.cairndev.sh/install/) | Install, Docker Compose, Helm, sign-in |
 | [Operators catalog](https://docs.cairndev.sh/reference/operators/) | Every shipped operator, by domain |
