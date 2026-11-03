@@ -547,3 +547,85 @@ def test_a_run_where_every_check_holds_publishes_its_limits(audit_tamper, untouc
     result = json.loads((out / "audit_tamper.json").read_text(encoding="utf-8"))
     assert result["script"] == "benchmark/audit_tamper.py"
     assert sum(row["result"].startswith("NOT detected") for row in result["results"]) == 6
+
+
+# ─── budget_overshoot: the check logic. What a real engine does rests on the real run in the
+# `public-e2e` CI job. ─────────────────────────────────────────────────────
+
+CAP = 0.00007
+ONE_CALL = 0.000028
+
+
+@pytest.fixture
+def overshoot(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.syspath_prepend(str(render.REPO / "benchmark"))
+    return importlib.import_module("budget_overshoot")
+
+
+def _trial(overshoot, **fields):
+    stopped = {"pipeline_status": "failed", "leg_status": "failed", "next_leg_run": None,
+               "error": "session s over budget: $0.000084 > $0.000070", "spent_usd": 0.000084, "model_calls": 3}
+    return overshoot.Trial(**{**stopped, **fields})
+
+
+def test_calls_in_a_row_that_stop_within_one_call_pass(overshoot):
+    overshoot.check_sequential([_trial(overshoot)] * 3, CAP)
+
+
+@pytest.mark.parametrize("fields, why", [
+    ({"leg_status": "done"}, "must fail"),
+    ({"pipeline_status": "done"}, "must fail"),
+    ({"next_leg_run": "run-2"}, "ran"),
+    ({"error": "something else"}, "must say"),
+    ({"model_calls": 6, "spent_usd": 0.000168}, "must stop before"),
+    ({"model_calls": 5, "spent_usd": 0.00014}, "at most one call"),
+    ({"model_calls": 2, "spent_usd": 0.000056}, "at most one call"),
+])
+def test_a_cap_that_did_not_hold_publishes_nothing(overshoot, fields, why):
+    with pytest.raises(RuntimeError, match=why):
+        overshoot.check_sequential([_trial(overshoot, **fields)], CAP)
+
+
+def test_calls_in_a_row_must_stop_on_the_same_call_every_time(overshoot):
+    other = _trial(overshoot, model_calls=4, spent_usd=0.000084)
+    with pytest.raises(RuntimeError, match="same call"):
+        overshoot.check_sequential([_trial(overshoot), other], CAP)
+
+
+def test_parallel_calls_may_pass_the_cap_but_must_stop_the_run(overshoot):
+    everything = _trial(overshoot, model_calls=8, spent_usd=0.000224)
+    overshoot.check_parallel([everything], 0.00004, ONE_CALL)
+    with pytest.raises(RuntimeError, match="must fail"):
+        overshoot.check_parallel([_trial(overshoot, leg_status="done")], 0.00004, ONE_CALL)
+    with pytest.raises(RuntimeError, match="at most 8"):
+        overshoot.check_parallel([_trial(overshoot, model_calls=9)], 0.00004, ONE_CALL)
+    with pytest.raises(RuntimeError, match="must pass"):
+        overshoot.check_parallel([_trial(overshoot, spent_usd=0.00003)], 0.00004, ONE_CALL)
+
+
+def test_a_parallel_run_can_count_fewer_calls_than_were_paid_for_but_never_more(overshoot):
+    overshoot.check_parallel([_trial(overshoot, model_calls=8, spent_usd=7 * ONE_CALL)], 0.00004, ONE_CALL)
+    with pytest.raises(RuntimeError, match="more than the model received"):
+        overshoot.check_parallel([_trial(overshoot, model_calls=2, spent_usd=3 * ONE_CALL)], 0.00004, ONE_CALL)
+
+
+def test_a_key_or_gateway_in_the_shell_cannot_be_spent_on(overshoot):
+    env = overshoot.engine_env("http://127.0.0.1:1/v1")
+    assert env["OPENAI_BASE_URL"] == env["OPENAI_API_BASE"] == "http://127.0.0.1:1/v1"
+    assert env["OPENAI_API_KEY"] == "sk-stub" and env["LLM_GATEWAY"] == "direct"
+
+
+def test_the_row_reports_the_worst_trial_and_the_spread_of_calls(overshoot):
+    trials = [_trial(overshoot, model_calls=7, spent_usd=0.000196), _trial(overshoot, model_calls=8, spent_usd=0.000224)]
+    row = overshoot.row("in-process", "8 calls at once", trials, 0.00004, 8)
+    assert row["spent"] == "$0.000224" and row["past"] == "$0.000184 (460%)" and row["model"] == "7 to 8 of 8"
+    assert set(row) == set(overshoot.COLUMNS)
+
+
+def test_temporal_is_reported_as_not_measured_rather_than_left_out(overshoot):
+    assert set(overshoot.NOT_MEASURED) == set(overshoot.COLUMNS)
+    assert overshoot.NOT_MEASURED["calls"] == "not measured"
+
+
+def test_the_declared_caps_come_from_the_templates(overshoot):
+    assert overshoot.declared_cap("six-calls") == CAP and overshoot.declared_cap("fan-out") == 0.00004

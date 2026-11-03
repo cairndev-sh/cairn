@@ -1,0 +1,18 @@
+name: capped-fan-out
+kind: pipeline
+visibility: public
+description: A parallel template leg that hits its cost cap, and a leg after it.
+outcome: budget
+suite: data
+steps:
+  - id: calls
+    label: eight model calls at once
+    template: fan-out
+    with:
+      symptom: $input.items
+  - id: after
+    label: a leg after the cap
+    template: one-call
+    depends_on: [calls]
+    with:
+      question: $input.question
