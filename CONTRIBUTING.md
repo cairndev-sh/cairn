@@ -10,6 +10,10 @@ knowledge required.
 > (choosing SQLite vs Postgres, seeding demo fixtures, starting the server).
 > This file covers *contributing*; that one covers *running*.
 
+> **Questions or ideas?** Ask in
+> [GitHub Discussions](https://github.com/cairndev-sh/cairn/discussions); issues are
+> for bugs and concrete feature requests.
+
 ## Quickstart (the 15-minute path)
 
 ```bash

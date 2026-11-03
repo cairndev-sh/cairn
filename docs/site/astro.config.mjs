@@ -124,6 +124,11 @@ export default defineConfig({
           label: 'GitHub',
           href: 'https://github.com/cairndev-sh/cairn',
         },
+        {
+          icon: 'comment',
+          label: 'Discussions',
+          href: 'https://github.com/cairndev-sh/cairn/discussions',
+        },
       ],
       sidebar: [
         // Cross-link to the marketing landing — a separate deployment.
