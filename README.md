@@ -141,6 +141,24 @@ measured on: see [`benchmark/`](./benchmark/README.md).
 
 cairndev 0.4.0, `uv.lock` `2f3a08bed7ab`, Linux x86_64 with 4 CPUs and Python 3.13.13, 2026-11-03.
 
+**How far past a cost cap a template's spend gets** ([reproduce](./benchmark/budget_overshoot.py))
+
+| Runtime | Template | Cap | Spend recorded | Past the cap | Calls the model received | Leg and pipeline |
+|---|---|---|---|---|---|---|
+| in-process | 6 calls in a row | $0.000070 | $0.000084 | $0.000014 (20%) | 3 of 6 | failed, next leg never started |
+| in-process | 8 calls at once | $0.000040 | $0.000224 | $0.000184 (460%) | 8 of 8 | failed, next leg never started |
+| DBOS on SQLite | 6 calls in a row | $0.000070 | $0.000084 | $0.000014 (20%) | 3 of 6 | failed, next leg never started |
+| DBOS on SQLite | 8 calls at once | $0.000040 | $0.000224 | $0.000184 (460%) | 8 of 8 | failed, next leg never started |
+| Temporal | not measured | n/a | n/a | n/a | n/a | n/a |
+
+A cap can't take back the call that crosses it, so calls in a row pass it by at most one call. Here that's half a call, and it's 20% only because this test's cap is just 2.5 calls.
+
+Calls sent at once can pass a cap by nearly all of them: all 8 reached the model before any answer came back, and the second answer is the one that crosses this cap. The percentage depends on how many calls there are and how small the cap is. A call answered after the run stops could be paid for without being counted. These runs didn't show that, but it would make the recorded spend too low.
+
+Temporal isn't measured, because this script needs a Temporal server. From the code, the worker only meters, so the run should fail when it ends, with its calls already made.
+
+cairndev 0.4.0, `uv.lock` `2f3a08bed7ab`, Linux x86_64 with 4 CPUs and Python 3.13.13, 2026-11-03.
+
 **What happens when the server is killed** ([reproduce](./benchmark/crash_matrix.py))
 
 | Storage | Runtime | Bus | Killed at a person gate | Killed inside a flow leg | Killed inside a template leg on DBOS |
