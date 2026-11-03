@@ -185,7 +185,7 @@ def _cli_run(monkeypatch, tmp_path, bridge):
 def test_the_cli_reports_the_refusal_and_starts_nothing(installed, monkeypatch, tmp_path):
     bridge = _Bridge()
     r = _cli_run(monkeypatch, tmp_path, bridge)
-    assert r.exit_code != 0, r.output
+    assert r.exit_code == 1, r.output
     assert "monitor/threshold" in r.output and bridge.calls == []
 
 

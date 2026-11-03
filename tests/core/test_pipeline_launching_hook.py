@@ -378,9 +378,9 @@ def test_the_cli_reports_a_refusal_and_starts_nothing(installed, monkeypatch, tm
     bridge = _Bridge()
     _cli_through(monkeypatch, tmp_path, bridge)
     r = _cli_run()
-    assert r.exit_code != 0, r.output
+    assert r.exit_code == 1, r.output
     assert "not from a terminal" in r.output
-    assert len(hooks.launching()) == 1 and bridge.calls == []
+    assert [p["source"] for p in hooks.launching()] == ["console"] and bridge.calls == []  # the route says so
 
 
 async def test_a_template_run_wrapped_in_its_one_leg_pipeline_asks_the_hook(installed, monkeypatch):

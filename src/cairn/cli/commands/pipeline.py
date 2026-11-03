@@ -286,9 +286,6 @@ def explain_cmd(
                   markup=False, soft_wrap=True)
 
 
-#: Pipeline states that mean the CLI's job is over (#1702).
-_TERMINAL = ("done", "failed", "cancelled")
-
 
 
 

@@ -607,7 +607,7 @@ def init_template(
     """Add a minimal ``flow: prompt`` flow stub to the current pack.
 
     Writes into ``flows/`` — one concept: flow. ``templates/`` is
-    the retired alias, and a pack scaffolded by `cairn init pack` no longer
+    the retired alias, and a pack scaffolded by `cairn pack new pack` no longer
     has that directory.
     """
     _drop_artifact(

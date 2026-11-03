@@ -37,13 +37,10 @@ from textual.widgets import (
 )
 from textual_autocomplete import AutoComplete, DropdownItem, TargetState
 
+from cairn.cli.console_argv import LOCAL_CMDS, cli_argv
+
 # server verbs (HTTP+SSE) vs local verbs (shell out) vs ask (②) ──────
 _SERVER_CMDS = {"submit", "ps", "watch", "status", "logs", "approve", "reject"}
-_LOCAL_CMDS = {"ls", "doctor", "validate", "run", "replay", "connect", "eval",
-               "init", "lock", "visualize"}
-#: The console's verbs stay short; these are the CLI spellings they shell out to (ADR-0165 D10).
-_LOCAL_ARGV = {"ls": ["pack", "ls"], "validate": ["pack", "check"], "connect": ["admin", "connect"],
-               "init": ["pack", "new"], "lock": ["pack", "lock"]}
 COMMANDS: dict[str, str] = {
     "ask": 'ask "<natural-language intent>" — resolve to a governed plan (②)',
     "submit": "<skill> [--service S] [-i k=v ...]  — fire a skill (auto-watches)",
@@ -491,7 +488,7 @@ class CairnConsole(App):
             self._submit(args)
         elif cmd in _TAKES_RUN and args and cmd != "replay":
             self.current = args[0]; self._open_run(args[0])
-        elif cmd in _LOCAL_CMDS:
+        elif cmd in LOCAL_CMDS:
             self._shell(toks)
         else:
             self.notify(f"unknown or incomplete: {line!r}", severity="warning")
@@ -767,20 +764,11 @@ class CairnConsole(App):
             self.notify("approval required — ✓ Approve / ✗ Reject (click or a/r)", severity="warning")
 
     # ── local commands (shell out, stream Rich output) ────────────
-    @staticmethod
-    def _cli_argv(toks: list[str]) -> list[str]:
-        head, rest = toks[0], toks[1:]
-        if head == "replay":
-            return ["status", *rest, "--replay"]
-        if head == "visualize" and rest[:1] == ["template"]:
-            return ["pack", "show", "--graph", *rest[1:]]
-        return [*_LOCAL_ARGV.get(head, [head]), *rest]
-
     @work(group="shell")
     async def _shell(self, toks: list[str], *, env: Optional[dict] = None,
                      after: Optional[Callable[[], None]] = None) -> None:
         log = self._log()
-        toks = self._cli_argv(toks)
+        toks = cli_argv(toks)
         log.write(Text.assemble(("$ cairn ", "bold green"), (" ".join(toks), "green")))
         try:
             proc = await asyncio.create_subprocess_exec(

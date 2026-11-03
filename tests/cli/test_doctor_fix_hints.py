@@ -482,6 +482,7 @@ def _(monkeypatch, tmp_path):
     ("rag", ("rag_vector_store", "RAG_VECTOR_STORE")),
 ])
 def test_unprovisioned_backend_hint(monkeypatch, kind, words):
+    import cairn.core.backend_selection  # noqa: F401 — imported first under the patch, it would keep the fake for good
     import cairn.core.profile_backends as pb
 
     _packs(monkeypatch, _pack(**{f"required_{kind}": {"store": {}}}))
