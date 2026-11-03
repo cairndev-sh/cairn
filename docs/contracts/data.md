@@ -88,7 +88,7 @@ What is shared per name across workspaces:
   policy's (#2190) — core records evidence only.
 - **Verdict** (`admitted | degraded | blocked | invalid_format`, `intake.py:55-58`) is
   stamped on the version at registration (`leg_executor.py:453-470`). Two doors read it:
-  the agentic path per run (`check_intake_for_inputs`, `intake.py:588`; `dispatcher.py:856`)
+  the agentic path per run (`check_intake_for_inputs`, `intake.py:590`; `dispatcher.py:868`)
   and the pipeline launch door once per launch (`src/cairn/core/admission_door.py`, T05 #2190),
   which also applies the policies' required checks and writes the decision on the record.
 - Holdout: a `role=training` version may not overlap a golden/test version; checked on the
