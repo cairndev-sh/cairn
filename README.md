@@ -8,9 +8,9 @@
 <h1 align="center">cairn</h1>
 
 <p align="center">
-  <b>An open-source control plane for governed ModelOps.</b><br>
+  <b>Cairn runs your AI and ML pipelines behind budgets, policy, approvals and an audit trail.</b><br>
   Fine-tune, evaluate, promote, and serve models as single governed commands —
-  cost-capped before the GPU spins up, policy-gated, and audited end to end.
+  cost-capped before the GPU spins up, policy-gated, and audited.
 </p>
 
 <p align="center">

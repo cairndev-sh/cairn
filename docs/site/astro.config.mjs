@@ -116,7 +116,7 @@ export default defineConfig({
       },
       favicon: '/favicon.svg',
       description:
-        'cairn is a self-hosted control plane for the work behind AI models: it decides when each step may run, holds spend to a budget, pauses for data checks and people, and records what happened.',
+        'Cairn runs your AI and ML pipelines behind budgets, policy, approvals and an audit trail.',
       customCss: ['./src/styles/custom.css'],
       social: [
         {
