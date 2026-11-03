@@ -57,13 +57,12 @@ repository.
 **Against an engine.** Once `cairn setup` has signed you in, launch:
 
 ```bash
-cairn run hello-cairn/profile-and-publish \
-  -i path=$PWD/sample.jsonl --environment sandbox
+cairn run hello-cairn/profile-and-publish --preset sample --environment sandbox
 ```
 
-Each `-i key=value` sets one input. `--preset <name>` starts from a saved set
-of inputs, and `--save-preset <name>` saves this launch's inputs for next
-time.
+`--preset <name>` starts from a set of inputs, here the one the example ships, which
+points at its own sample rows. Each `-i key=value` sets one input on top of it, and
+`--save-preset <name>` saves this launch's inputs for next time.
 
 **Over the HTTP API.** `POST /start` with `{"ref": "hello-cairn/profile-and-publish", "inputs": {…}}`
 goes through the same launch door.

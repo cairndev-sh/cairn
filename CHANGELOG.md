@@ -4,6 +4,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+- The example pack ships a `sample` preset, so the Quickstart runs on its own rows with `--preset sample`, from an installed wheel, without downloading a file. `cairn-pack-hello` needs the release that carries it. (#317)
+
 ## [0.5.0] - 2026-11-03
 
 The old command names are gone, and a cost cap now stops a run.

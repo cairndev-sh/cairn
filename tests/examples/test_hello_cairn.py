@@ -30,6 +30,7 @@ from pathlib import Path
 os.environ.setdefault("OPENAI_API_KEY", "sk-test-dummy")
 
 import pytest
+import yaml
 
 from cairn.core import pack as pack_api
 from cairn.core.dataflow.defs import load_flow_defs, parse_flow_def
@@ -320,3 +321,21 @@ async def test_the_same_pipeline_runs_once_its_cap_covers_the_estimate(hello_pac
         assert len(engine_submits) == 1
     finally:
         bridge.stop()
+
+
+# ── the Quickstart's data comes with the pack (#317) ────────────────────
+
+
+def test_the_sample_preset_is_in_the_wheel_and_names_a_file_in_the_pack():
+    pyproject = (PACK_DIR / "pyproject.toml").read_text()
+    assert '"presets" = "cairn_pack_hello/presets"' in pyproject and '"data" = "cairn_pack_hello/data"' in pyproject
+    preset = yaml.safe_load((PACK_DIR / "presets" / "profile-and-publish.yaml").read_text())
+    assert preset["pipeline"] == "hello-cairn/profile-and-publish"
+    sample = next(p for p in preset["presets"] if p["name"] == "sample")
+    assert (PACK_DIR / sample["inputs"]["path"].removeprefix("$pack/")).is_file()
+
+
+def test_the_quickstarts_download_no_sample_data():
+    for page in (PACK_DIR.parents[1] / "README.md", PACK_DIR.parents[1] / "docs/site/src/content/docs/quickstart.md"):
+        text = page.read_text()
+        assert "data/sample.jsonl" not in text and "--preset sample" in text
