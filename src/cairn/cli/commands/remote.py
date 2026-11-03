@@ -307,8 +307,8 @@ def _call(fn, *args, **kwargs):
 
 def _run_status(endpoint: str, token: Optional[str], run_id: str) -> Optional[str]:
     """A run's status for a stream that closed without a terminal frame (#230). A 401
-    exits 77 and any other API error is said, never a silent exit 0 that looks like a
-    quiet run; a transport error (an engine restarting) is ``None``: reconnect."""
+    exits 77 and any other client error is said, never a silent exit 0 that looks like a
+    quiet run; a transport error or a 5xx (an engine restarting, a proxy) is ``None``: reconnect."""
     import httpx  # noqa: PLC0415 — lazy with the client
     from cairn_client import CairnAPIError  # noqa: PLC0415
 
@@ -318,6 +318,8 @@ def _run_status(endpoint: str, token: Optional[str], run_id: str) -> Optional[st
     except CairnAPIError as e:
         if e.status_code == 401:
             _session_ended(token)
+        if e.status_code >= 500:
+            return None
         _fail(f"{e.status_code}: {e.detail[:300]}")
     except httpx.HTTPError:
         return None
@@ -374,14 +376,45 @@ def _print_event(seq, ev_type, data) -> None:
     typer.secho(line, fg=color or None)
 
 
+#: How long a follow keeps trying when nothing answers: 1, 2, 4, 8, 16, 30, 30, 30 seconds, about two
+#: minutes, which outlasts an engine restarting. Anything the server does answer starts the count over.
+_RECONNECT_TRIES = 8
+_RECONNECT_MAX_WAIT_S = 30.0
+
+
+class _Reconnect:
+    """Paces a follow's reconnects, and ends it with what to type when nothing comes back."""
+
+    def __init__(self, run_id: str, reattach: str) -> None:
+        self.run_id, self.reattach, self.failures = run_id, reattach, 0
+
+    def after_close(self, *, lost: bool, progressed: bool) -> None:
+        """A stream ended with the run not finished. ``lost``: the server didn't answer, or refused
+        the stream. A stream dropped while the status check says the run is fine isn't lost: a
+        proxy's idle timeout does that during a long, quiet leg, so it never counts towards giving up."""
+        if progressed or not lost:
+            self.failures = 0
+        if not lost:
+            time.sleep(1.0)
+            return
+        self.failures += 1
+        if self.failures > _RECONNECT_TRIES:
+            typer.secho(f"lost the connection after {_RECONNECT_TRIES} tries; run {self.run_id} may still "
+                        f"be live. Re-attach: {self.reattach}", fg="red", err=True)
+            raise typer.Exit(1)
+        time.sleep(min(_RECONNECT_MAX_WAIT_S, 2.0 ** (self.failures - 1)))
+
+
 def _tail(endpoint: str, token: Optional[str], run_id: str, *, after_seq: int = 0, flow: bool = False) -> None:
     """Follow a run's SSE event stream, resuming with ``after_seq`` if the
     connection drops before the run reaches a terminal state."""
     import httpx
     last = after_seq
+    reconnect = _Reconnect(run_id, f"cairn status {run_id} --logs --follow")
     while True:
         ev_type = data = seq = None
-        saw_terminal = False
+        saw_terminal = refused = False
+        before = last
         try:
             with _sse_client(endpoint, token, timeout=None) as c:
                 with c.stream("GET", f"/runs/{run_id}/stream", params={"after_seq": last}) as r:
@@ -413,14 +446,18 @@ def _tail(endpoint: str, token: Optional[str], run_id: str, *, after_seq: int = 
                             data = line[5:].strip()
         except typer.Exit:
             raise
+        except httpx.HTTPStatusError:
+            refused = True
         except httpx.HTTPError:
             pass  # dropped — fall through to a status check, then reconnect
         if saw_terminal:
             return
         # Stream closed without a terminal frame: check status; stop if the run
         # actually finished, otherwise reconnect from the last seq we saw.
-        if _run_status(endpoint, token, run_id) in _TERMINAL:
+        status = _run_status(endpoint, token, run_id)
+        if status in _TERMINAL:
             return
+        reconnect.after_close(lost=refused or status is None, progressed=last != before)
 
 
 # ─── commands ──────────────────────────────────────────────────────
@@ -765,9 +802,11 @@ def _watch_hitl(endpoint, token, run_id: str, *, approver, decision_opt,
     import httpx  # noqa: PLC0415 — lazy like _tail (heavy http client)
 
     last = 0
+    reconnect = _Reconnect(run_id, f"cairn status {run_id} --follow")
     while True:
         ev_type = data = seq = None
-        paused = saw_terminal = False
+        paused = saw_terminal = refused = False
+        before = last
         try:
             with _sse_client(endpoint, token, timeout=None) as c:
                 with c.stream("GET", f"/runs/{run_id}/stream", params={"after_seq": last}) as r:
@@ -802,6 +841,8 @@ def _watch_hitl(endpoint, token, run_id: str, *, approver, decision_opt,
                             data = line[5:].strip()
         except typer.Exit:
             raise
+        except httpx.HTTPStatusError:
+            refused = True
         except httpx.HTTPError:
             pass  # dropped — fall through to a status check, then reconnect
         if saw_terminal:
@@ -811,8 +852,11 @@ def _watch_hitl(endpoint, token, run_id: str, *, approver, decision_opt,
             if st in _TERMINAL:
                 return 0
             if st != "awaiting_approval":
+                reconnect.after_close(lost=refused or st is None, progressed=last != before)
                 continue  # transient close — reconnect from `last`
             paused, data = True, None  # missed the event but the run is parked
+            if refused:  # a stream that keeps refusing must not turn answers into a tight loop
+                time.sleep(1.0)
 
         _render_pause(endpoint, token, run_id, data, dump)
         decision = _decide(decision_opt=decision_opt, native=native,
