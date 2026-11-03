@@ -145,12 +145,14 @@ export default defineConfig({
         {
           label: 'Concepts',
           items: [
+            { label: 'How cairn fits together', slug: 'concepts/architecture' },
             { label: 'Pipelines, legs and steps', slug: 'concepts/pipelines' },
             { label: 'Flows', slug: 'concepts/flows' },
             { label: 'Capabilities and environments', slug: 'concepts/capabilities' },
             { label: 'Gates and approvals', slug: 'concepts/gates' },
             { label: 'Cost and budgets', slug: 'concepts/cost' },
             { label: 'Runs and the record', slug: 'concepts/runs' },
+            { label: 'Glossary', slug: 'concepts/glossary' },
             { label: 'How cairn compares', slug: 'compare' },
           ],
         },
