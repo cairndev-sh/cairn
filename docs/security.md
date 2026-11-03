@@ -85,7 +85,7 @@ For a team account's run, the
 connections and secrets in scope are that account's own (see *Accounts and workspaces*
 above). Never log or echo a secret; the redactor (`src/cairn/core/obs/redact.py`, `redact.text` in
 `src/cairn/profiles/secure.toml`) runs on LLM traffic and logs; every LLM call goes through
-`build_chat_model` (`services/llm/factory.py:97`) — invariant 2.
+`build_chat_model` (`services/llm/factory.py:108`) — invariant 2.
 
 ## Subprocess and shell safety
 The builtin engine runs the kernel process with `create_subprocess_exec` (argv, no shell),
