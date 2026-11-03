@@ -1,7 +1,7 @@
 """#369 — a run on the local engine can be read back with `cairn status <run> --replay`, with no
 extra environment variable, and doing so runs nothing.
 
-The real boundary: `cairn dev --engine-only` on SQLite in a scratch HOME, the quickstart's sign-in
+The real boundary: `cairn setup --foreground --engine-only` on SQLite in a scratch HOME, the quickstart's sign-in
 and launch, and the CLI in a process of its own whose environment names no store. This harness's
 `Server` pins CAIRN_STORAGE into the CLI's environment, which is the very thing under test, so this
 file starts its own engine.
@@ -56,7 +56,7 @@ def test_a_local_run_reads_back_with_no_environment_variable_and_nothing_runs(tm
     sample = str(HELLO / "data" / "sample.jsonl")
     log = open(home / "engine.log", "wb")
     proc = subprocess.Popen(
-        [sys.executable, "-c", "from cairn.cli.main import app; app()", "dev", "--engine-only", "--port", str(port)],
+        [sys.executable, "-c", "from cairn.cli.main import app; app()", "setup", "--foreground", "--engine-only", "--port", str(port)],
         cwd=home, env=_env(home), stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
     log.close()
     try:
@@ -97,11 +97,6 @@ def test_a_local_run_reads_back_with_no_environment_variable_and_nothing_runs(tm
         assert [e["type"] for e in body["events"]] == ["done"]
         assert body["meta"]["source"] == "engine"
         assert url in raw.stderr, "it says where it read from"
-
-        alias = _cairn(home, "replay", run_id)
-        assert alias.returncode == 0, alias.stderr
-        assert alias.stdout == shown.stdout
-        assert "is now `cairn status <run> --replay`" in alias.stderr
 
         # A flow leg, on the same engine: the record names the flow, and has no stage operators to show.
         flow_run = before["step_state"]["engine-check"]["run_id"]

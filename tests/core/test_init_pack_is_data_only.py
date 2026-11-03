@@ -1,4 +1,4 @@
-"""`cairn init pack` must scaffold a pack that obeys the pack contract (#1511).
+"""`cairn pack new pack` must scaffold a pack that obeys the pack contract (#1511).
 
 The scaffolder is a compounding teacher: whatever shape it emits is the shape
 every external author starts from. It was emitting the **retired**
@@ -28,13 +28,13 @@ CAIRN = os.path.join(os.path.dirname(sys.executable), "cairn")
 
 @pytest.fixture(scope="module")
 def scaffolded(tmp_path_factory):
-    """Run the real `cairn init pack` once and hand back the pack root."""
+    """Run the real `cairn pack new pack` once and hand back the pack root."""
     root = tmp_path_factory.mktemp("scaffold")
     proc = subprocess.run(
-        [CAIRN, "init", "pack", "demopack"],
+        [CAIRN, "pack", "new", "pack", "demopack"],
         cwd=root, capture_output=True, text=True,
     )
-    assert proc.returncode == 0, f"init pack failed:\n{proc.stdout}\n{proc.stderr}"
+    assert proc.returncode == 0, f"pack new pack failed:\n{proc.stdout}\n{proc.stderr}"
     return root / "demopack"
 
 
@@ -160,5 +160,5 @@ def test_scaffolded_pipeline_plans_and_its_leg_resolves(scaffolded):
 
 
 def test_scaffolded_pack_has_changelog(scaffolded):
-    """Parity with `cairn init operator` (#1541): a CHANGELOG from day one."""
+    """Parity with `cairn pack new operator` (#1541): a CHANGELOG from day one."""
     assert (scaffolded / "CHANGELOG.md").is_file()
