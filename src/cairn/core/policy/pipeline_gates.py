@@ -15,9 +15,16 @@ Design constraints, each load-bearing:
 * **Deterministic** — policies sorted by name, gate ids derived from
   ``(policy, step)``: same environment + same pipeline ⇒ same plan, so the
   record snapshot and any hash over it are stable.
-* **No double-gating** — a leg that already sits behind an approval gate
-  (transitively, through ``depends_on``) is not gated again; the policy's
-  intent ("a human before X") is already structurally true.
+* **No double-gating, but only by a decision that will be asked** — a leg that
+  already sits behind an approval gate (transitively, through ``depends_on``)
+  is not gated again when that gate always runs (it carries no ``when:``) and,
+  if the policy names an ``approval_role``, is staffed by that role. A gate
+  that can be routed off, or that asks someone else, does not stand in for the
+  policy's own decision: a policy-injected gate is satisfied only by its own
+  decision.
+* **The audience is the policy's** — the injected gate's ``approvers`` is the
+  rule's ``approval_role``, so the approve door (``_assert_may_decide``) applies
+  the same ``approver_allowed`` rule it applies to any gate.
 * **Visible provenance** — the injected step carries ``injected_by=<policy>``,
   so the approver and the audit trail see WHY the gate exists.
 
@@ -155,6 +162,37 @@ def gated_upstream(step: Any, by_id: dict[str, Any]) -> bool:
     return False
 
 
+def _standing_gate_upstream(
+    step: Any, by_id: dict[str, Any], *, role: Optional[str], governance: Any,
+) -> bool:
+    """Does a gate that will certainly be asked sit upstream of ``step``?
+
+    Narrower than :func:`gated_upstream` on purpose (that one answers "is there
+    a gate on the path", for ``validate``/``explain``). For injection a gate
+    counts only when it cannot be routed off (no ``when:``) and, when the policy
+    names an ``approval_role``, when its audience (the same
+    ``required_approvers`` rule the approve door uses) names that role.
+    """
+    from cairn.core.approval.enforce import approver_names  # noqa: PLC0415 - cycle: policy → approval → policy
+    from cairn.core.engine.pipeline_gate import required_approvers  # noqa: PLC0415 - cycle: policy → engine
+
+    seen: set[str] = set()
+    frontier = list(step.depends_on)
+    while frontier:
+        dep_id = frontier.pop()
+        if dep_id in seen:
+            continue
+        seen.add(dep_id)
+        dep = by_id.get(dep_id)
+        if dep is None:
+            continue
+        if getattr(dep, "approval", False) and not getattr(dep, "when", None):
+            if not role or role in approver_names(required_approvers(dep, governance)):
+                return True
+        frontier.extend(dep.depends_on)
+    return False
+
+
 def inject_policy_gates(
     plan: Any,
     *,
@@ -177,6 +215,7 @@ def inject_policy_gates(
     policies = _leg_policies(engine, environment)
     if not policies:
         return []
+    governance = getattr(plan, "governance", None) or {}
 
     from cairn.core.engine.bundle_pipeline import PipelinePlanStep  # noqa: PLC0415 - cycle: engine.bundle_pipeline imports nothing from policy, but policy is imported BY engine paths
 
@@ -189,6 +228,7 @@ def inject_policy_gates(
         if deny is None and hitl is None:
             continue  # allow_auto / require_dry_run have no plan-time meaning
 
+        role = getattr(hitl, "approval_role", None) if hitl is not None else None
         by_id = {s.id: s for s in plan.steps}
         for step in list(plan.steps):
             if getattr(step, "approval", False) or getattr(step, "injected_by", None):
@@ -202,9 +242,9 @@ def inject_policy_gates(
                     f"'{bare}' in environment '{environment or 'default'}'"
                     + (f": {deny.reason}" if deny.reason else "")
                 )
-            if gated_upstream(step, by_id):
+            if _standing_gate_upstream(step, by_id, role=role, governance=governance):
                 logger.debug(
-                    "policy %s: leg %s already gated upstream — not doubling",
+                    "policy %s: leg %s already behind a gate that always asks — not doubling",
                     policy.name, step.id,
                 )
                 continue
@@ -213,6 +253,7 @@ def inject_policy_gates(
                 id=gate_id,
                 ref=f"gate:{gate_id}",
                 approval=True,
+                approvers=role,
                 depends_on=list(step.depends_on),
                 environment=step.environment,
                 injected_by=policy.name,

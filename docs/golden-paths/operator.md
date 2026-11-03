@@ -78,7 +78,7 @@ POST /start {ref: <pipeline>}          src/cairn/core/triggers/routers/start.py:
                   │   │   └ run        src/cairn/core/operator/protocol.py:385 Operation.run / :397 mock
                   │   ├ mcp_tool       operator/runtime.py:508
                   │   └ remote_job     operator/runtime.py:615 · :788 durable (job store, control channel)
-                  └ LLM nodes          src/cairn/services/llm/factory.py:97 build_chat_model (redaction + BudgetCallback)
+                  └ LLM nodes          src/cairn/services/llm/factory.py:108 build_chat_model (redaction + BudgetCallback)
               ├ terminal update        dispatcher.py store.update(status, cost, …) · _emit done/failed
               ├ settle budget          budget_reservations.settle / release
               └ terminal hooks         dispatcher.py:574 _terminal_hooks → cairn.run_hooks (the platform scores: eval ledger)

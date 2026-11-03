@@ -392,7 +392,10 @@ def _child_run(pid, step_id, status, *, rid, ref="task:_t1289/writer", ws="defau
                template_ref=ref, bundle_pipeline_id=pid, step_id=step_id, workspace_id=ws)
 
 
-async def test_cancel_leaves_a_live_local_running_leg_to_finish():
+async def test_cancel_stops_a_live_local_running_leg():
+    """ADR-0159 — a pipeline cancel cancels a running task leg this process
+    executes (it used to leave it running to finish) and settles it cancelled;
+    the worker thread a sync op runs in may finish, but its result is discarded."""
     d = RunDispatcher(FakeRunner(), backend=build_storage())
     b = PipelineBridge(d, store=InMemoryPipelineStore())
     await b.start()
@@ -400,13 +403,12 @@ async def test_cancel_leaves_a_live_local_running_leg_to_finish():
         rec = await b.start_pipeline(plan_pipeline(_def("_t1289/reader")), inputs={})
         run_id = (await b.store.get(rec.pipeline_id)).step_state["work"].run_id
         await b.cancel_pipeline(rec.pipeline_id)
-        assert (await d.store.get(run_id)).status == "running"     # executing — untouched
-        for _ in range(200):
-            if (await d.store.get(run_id)).status == "done":
-                break
-            await asyncio.sleep(0.05)
-        assert (await d.store.get(run_id)).status == "done"        # it finished
-        assert (await b.store.get(rec.pipeline_id)).status == "cancelled"
+        assert (await d.store.get(run_id)).status == "cancelled"
+        await asyncio.sleep(2.2)                                    # the op's thread has returned
+        assert (await d.store.get(run_id)).status == "cancelled"   # and wrote nothing
+        settled = await b.store.get(rec.pipeline_id)
+        assert settled.status == "cancelled"
+        assert (settled.step_state["work"].status, settled.step_state["work"].verdict) == ("skipped", "cancelled")
     finally:
         b.stop()
 

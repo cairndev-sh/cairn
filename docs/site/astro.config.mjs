@@ -116,13 +116,18 @@ export default defineConfig({
       },
       favicon: '/favicon.svg',
       description:
-        'cairn is a self-hosted control plane for the work behind AI models: it decides when each step may run, holds spend to a budget, pauses for data checks and people, and records what happened.',
+        'Cairn runs your AI and ML pipelines behind budgets, policy, approvals and an audit trail.',
       customCss: ['./src/styles/custom.css'],
       social: [
         {
           icon: 'github',
           label: 'GitHub',
           href: 'https://github.com/cairndev-sh/cairn',
+        },
+        {
+          icon: 'comment',
+          label: 'Discussions',
+          href: 'https://github.com/cairndev-sh/cairn/discussions',
         },
       ],
       sidebar: [
@@ -134,25 +139,35 @@ export default defineConfig({
             { label: 'What is cairn', slug: '' },
             { label: 'Quickstart', slug: 'quickstart' },
             { label: 'Install and deploy', slug: 'install' },
+            { label: 'FAQ', slug: 'faq' },
+            { label: 'Troubleshooting', slug: 'troubleshooting' },
+            { label: 'Releases', link: '/releases/' },
           ],
         },
         {
           label: 'Concepts',
           items: [
+            { label: 'How cairn fits together', slug: 'concepts/architecture' },
             { label: 'Pipelines, legs and steps', slug: 'concepts/pipelines' },
             { label: 'Flows', slug: 'concepts/flows' },
             { label: 'Capabilities and environments', slug: 'concepts/capabilities' },
             { label: 'Gates and approvals', slug: 'concepts/gates' },
+            { label: 'LLM judges are advisory', slug: 'concepts/judges' },
+            { label: 'Holdout and eval cutoff', slug: 'concepts/holdout' },
             { label: 'Cost and budgets', slug: 'concepts/cost' },
             { label: 'Runs and the record', slug: 'concepts/runs' },
+            { label: 'Glossary', slug: 'concepts/glossary' },
+            { label: 'How cairn compares', slug: 'compare' },
           ],
         },
         {
           label: 'Guides',
           items: [
+            { label: 'Fine-tune a model on a GPU box', slug: 'guides/fine-tune-a-model' },
             { label: 'Run your first pipeline', slug: 'guides/first-pipeline' },
             { label: 'Write a pipeline', slug: 'guides/write-a-pipeline' },
             { label: 'Write a flow', slug: 'guides/write-a-flow' },
+            { label: 'Gate CI on a check', slug: 'guides/gate-ci' },
             { label: 'Connect a provider', slug: 'guides/connect-a-provider' },
             { label: 'Set up your team', slug: 'guides/team' },
           ],

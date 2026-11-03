@@ -63,7 +63,7 @@ def cmd(
         console.print(
             f"[yellow]Archived[/] demo workspace [b]{workspace}[/] "
             f"({n} workflow record(s) deactivated). Runs and audit are preserved; "
-            f"re-run [b]cairn demo[/] to restore."
+            f"re-run [b]cairn admin demo[/] to restore."
         )
         return
 
@@ -74,13 +74,13 @@ def cmd(
         console.print(f"      [dim]-[/] {ref}")
     console.print(f"  • pipelines         : {len(result.pipelines)} ({len(result.completed_runs)} leg runs)")
     console.print(f"  • waiting on a human: {', '.join(result.pending_gates) or 'none'}")
-    console.print(f"  • seed providers    : {', '.join(result.providers) or 'none installed (see cairn doctor)'}")
+    console.print(f"  • seed providers    : {', '.join(result.providers) or 'none installed (see cairn setup --check)'}")
     for why in result.skipped:
         console.print(f"      [yellow]skipped[/] {why}")
     console.print(
         f"\nThe data is in workspace [b]{result.workspace_id}[/], not the default one "
-        f"that [b]cairn remote[/] reads: send the header [b]X-Cairn-Workspace: "
+        f"that [b]cairn status[/] reads: send the header [b]X-Cairn-Workspace: "
         f"{result.workspace_id}[/] to the HTTP API (a console, where one is installed, "
         f"switches workspace in its header). Re-run this command any time — it is "
-        f"idempotent. Tear it down with [b]cairn demo --archive[/]."
+        f"idempotent. Tear it down with [b]cairn admin demo --archive[/]."
     )

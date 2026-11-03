@@ -438,10 +438,10 @@ async def test_restart_adopts_in_flight_pipeline(monkeypatch):
         bridge.stop()
 
 
-# ── ADR-0069 Phase 4 Slice ④: run_bundle dispatches to Temporal ─────────────
+# ── ADR-0069 Phase 4 Slice ④: start_pipeline dispatches to Temporal ─────────
 
 
-async def test_run_bundle_dispatches_to_temporal_workflow(monkeypatch):
+async def test_start_pipeline_under_temporal_dispatches_to_workflow(monkeypatch):
     from cairn.core.engine.bundle_pipeline import PipelinePlan, PipelinePlanStep
 
     monkeypatch.setattr("cairn.core.settings.runtime", lambda: "temporal")

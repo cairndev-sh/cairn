@@ -34,6 +34,8 @@ _SURFACE: dict[str, tuple[str, str]] = {
     # contract test went red on main until the next PR's review caught it.
     "run_findings": ("get", "/runs/{run_id}/findings"),
     "pipeline_findings": ("get", "/pipelines/{pipeline_id}/findings"),
+    "stored_triggers": ("get", "/triggers/stored"),
+    "set_trigger_enabled": ("patch", "/triggers/stored/{trigger_id}"),
     "pending_approval": ("get", "/runs/{run_id}/pending-approval"),
     "trigger_manual": ("post", "/triggers/manual"),
     "packs": ("get", "/packs"),
@@ -52,6 +54,8 @@ _SURFACE: dict[str, tuple[str, str]] = {
     "cancel_pipeline": ("post", "/pipelines/{pipeline_id}/cancel"),
     "advance_step": ("post", "/pipelines/{pipeline_id}/steps/{step_id}/advance"),
     "approve_step": ("post", "/pipelines/{pipeline_id}/steps/{step_id}/approve"),
+    # ADR-0156 D4 — an attributable "no" at a pipeline gate
+    "reject_step": ("post", "/pipelines/{pipeline_id}/steps/{step_id}/reject"),
     "ask": ("post", "/ask"),  # platform-only: the public server has no /ask (ADR-0123 D1)
     "installed_workflows": ("get", "/registry/installed-workflows"),
     # #1629 (ADR-0095) — production signal capture. `capture_trace` and
@@ -279,6 +283,15 @@ class CairnClient:
     def pipeline(self, pipeline_id: str) -> dict:
         return self.request("get", f"/pipelines/{pipeline_id}")
 
+    # ── stored triggers (ADR-0160) ───────────────────────────────────────
+    def stored_triggers(self) -> dict:
+        """GET /triggers/stored — this workspace's trigger-store rows and their switch."""
+        return self.request("get", "/triggers/stored")
+
+    def set_trigger_enabled(self, trigger_id: str, enabled: bool) -> dict:
+        """PATCH /triggers/stored/{id} — enable or pause one trigger-store row."""
+        return self.request("patch", f"/triggers/stored/{trigger_id}", json={"enabled": enabled})
+
     def pipeline_findings(self, pipeline_id: str) -> dict:
         """GET /pipelines/{id}/findings — every non-pending step's findings,
         readable mid-run (#1790)."""
@@ -342,6 +355,17 @@ class CairnClient:
     ) -> dict:
         body = {"approver": approver} if approver else {}
         return self.request("post", f"/pipelines/{pipeline_id}/steps/{step_id}/approve", json=body)
+
+    def reject_step(
+        self, pipeline_id: str, step_id: str, *, reason: str, approver: Optional[str] = None
+    ) -> dict:
+        """Reject a pipeline gate (ADR-0156): the pipeline ends failed with the step's
+        verdict ``rejected``. ``reason`` is required; under auth the server records the
+        token's identity and ignores ``approver``."""
+        body: dict[str, Any] = {"reason": reason}
+        if approver:
+            body["approver"] = approver
+        return self.request("post", f"/pipelines/{pipeline_id}/steps/{step_id}/reject", json=body)
 
 
     # ── ask ──────────────────────────────────────────────────────────────
@@ -562,6 +586,15 @@ class AsyncCairnClient:
     async def pipeline(self, pipeline_id: str) -> dict:
         return await self.request("get", f"/pipelines/{pipeline_id}")
 
+    # ── stored triggers (ADR-0160) ───────────────────────────────────────
+    async def stored_triggers(self) -> dict:
+        """GET /triggers/stored — see the sync twin."""
+        return await self.request("get", "/triggers/stored")
+
+    async def set_trigger_enabled(self, trigger_id: str, enabled: bool) -> dict:
+        """PATCH /triggers/stored/{id} — see the sync twin."""
+        return await self.request("patch", f"/triggers/stored/{trigger_id}", json={"enabled": enabled})
+
     async def pipeline_findings(self, pipeline_id: str) -> dict:
         """GET /pipelines/{id}/findings — every non-pending step's findings,
         readable mid-run (#1790)."""
@@ -626,6 +659,17 @@ class AsyncCairnClient:
         body = {"approver": approver} if approver else {}
         return await self.request(
             "post", f"/pipelines/{pipeline_id}/steps/{step_id}/approve", json=body
+        )
+
+    async def reject_step(
+        self, pipeline_id: str, step_id: str, *, reason: str, approver: Optional[str] = None
+    ) -> dict:
+        """See :meth:`CairnClient.reject_step`."""
+        body: dict[str, Any] = {"reason": reason}
+        if approver:
+            body["approver"] = approver
+        return await self.request(
+            "post", f"/pipelines/{pipeline_id}/steps/{step_id}/reject", json=body
         )
 
 

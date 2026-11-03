@@ -22,6 +22,7 @@ from time import time
 from typing import Iterator
 
 _cur: ContextVar["RequestCtx | None"] = ContextVar("obs_ctx", default=None)
+_cost_parents: ContextVar[tuple["RequestCtx", ...]] = ContextVar("obs_cost_parents", default=())
 
 
 @dataclass
@@ -47,6 +48,9 @@ class RequestCtx:
     # runner's per-stage scope: a leg's spend is governed by its reservation and
     # spec.budget, not by the chat session backstop ``settings.max_cost_usd``).
     enforce_cap: bool = True
+    # A template run can provide a tighter cap than the process-wide setting.
+    # Durable runtimes inherit this field when their task context is copied.
+    max_cost_usd: float | None = None
     # ── #476 capture additions (node level) ───────────────────────────
     # Per-node retry counts are NOT surfaced here: retries are owned by
     # ``core/runtime/retry.py`` / the Temporal activity layer, both outside
@@ -67,6 +71,11 @@ def start(request_id: str, session_id: str, query: str) -> RequestCtx:
 def get() -> RequestCtx | None:
     """Current request ctx, or ``None`` if outside a request scope."""
     return _cur.get()
+
+
+def cost_parents() -> tuple[RequestCtx, ...]:
+    """Scopes that receive calls from the current cost meter."""
+    return _cost_parents.get()
 
 
 def record_mcp(
@@ -178,7 +187,13 @@ def finish(answer: str) -> None:
 
 
 @contextmanager
-def cost_scope(label: str = "investigation", *, enforce_cap: bool = True) -> Iterator["RequestCtx"]:
+def cost_scope(
+    label: str = "investigation",
+    *,
+    enforce_cap: bool = True,
+    max_cost_usd: float | None = None,
+    propagate_cost: bool = False,
+) -> Iterator["RequestCtx"]:
     """Open a lightweight obs scope for cost accumulation only.
 
     Unlike ``start``/``finish`` (the full ``/ask`` request lifecycle), this does
@@ -190,12 +205,23 @@ def cost_scope(label: str = "investigation", *, enforce_cap: bool = True) -> Ite
 
     Nests safely: the prior ctx (if any) is reset on exit via the ContextVar token.
 
-    ``enforce_cap=False`` (#1441) records every call but never raises the
-    ``max_cost_usd`` backstop -- the dataflow runner's per-stage metering scope.
+    ``enforce_cap=False`` (#1441) records every call but never raises a cap. A
+    ``max_cost_usd`` can tighten the process-wide backstop. When requested,
+    calls also accrue to the enclosing scope and enforce its cap immediately.
     """
-    ctx = RequestCtx(request_id=label, session_id=label, query="", enforce_cap=enforce_cap)
+    ctx = RequestCtx(
+        request_id=label,
+        session_id=label,
+        query="",
+        enforce_cap=enforce_cap,
+        max_cost_usd=max_cost_usd,
+    )
+    parent = _cur.get()
+    parents = (parent, *_cost_parents.get()) if propagate_cost and parent is not None else ()
+    parent_token = _cost_parents.set(parents)
     token = _cur.set(ctx)
     try:
         yield ctx
     finally:
         _cur.reset(token)
+        _cost_parents.reset(parent_token)

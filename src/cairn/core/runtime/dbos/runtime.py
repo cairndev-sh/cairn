@@ -135,6 +135,7 @@ class DBOSRuntime:
 
         from cairn.core.runtime.dbos.registry import register  # noqa: PLC0415
         from cairn.core.runtime.dbos.workflow import run_template  # noqa: PLC0415
+        from cairn.core import obs  # noqa: PLC0415
 
         ensure_launched()
         sha = template_sha or ""
@@ -155,8 +156,10 @@ class DBOSRuntime:
         # ``launch()`` to recover — the same path DBOS itself uses for recovered
         # workflows, which is why SIGKILL-recovered runs survived all along.
         with SetWorkflowID(rid):
+            ctx = obs.get()
             await DBOS.start_workflow_async(
-                run_template, template_name, sha, dict(initial_state), rid)
+                run_template, template_name, sha, dict(initial_state), rid,
+                ctx.max_cost_usd if ctx is not None else None)
         result = await DBOS.get_result_async(rid)
         return dict(result) if isinstance(result, dict) else {"value": result}
 

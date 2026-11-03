@@ -3,7 +3,7 @@
 ## What this workflow does
 `examples/hello-cairn` is the public core's feature proof (ADR-0127 D1). It ships four
 pipelines, one per pipeline kind a new user meets, and together they exercise every public
-feature. Each runs from the CLI or the HTTP API on the public core alone. This page traces
+feature, plus `over-budget`, which a budget refuses before its engine starts. Each runs from the CLI or the HTTP API on the public core alone. This page traces
 what each one does on its way through the engine; the shared spine is
 [pipeline.md](pipeline.md), and this page only names where the example leaves it.
 
@@ -13,9 +13,10 @@ what each one does on its way through the engine; the shared spine is
 | `ask-the-docs` | agentic | template `assistant` (RAG search → rerank → model call → MCP tool → memory write) → `monitor/threshold` → person gate `review` | LLM through `build_chat_model`, MCP, RAG + vector store, memory, monitor, `kind: event` trigger on `dataset.ready` |
 | `tiny-finetune` | ml | `data/profile` → data gate → flow `lora` (`train/lora` stage) → `train/eval-loss` → `monitor/threshold` → data gate `loss-ok` → `artifact/promote` → person gate → `storage/put` (model card) | ml flow kind, a real LoRA fine-tune (`train.finetune`), the `[train]` extra |
 | `nightly-ops` | flow + hooks | template `nightly-job` (secret check → SSH report) → flow `summarise` → `monitor/propose` → `audit/store` | cron `schedule` (armed when enabled), `secrets.store` on env or Infisical, `remote/exec` over SSH, run hooks (`hooks.py`), monitor propose |
+| `over-budget` | budget refusal | flow `engine-check`, refused at its reservation (`leg_executor.py`, `budget_reservations.reserve`) before the engine is handed the job | `governance.estimated_usd` above `governance.budget.usd`, `leg.budget_refused`; proved in `tests/examples/test_hello_cairn.py`, not in the feature proof |
 
 ## Trigger
-- `cairn pipeline run hello-cairn/<name> --set k=v`, or `POST /start {"ref": "hello-cairn/<name>"}`.
+- `cairn run hello-cairn/<name> --set k=v`, or `POST /start {"ref": "hello-cairn/<name>"}`.
 - Declared triggers, materialised into the existing schedule/trigger stores (ADR-0131),
   paused unless declared `enabled: true`, each starting the declaring pipeline through the
   same door:
@@ -32,7 +33,7 @@ what each one does on its way through the engine; the shared spine is
 ## Execution diagram
 ```mermaid
 flowchart TD
-  A[cairn pipeline run · POST /start · cron · watch · webhook · bus event] --> B[launch_ref / resolve_start_ref<br/>dispatch/start.py:317 / :179]
+  A[cairn run · POST /start · cron · watch · webhook · bus event] --> B[launch_ref / resolve_start_ref<br/>dispatch/start.py:317 / :179]
   B --> C[launch_pipeline<br/>dispatch/pipeline_launch.py:167]
   C --> D[plan_pipeline<br/>engine/pipeline.py:988]
   D --> E[inject_policy_gates<br/>policy/pipeline_gates.py:158]
@@ -41,7 +42,7 @@ flowchart TD
   G -->|gate| G1[data gate: predicate on a leg output<br/>person gate: _open_review :2945]
   G -->|task| G2[_submit_task_leg :1853 → _invoke_task_op :2034<br/>→ enforce_gate :2072 → invoke_operator_core<br/>operator/runtime.py:400]
   G -->|flow| G3[_submit_flow_leg :1618 → enforce_flow_gate :1787<br/>→ execute_leg dispatch/leg_executor.py:153 → builtin engine]
-  G -->|template| G4[dispatcher.run_template<br/>dispatch/dispatcher.py:726 → build_chat_model<br/>services/llm/factory.py:97]
+  G -->|template| G4[dispatcher.run_template<br/>dispatch/dispatcher.py:726 → build_chat_model<br/>services/llm/factory.py:108]
   G2 & G3 & G4 --> H[leg terminal → _advance]
   H -->|step declares emits| I[_emit_step_event :3103 → bus topic]
   I -.->|kind: event row| A
@@ -99,5 +100,5 @@ flowchart TD
   torch, so they skip there with that reason.
 - The Infisical variant of nightly-ops needs a machine identity made by hand in the
   Infisical UI; without one the env-secrets variant runs and the Infisical row is NOT PROVED.
-- Seeded demo records (`cairn dev --seed`) still write profile-and-publish's earlier step
+- Seeded demo records (`cairn setup --seed`) still write profile-and-publish's earlier step
   list (#2608).

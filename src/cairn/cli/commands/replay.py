@@ -1,29 +1,41 @@
-"""``cairn replay`` — render a past run's trace.
+"""``cairn status <run> --replay`` (``cairn replay`` is the old name) — print what a run recorded:
+its inputs, the operators it names, and its events. Nothing runs again.
 
-Two sources (``--source``, default ``auto``):
-- the on-disk ``.cairn/runs/<run_id>/{meta.json, events.jsonl}`` trace that
-  :mod:`cairn.cli.runs` writes (the original, primary path), and
-- the configured **DB run store** (sqlite/postgres) — for runs that only live
-  in the store, e.g. dispatched via the server (#76 DB-backed replay).
-``auto`` reads the local files if present, else falls back to the store.
-``--json`` dumps the raw event stream (+ the full structured result on the DB
-path) for piping into other tools.
+Sources (``--source``, default ``auto``):
+- ``file``: the on-disk ``.cairn/runs/<run_id>/{meta.json, events.jsonl}`` trace that
+  :mod:`cairn.cli.runs` writes, and
+- ``db``: the **DB run store** this process is configured for (sqlite/postgres, #76).
 
-Read-only. Replay never mutates the trace — DB replay only reads.
+``auto`` tries the local files, then the configured store, then the engine ``cairn status`` talks to
+(#369: a run on ``cairn dev`` lives in the engine's store, which this process doesn't name). When a
+loopback engine doesn't answer it reads the local dev store itself, and says so. A dead engine
+elsewhere fails: local data never stands in for it. ``--endpoint`` asks that engine first and only.
+
+It never boots the ephemeral engine the other ``status`` forms use: an engine re-adopts interrupted
+work at boot, and this command runs nothing.
+
+``--json`` dumps the raw form for piping into other tools. Read-only.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import ipaddress
 import json as _json
 import sys
-from typing import Optional
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, Optional
+from urllib.parse import urlsplit
 
 import typer
 
+from cairn.cli.commands import remote
+from cairn.cli.commands.dev import dev_env
 from cairn.cli.runs import read_events, read_meta, resolve_run_dir
 from cairn.cli.runs.reader import run_dir_exists
+from cairn.core.settings import redacted_url
 
 
 # ─── rendering ──────────────────────────────────────────────────────
@@ -76,11 +88,41 @@ def _summarize_event(type: str, data: dict) -> str:
     return f"{type} {blob}"
 
 
+def _operators(record: dict, events: list[dict]) -> list[str]:
+    """The operators a run's record names, in order. A task leg's ref is its operator; a template's
+    runtime writes one per node in its `parameters` events; `resolved_operators` is the record's own
+    field. A flow leg's ref names the flow, and its stages' operators aren't on the record."""
+    named = [str(o.get("operator")) for o in record.get("resolved_operators") or [] if o.get("operator")]
+    ref = str(record.get("template_ref") or "")
+    if ref.startswith("task:"):
+        named.append(ref.removeprefix("task:"))
+    for ev in events:
+        op = str((ev.get("data") or {}).get("operator") or "") if ev.get("type") == "parameters" else ""
+        if op and not op.startswith("flow:"):
+            named.append(op)
+    return list(dict.fromkeys(named))
+
+
+def _render_inputs(inputs: Any) -> list[str]:
+    if not inputs:
+        return ["  inputs:      (none recorded)"]
+    lines = ["  inputs:"]
+    for key, value in inputs.items():
+        blob = value if isinstance(value, str) else _json.dumps(value, default=str)
+        lines.append(f"    {key} = {blob if len(blob) <= 200 else blob[:197] + '...'}")
+    return lines
+
+
 def _render_text(run_id: str, meta: dict, events: list) -> str:
     lines: list[str] = []
     lines.append(f"run {run_id}")
     lines.append(f"  status:      {meta.get('status','?')}")
     lines.append(f"  environment: {meta.get('environment','?')}")
+    if meta.get("template_ref"):
+        lines.append(f"  ran:         {meta['template_ref']}")
+    if "operators" in meta:  # a local file trace has neither this nor inputs
+        lines.append(f"  operators:   {', '.join(meta['operators']) or '(none recorded)'}")
+        lines.extend(_render_inputs(meta.get("inputs")))
     trig = meta.get("trigger") or {}
     lines.append(
         f"  trigger:     source={trig.get('source','?')} "
@@ -104,25 +146,11 @@ def _render_text(run_id: str, meta: dict, events: list) -> str:
 # ─── shared impl ────────────────────────────────────────────────────
 
 
-def _run_from_db(run_id: str, *, json: bool) -> int:
-    """Render a run's trace from the configured DB run store (#76 DB replay).
-
-    Additive to the local-file path: lets ``cairn replay`` reach runs that only
-    live in the store (e.g. dispatched via the server) when ``CAIRN_STORAGE`` /
-    ``CAIRN_RUN_DB`` points at sqlite/postgres. The in-memory store (nothing
-    configured) has no durable trace to read.
-    """
-    # Deferred import: keep the storage/DB stack (asyncpg etc.) off the hot path
-    # of every `cairn` invocation (Rule 4 — measured CLI-startup deferral).
-    from cairn.core.storage import default_store
-
-    store = default_store()
-
+def _read_store(store: Any, run_id: str) -> Optional[tuple[dict, list[dict]]]:
+    """A run's record and events from a store, in the shape the engine's API returns them."""
     async def _read():
         run = await store.get(run_id)
-        if run is None:
-            return None, []
-        return run, await store.get_events(run_id)
+        return run, (await store.get_events(run_id) if run is not None else [])
 
     try:
         run, events = asyncio.run(_read())
@@ -130,44 +158,136 @@ def _run_from_db(run_id: str, *, json: bool) -> int:
         close = getattr(store, "close", None)
         if callable(close):
             close()
-
     if run is None:
-        print(f"no such run in the DB store: {run_id}", file=sys.stderr)
-        print("  (point CAIRN_STORAGE / CAIRN_RUN_DB at the store the run was "
-              "written to)", file=sys.stderr)
-        print(f"  a run on a server: cairn remote status {run_id}  ·  "
-              f"cairn remote logs {run_id}", file=sys.stderr)
-        return 1
+        return None
+    return run.model_dump(mode="json"), [e.model_dump(mode="json") for e in events]
 
+
+def _read_configured_store(run_id: str) -> Optional[tuple[dict, list[dict]]]:
+    # Deferred import: keep the storage/DB stack (asyncpg etc.) off the hot path
+    # of every `cairn` invocation (Rule 4 — measured CLI-startup deferral).
+    from cairn.core.storage import default_store
+
+    return _read_store(default_store(), run_id)
+
+
+def _print_record(run_id: str, record: dict, events: list[dict], *, json: bool, source: str) -> int:
     meta = {
-        "status": run.status,
-        "environment": "?",  # not recorded on the Run record (DB tier)
-        "trigger": run.trigger.model_dump(mode="json") if run.trigger else {},
-        "matched_skills": run.matched_skills,
-        "error": run.error,
+        "source": source,
+        "status": record.get("status"),
+        "environment": record.get("environment") or "?",
+        "trigger": record.get("trigger") or {},
+        "matched_skills": record.get("matched_skills"),
+        "error": record.get("error"),
+        "template_ref": record.get("template_ref"),
+        "operators": _operators(record, events),
+        "inputs": record.get("inputs"),
     }
+    results = record.get("result_payloads")
     if json:
-        payload = {
+        print(_json.dumps({
             "meta": meta,
-            "events": [{"ts": e.ts, "type": e.type, "data": e.data} for e in events],
-            "result_payloads": run.result_payloads,  # full structured result(s) (#76)
-        }
-        print(_json.dumps(payload, indent=2, default=str))
+            "events": [{"ts": e.get("ts"), "type": e.get("type"), "data": e.get("data")} for e in events],
+            "result_payloads": results,  # full structured result(s) (#76)
+        }, indent=2, default=str))
     else:
-        print(_render_text(run_id, meta, events))
-        if run.result_payloads:
-            print(f"result: {len(run.result_payloads)} structured result(s) "
+        print(_render_text(run_id, meta, [SimpleNamespace(ts=str(e.get("ts")), type=str(e.get("type")),
+                                                          data=e.get("data") or {}) for e in events]))
+        if results:
+            print(f"result: {len(results)} structured result(s) "
                   f"recorded (see --json or GET /runs/{run_id})")
     return 0
 
 
-def _run(run_id: str, *, json: bool, source: str = "auto") -> int:
-    """Dispatch to the file-based or DB-based replay.
+def _run_from_db(run_id: str, *, json: bool) -> int:
+    """Render a run from the configured DB run store (#76). The in-memory store (nothing configured)
+    has no durable trace to read."""
+    found = _read_configured_store(run_id)
+    if found is None:
+        print(f"no such run in the DB store: {run_id}", file=sys.stderr)
+        print("  (CAIRN_STORAGE / CAIRN_RUN_DB name this store. Without --source db, "
+              "the engine is asked too)", file=sys.stderr)
+        return 1
+    return _print_record(run_id, *found, json=json, source="db")
 
-    - ``auto`` (default): local trace files if present, else the DB store.
+
+def _is_loopback(endpoint: str) -> bool:
+    try:
+        host = urlsplit(endpoint).hostname or ""
+        return host == "localhost" or ipaddress.ip_address(host).is_loopback
+    except ValueError:  # a malformed URL, or a host that isn't an address
+        return False
+
+
+def _note(message: str) -> None:
+    print(message, file=sys.stderr)
+
+
+def _read_engine(run_id: str, ep: str, tok: Optional[str], *, json: bool) -> int:
+    with remote._api(ep, tok) as c:
+        record = remote._call(c.run, run_id) or {}
+        events = (remote._call(c.run_events, run_id) or {}).get("events", [])
+    _note(f"read from the engine at {redacted_url(ep)}")
+    return _print_record(run_id, record, events, json=json, source="engine")
+
+
+def _run_named_engine(run_id: str, *, json: bool, endpoint: str, token: Optional[str],
+                      profile: Optional[str]) -> int:
+    """``--endpoint``: that engine or nothing, loopback included. Naming it means that one."""
+    ep, tok = remote._resolve(endpoint, token, profile)
+    if not remote._reachable(ep):
+        _note(f"no engine answers at {redacted_url(ep)}")
+        return 1
+    return _read_engine(run_id, ep, tok, json=json)
+
+
+def _run_anywhere(run_id: str, *, json: bool, token: Optional[str], profile: Optional[str]) -> int:
+    """No local trace: the configured store, then the engine, then the local dev store (#369).
+
+    Only a loopback engine's silence reaches the dev store: an engine elsewhere that is down fails
+    loudly (the rule above ``remote._explicit_endpoint``, which can't decide this one, since it is
+    also true of the local endpoint ``cairn setup --server`` saved in the profile)."""
+    found = _read_configured_store(run_id)
+    if found is not None:
+        _note("read from the configured store (CAIRN_STORAGE / CAIRN_RUN_DB)")  # never the DSN: it can hold a password
+        return _print_record(run_id, *found, json=json, source="db")
+    ep, tok = remote._resolve(None, token, profile)
+    if remote._reachable(ep):
+        return _read_engine(run_id, ep, tok, json=json)
+    if not _is_loopback(ep):
+        _note(f"no engine answers at {redacted_url(ep)}")
+        return 1
+    db = Path(dev_env(0)["CAIRN_STORAGE"].removeprefix("sqlite:///"))
+    if db.exists():
+        from cairn.core.storage import SqliteRunStore  # noqa: PLC0415 — as in _read_configured_store
+
+        found = _read_store(SqliteRunStore(str(db)), run_id)
+    if found is None:
+        _note(f"no such run: {run_id}")
+        _note(f"  no engine answers at {redacted_url(ep)}, and the local store {db} doesn't have it")
+        _note("  start the engine it ran on: cairn setup")
+        return 1
+    _note(f"no engine answers at {redacted_url(ep)}; read from the local store {db}")
+    return _print_record(run_id, *found, json=json, source="dev-db")
+
+
+def _run(run_id: str, *, json: bool, source: str = "auto", endpoint: Optional[str] = None,
+         token: Optional[str] = None, profile: Optional[str] = None) -> int:
+    """Dispatch on ``source``.
+
+    - ``auto`` (default): ``endpoint`` when one is named, else local trace files if present, else
+      :func:`_run_anywhere`.
     - ``file``: only the on-disk ``.cairn/runs/<id>/`` trace (original).
     - ``db``: only the configured run store.
     """
+    if run_id.startswith("pl_"):  # the store's id prefix for a pipeline
+        _note(f"--replay takes a run, and {run_id} is a pipeline. Its runs: cairn status {run_id} --logs")
+        return 1
+    if endpoint and source != "auto":
+        _note(f"--endpoint reads that engine, and --source {source} would ignore it. Use one of them.")
+        return 1
+    if endpoint:
+        return _run_named_engine(run_id, json=json, endpoint=endpoint, token=token, profile=profile)
     if source == "db":
         return _run_from_db(run_id, json=json)
 
@@ -176,11 +296,13 @@ def _run(run_id: str, *, json: bool, source: str = "auto") -> int:
         print(f"no such run: {run_id}", file=sys.stderr)
         print(f"  (looked in: {resolve_run_dir(run_id)})", file=sys.stderr)
         return 1
-    if not have_files:  # source == "auto", no local trace → try the DB store
-        return _run_from_db(run_id, json=json)
+    if not have_files:
+        return _run_anywhere(run_id, json=json, token=token, profile=profile)
 
-    meta = read_meta(run_id) or {}
+    meta = {**(read_meta(run_id) or {}), "source": "file"}
     events = list(read_events(run_id))
+    if source == "auto":
+        _note(f"read from the local trace {resolve_run_dir(run_id)}")
     if json:
         payload = {
             "meta": meta,
@@ -203,17 +325,17 @@ def cmd(
     ),
     source: str = typer.Option(
         "auto", "--source",
-        help="Trace source: auto (local files, else DB store) | file | db.",
+        help="Where to read it: auto (local files, the configured store, the engine, then the local dev store) | file | db.",
     ),
 ) -> None:
-    """Replay a past run by rendering its persisted event trace (local files or DB store)."""
+    """Print what a past run recorded: its inputs, operators and events. Nothing runs again."""
     raise typer.Exit(code=_run(run_id, json=json, source=source))
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="cairn replay",
-        description="Replay a past run by rendering its persisted event trace.",
+        prog="cairn status --replay",
+        description="Print what a past run recorded: its inputs, operators and events. Nothing runs again.",
     )
     parser.add_argument("run_id")
     parser.add_argument("--json", action="store_true")

@@ -1,9 +1,10 @@
-# cairn gate in GitHub Actions (#990, ADR-0076 D2).
+# cairn run --check in GitHub Actions.
 #
-# Blocks a PR when the training dataset fails cairn's readiness gate, and posts
-# the cited findings as a PR comment. No cairn server, no separate Action — just
-# `pip install cairndev && cairn gate …`. Copy this into .github/workflows/.
-name: cairn gate
+# Blocks a PR when the training dataset fails a read-only check, and posts the
+# findings as a PR comment. No cairn server, no separate Action, just
+# `pip install cairndev && cairn run --check …`. Copy this into .github/workflows/, and
+# copy templates/dataset-check.md to templates/ at the root of your repository.
+name: cairn run --check
 
 on:
   pull_request:
@@ -21,17 +22,15 @@ jobs:
         with:
           python-version: '3.12'
 
-      # `[pii]` pulls in Presidio for real PII detection; drop it for the
-      # zero-dependency regex fallback (faster, coarser).
-      - run: pip install "cairndev[pii]"
+      - run: pip install cairndev
 
       # Run the read-only gate. It exits non-zero on FAIL — captured, not fatal
       # yet, so the comment step still runs. The final step re-raises it.
-      - name: cairn gate — dataset readiness
+      - name: cairn run --check — dataset check
         id: gate
         run: |
           set +e
-          cairn gate dataset-readiness/check \
+          cairn run --check dataset-check \
             --set path=data/train.jsonl \
             --json > gate.json
           echo "rc=$?" >> "$GITHUB_OUTPUT"
@@ -44,10 +43,10 @@ jobs:
         run: |
           verdict=$(jq -r '.verdict // "error"' gate.json)
           {
-            echo "### cairn gate — \`${verdict}\`  ·  \`dataset-readiness/check\`"
+            echo "### cairn run --check — \`${verdict}\`  ·  \`dataset-check\`"
             echo
             echo '```json'
-            jq '{verdict, blocking, warnings, reasons}' gate.json
+            jq '{verdict, blocking, warnings, reasons, error}' gate.json
             echo '```'
           } > body.md
           gh pr comment "${{ github.event.pull_request.number }}" --body-file body.md

@@ -1,29 +1,28 @@
-# cairn gate in GitLab CI (#990, ADR-0076 D2).
+# cairn run --check in GitLab CI.
 #
-# Blocks a merge request when the training dataset fails cairn's readiness gate,
-# and posts the cited findings as an MR note. No cairn server needed. Copy the
-# job into your .gitlab-ci.yml.
+# Blocks a merge request when the training dataset fails a read-only check, and
+# posts the findings as an MR note. No cairn server needed. Copy the job into your
+# .gitlab-ci.yml, and copy templates/dataset-check.md to templates/ at the root of
+# your repository.
 dataset-gate:
   image: python:3.12
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       changes: ['data/**/*']       # only when the dataset changes (tune to your repo)
   script:
-    # `[pii]` pulls in Presidio for real PII detection; drop it for the
-    # zero-dependency regex fallback.
-    - pip install "cairndev[pii]"
+    - pip install cairndev
     # Run the read-only gate; keep its exit code, always keep the report.
     - set +e
-    - cairn gate dataset-readiness/check --set path=data/train.jsonl --json > gate.json
+    - cairn run --check dataset-check --set path=data/train.jsonl --json > gate.json
     - rc=$?
     - cat gate.json
     # Post the cited findings as an MR note (needs a CI_JOB_TOKEN / PAT with api scope).
     - |
       if [ -n "$GITLAB_API_TOKEN" ] && [ -n "$CI_MERGE_REQUEST_IID" ]; then
-        body="$(jq -c '{verdict, blocking, warnings, reasons}' gate.json)"
+        body="$(jq -c '{verdict, blocking, warnings, reasons, error}' gate.json)"
         curl -sf --request POST \
           --header "PRIVATE-TOKEN: $GITLAB_API_TOKEN" \
-          --data-urlencode "body=### cairn gate — \`$(jq -r .verdict gate.json)\`
+          --data-urlencode "body=### cairn run --check — \`$(jq -r .verdict gate.json)\`
       \`\`\`json
       ${body}
       \`\`\`" \

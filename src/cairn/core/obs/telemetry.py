@@ -14,6 +14,8 @@ Spans emitted:
 - agent.<name>.<node> — each graph node
 - llm.complete — every LLM call (model, tokens, latency, cost)
 - mcp.<server>.<tool> — every MCP tool call
+- cairn.pipeline / cairn.flow_leg / cairn.flow_stage / cairn.gate /
+  cairn.pipeline.settle — one pipeline run is one trace (#222; docs/observability.md)
 """
 from __future__ import annotations
 from cairn.core.settings import getenv
@@ -79,7 +81,14 @@ def init_tracing(service_name: str | None = None) -> None:
     provider = TracerProvider(resource=resource)
 
     if otlp_endpoint:
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        try:
+            from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        except ImportError:
+            logger.warning(
+                "OTLP trace exporter not installed — tracing disabled; "
+                "`pip install 'cairndev[telemetry]'` to enable it"
+            )
+            return
         provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=f"{otlp_endpoint}/v1/traces")))
 
     if console_export:
@@ -184,14 +193,92 @@ def set_span_attr_mirrored(s: Any, key: str, value: Any, *, openinference_key: s
         s.set_attribute(openinference_key, v)
 
 
+def _to_ns(t: Any) -> Optional[int]:
+    """A ``datetime`` / ISO-8601 string / ns int as OTel nanoseconds; ``None`` when unreadable."""
+    try:
+        if isinstance(t, (int, float)):
+            return int(t)
+        from datetime import datetime, timezone  # noqa: PLC0415
+        dt = t if isinstance(t, datetime) else datetime.fromisoformat(str(t))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp() * 1_000_000_000)
+    except Exception:  # noqa: BLE001 — a bad timestamp degrades to "now", never fails a run
+        return None
+
+
+def _context_of(parent: Any) -> Any:
+    """An OTel ``Context`` from a stored W3C carrier (``{"traceparent": ...}``) or a bare
+    ``traceparent`` string; ``None`` when there is nothing usable. The W3C propagator is
+    named explicitly, so ``OTEL_PROPAGATORS`` cannot change what a stored context means."""
+    if not parent:
+        return None
+    try:
+        from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator  # noqa: PLC0415
+        carrier = {"traceparent": parent} if isinstance(parent, str) else dict(parent)
+        return TraceContextTextMapPropagator().extract(carrier)
+    except Exception:  # noqa: BLE001 — telemetry must never break a run
+        return None
+
+
+def trace_carrier() -> dict[str, str]:
+    """The current span's W3C trace context (``{"traceparent": "00-<trace>-<span>-<flags>"}``),
+    or ``{}`` when tracing is off / no recording span is active. This is what a
+    ``PipelineRecord`` stores so a later request, another process or a remote job can
+    start spans as children of this one (#222). Never raises."""
+    if _tracer is None:
+        return {}
+    try:
+        from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator  # noqa: PLC0415
+        carrier: dict[str, str] = {}
+        TraceContextTextMapPropagator().inject(carrier)
+        return carrier
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def current_traceparent() -> str:
+    """The current span as a ``traceparent`` header value, ``""`` when none (#222)."""
+    return trace_carrier().get("traceparent", "")
+
+
 @contextmanager
-def span(name: str, attributes: dict[str, Any] | None = None):
-    """Start a span. No-op if tracing isn't initialized."""
+def use_parent(parent: Any):
+    """Make a stored trace context the AMBIENT parent for the block, without opening a
+    span: every ``span()`` (and every task created inside) nests under it. No-op when
+    tracing is off or ``parent`` is empty (#222)."""
+    ctx = _context_of(parent) if _tracer is not None else None
+    if ctx is None:
+        yield
+        return
+    from opentelemetry import context as otel_context  # noqa: PLC0415
+    token = otel_context.attach(ctx)
+    try:
+        yield
+    finally:
+        otel_context.detach(token)
+
+
+@contextmanager
+def span(name: str, attributes: dict[str, Any] | None = None, *,
+         parent: Any = None, start_time: Any = None):
+    """Start a span. No-op if tracing isn't initialized.
+
+    ``parent`` (#222) is a stored W3C context (:func:`trace_carrier`'s dict, or a
+    ``traceparent`` string): the span starts as its child instead of nesting under
+    whatever span is current. ``start_time`` (datetime / ISO string) back-dates the
+    span — a gate span starts when the pause began and ends at the decision."""
     if _tracer is None:
         yield None
         return
 
-    with _tracer.start_as_current_span(name) as s:
+    kwargs: dict[str, Any] = {}
+    ctx = _context_of(parent)
+    if ctx is not None:
+        kwargs["context"] = ctx
+    if start_time is not None and (ns := _to_ns(start_time)) is not None:
+        kwargs["start_time"] = ns
+    with _tracer.start_as_current_span(name, **kwargs) as s:
         if attributes:
             for k, v in attributes.items():
                 if v is not None:
@@ -203,6 +290,51 @@ def span(name: str, attributes: dict[str, Any] | None = None):
                 if v is not None:
                     s.set_attribute(k, v if isinstance(v, (str, int, float, bool)) else str(v))
         yield s
+
+
+class StageSpans:
+    """``cairn.flow_stage`` child spans for a flow leg, built from the engine's poll
+    progress (``metrics = {stage, stages_done, stages_total}``, written by the dataflow
+    runner after each stage). The runner reports a stage when it FINISHES, so a stage
+    span runs from the previous report (or the tracker's creation) to this one; its
+    resolution is the poll interval, and stages that finish between two polls collapse
+    into one span naming the latest. Parented on the span current when the tracker is
+    created (the leg's). Inert when tracing is off. Never raises (#222)."""
+
+    def __init__(self) -> None:
+        self._done = 0
+        self._last = _to_ns(_now_ns_dt())
+        self._ctx = None
+        if _tracer is not None:
+            try:
+                from opentelemetry import context as otel_context  # noqa: PLC0415
+                self._ctx = otel_context.get_current()
+            except Exception:  # noqa: BLE001
+                self._ctx = None
+
+    def observe(self, status: Any) -> None:
+        if _tracer is None:
+            return
+        try:
+            m = getattr(status, "metrics", None) or {}
+            done = int(m.get("stages_done") or 0)
+            if done <= self._done:
+                return
+            now = _to_ns(_now_ns_dt())
+            s = _tracer.start_span("cairn.flow_stage", context=self._ctx, start_time=self._last)
+            s.set_attribute("stage", str(m.get("stage") or ""))
+            s.set_attribute("stages_done", done)
+            if m.get("stages_total") is not None:
+                s.set_attribute("stages_total", int(m["stages_total"]))
+            s.end(end_time=now)
+            self._done, self._last = done, now
+        except Exception:  # noqa: BLE001 — telemetry must never break a leg
+            logger.debug("stage span failed", exc_info=True)
+
+
+def _now_ns_dt() -> Any:
+    from datetime import datetime, timezone  # noqa: PLC0415
+    return datetime.now(timezone.utc)
 
 
 def current_trace_id() -> str:

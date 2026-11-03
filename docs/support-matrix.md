@@ -33,6 +33,10 @@ the prod box with a real outcome). "Code exists" alone never earns SUPPORTED. Up
 | Metaflow (substrate; Kubernetes/Batch) | EXPERIMENTAL | INTEGRATION TESTED locally (conformance, bridge, the CORE flow through Metaflow); no cluster run |
 | SkyPilot (provisioning) | IN DEVELOPMENT | engine + door tests; no preemption recovery (#2192); no live run |
 | Provider task legs (`train/runpod\|vast\|modal\|kaggle`) | EXPERIMENTAL | mocked-transport tests; ssh is the proven path |
+| `compute/acquire` / `compute/release` (start and stop the EC2 box a `compute.ssh` connection names; public since 0.3.1) | EXPERIMENTAL | CI TESTED with a mocked EC2 client (`packages/cairn-operator-remote/tests`); no live start/stop on a public release yet (cairn-extensions#9) |
+| GPU leg pricing (`hourly_usd × timeout` estimate at the launch door, per-attempt settle; ADR-0151, ADR-0152; since 0.3.1) | EXPERIMENTAL | CI TESTED (`tests/core/test_gpu_leg_pricing.py`); no priced live run yet (cairn-extensions#9) |
+| Deployment budget default, ceiling and local rate (`[profile.budget]`; ADR-0155; since 0.3.2) | EXPERIMENTAL | CI TESTED (`tests/core/test_deployment_budget.py`) |
+| A template's `budget.max_cost_usd` and the deployment's `MAX_COST_USD` stop its model calls, and the run fails (since 0.5.0; a Temporal run fails only when it ends, not measured) | EXPERIMENTAL | CI TESTED (`tests/core/test_budget_cap_stops_a_template.py`, `tests/e2e/hello/test_budget_cap.py`) |
 
 ## Trainers and training capabilities
 | Item | Status | Evidence |
@@ -91,3 +95,19 @@ public core (the `cairndev` and `cairn-client` wheels): SUPPORTED (CI TESTED in 
 The console, its MCP surface and `cairn-sdk` are part of cairn-platform (ADR-0135). Remote deployment
 (compose, EC2 script, Helm lint): SUPPORTED for compose (PRODUCTION PROVEN); Helm chart
 IN DEVELOPMENT (ADR-0104 D4).
+The five-command CLI (since 0.4.0, ADR-0165): `cairn setup`, `run`, `status`, `decide`, `pack` and `admin`. The old names were removed in 0.5.0, and typing one says the new name: EXPERIMENTAL (CI TESTED in `tests/cli/test_cairn_setup.py`, `test_cairn_run.py`, `test_status_decide.py` and the surface test; driven by hand against a local engine, no production run yet). A background `cairn setup` engine is for one machine, with a fixed login: it is not a deployment.
+
+A pipeline started by another (since 0.3.3): a pipeline's `outputs:` resolved when it ends `done`
+and published on its `emits:` topic (ADR-0161), a `kind: event` trigger that starts a pipeline on it
+and records the publisher on its `trigger`, and the switch that turns a declared trigger on or off
+(`cairn admin trigger ls` / `enable` / `disable`, ADR-0160): EXPERIMENTAL (CI TESTED in
+`test_pipeline_outputs_emit.py`, `test_event_trigger_publisher.py`, `test_stored_trigger_switch.py`;
+no production run yet). A pipeline cancel that stops its running task legs before the teardown
+(ADR-0159): EXPERIMENTAL (CI TESTED in `test_pipeline_cancel_task_leg.py` and the `cairn-operator-remote`
+lifecycle tests with a fake EC2 client).
+
+A pipeline run's governance trail (since 0.3.2): its decisions and spend in the hash-chained audit
+log, `cairn admin audit verify`, an attributed gate reject (`POST /pipelines/{id}/steps/{step}/reject`,
+`cairn decide <pipeline> reject --step <step>`) and one OpenTelemetry trace per run: EXPERIMENTAL (CI TESTED in
+`test_pipeline_audit_trail.py`, `test_audit_chain_writers.py`, `test_pipeline_reject.py`,
+`test_pipeline_trace.py`).

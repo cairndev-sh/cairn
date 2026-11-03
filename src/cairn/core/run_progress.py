@@ -31,7 +31,7 @@ def _trace_from_events(events: list[dict]) -> list[dict]:
         data = e.get("data") or {}
         steps.append({
             "step": data.get("node", "step"),
-            "status": "ok",
+            "status": data.get("state") if data.get("state") in ("failed", "interrupted") else "ok",
             "ms": round(ms) if ms is not None else None,
             # what the node produced this step (bounded at capture; #172). Absent
             # for older runs whose node events predate output capture.

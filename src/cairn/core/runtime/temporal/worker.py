@@ -163,9 +163,37 @@ def _wrap_node_for_events(runnable: Any, node_name: str) -> None:
 
     @functools.wraps(orig)
     async def _emitting(*args: Any, **kwargs: Any) -> Any:
-        out = await orig(*args, **kwargs)
+        from cairn.core import obs  # noqa: PLC0415 — worker node-local accounting
+
+        cost_ctx: obs.RequestCtx | None = None
         try:
-            await _record_node_event(node_name, out if isinstance(out, dict) else {})
+            # A node-local cap would be paid again on every Temporal retry.
+            # Meter here and let the run-level accounting decide the outcome.
+            with obs.cost_scope(
+                f"temporal-node-{node_name}", enforce_cap=False
+            ) as cost_ctx:
+                out = await orig(*args, **kwargs)
+        except BaseException:
+            # Preserve spend from an attempt that raised. The failed event is
+            # still a cost record, but is not presented as a completed node.
+            if cost_ctx is not None:
+                try:
+                    await _record_node_event(
+                        node_name,
+                        {},
+                        llm_cost_usd=cost_ctx.cost_usd,
+                        state="failed",
+                    )
+                except BaseException:  # noqa: BLE001 — accounting never masks node failure
+                    pass
+            raise
+        try:
+            assert cost_ctx is not None
+            await _record_node_event(
+                node_name,
+                out if isinstance(out, dict) else {},
+                llm_cost_usd=cost_ctx.cost_usd,
+            )
         except Exception:  # noqa: BLE001 — a node's real work already succeeded
             pass
         return out

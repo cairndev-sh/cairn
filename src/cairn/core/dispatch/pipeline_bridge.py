@@ -55,8 +55,9 @@ from cairn.core.dispatch.leg_executor import (
     recorded_stage_contracts,
 )
 from cairn.core.dispatch.leg_hooks import (
-    FlowLegHooks, compute_target_for_kind, estimate_evidence, flow_leg_record, leg_price_kwargs,
-    pipeline_spent_usd,
+    FlowLegHooks, audit_bound, audit_flow_leg_finished, audit_leg_finished, audit_leg_submitted,
+    audit_pipeline_event, budget_cap_usd, compute_target_for_kind, emit_pipeline_outputs, estimate_evidence,
+    flow_leg_record, leg_price_kwargs, pipeline_spent_usd, resolve_pipeline_outputs,
 )
 from cairn.core.dispatch.pipeline_resume import plan_resume
 from cairn.core.dispatch.target_concurrency import in_flight_on_target, target_cap
@@ -71,6 +72,10 @@ from cairn.core.gate_notify import (
     release_commands,
 )
 from cairn.core.notifier import NotifyEvent
+# #222 — one pipeline, one trace: the root span's W3C context is stored on the record.
+from cairn.core.obs.telemetry import (
+    current_trace_id, span, trace_carrier, tracing_active, use_parent,
+)
 # ADR-0125 — the owner lock (D2) and the owner verdict (D3). Core → core; neither
 # imports dispatch, so this is not a cycle.
 from cairn.core import liveness
@@ -80,6 +85,7 @@ from cairn.core.storage.pipeline_store import (
     PipelineRecord,
     StepState,
     default_pipeline_store,
+    new_pipeline_id,
 )
 from cairn.core.storage.protocols import ACTIVE_STATUSES, PIPELINE_ID_KEY, SCAN_COUNT_LIMIT
 # The gate signal both leg kinds raise (#1759/#1760). Top-level: `approval`
@@ -357,6 +363,97 @@ def _in_record_workspace(method):
     return wrapper
 
 
+def _launch_root(plan: Any, *, bundle_ref: str, workspace_id: str,
+                 environment: Optional[str]) -> tuple[str, dict[str, str]]:
+    """#222 — the pipeline's id and the W3C context of its root span.
+
+    The root is a SHORT ``cairn.pipeline`` span opened and closed at launch: a gate
+    wait can outlive the request, the process and the server, so no span stays open
+    for it. Its context is what the record stores; every later span (legs, gates,
+    flow stages, the terminal ``cairn.pipeline.settle``) starts as its child.
+    ``{}`` when tracing is off."""
+    pid = new_pipeline_id()
+    with span("cairn.pipeline", {
+        "pipeline": getattr(plan, "name", ""), "pipeline_ref": bundle_ref,
+        "content_hash": getattr(plan, "content_hash", ""), "run_id": pid,
+        "workspace_id": workspace_id, "environment": environment,
+        "legs": len(getattr(plan, "steps", None) or []),
+    }):
+        return pid, trace_carrier()
+
+
+def _in_pipeline_trace(method):
+    """Run a bridge method whose first argument is the pipeline record with the
+    record's stored trace context as the ambient parent, so the legs it starts (and
+    the tasks they spawn, the dispatcher's ``cairn.run`` among them) join the
+    pipeline's trace even when this is a later request or another process."""
+
+    @functools.wraps(method)
+    async def wrapper(self: Any, rec: Any, *args: Any, **kwargs: Any) -> Any:
+        with use_parent(getattr(rec, "trace_context", None)):
+            return await method(self, rec, *args, **kwargs)
+
+    return wrapper
+
+
+def _flow_leg_traced(method):
+    """``cairn.flow_leg`` around ``_run_flow_leg``: a child of the pipeline root, the
+    parent of the leg's ``cairn.flow_stage`` spans. Zero work when tracing is off."""
+
+    @functools.wraps(method)
+    async def wrapper(self: Any, rec: Any, s: Any, run: Any, *args: Any, **kwargs: Any) -> Any:
+        if not tracing_active():
+            return await method(self, rec, s, run, *args, **kwargs)
+        try:
+            engine = getattr(self._leg_engine(s), "name", "") or ""
+        except Exception:  # noqa: BLE001 — a label, never a reason to fail the leg
+            engine = ""
+        budget = ((getattr(rec, "governance", None) or {}).get("budget") or {}).get("usd")
+        with span("cairn.flow_leg", {
+            "flow": s.ref, "step": s.id, "leg_run_id": getattr(run, "id", ""),
+            "run_id": rec.pipeline_id, "engine": engine, "budget_usd": budget,
+            "adopted": bool(kwargs.get("adopt")),
+        }, parent=getattr(rec, "trace_context", None)) as sp:
+            try:
+                return await method(self, rec, s, run, *args, **kwargs)
+            finally:
+                try:
+                    done = await self.dispatcher.store.get(run.id)
+                    if sp is not None and done is not None:
+                        sp.set_attribute("outcome", str(done.status))
+                except Exception:  # noqa: BLE001
+                    logger.debug("flow-leg span outcome unreadable", exc_info=True)
+
+    return wrapper
+
+
+def _settle_span(rec: Any) -> None:
+    """``cairn.pipeline.settle`` (#222): the closing child of the root, emitted once, at
+    the transition to a terminal status (done / failed / cancelled)."""
+    if tracing_active():
+        with span("cairn.pipeline.settle", {"run_id": rec.pipeline_id, "status": rec.status},
+                  parent=getattr(rec, "trace_context", None)):
+            pass
+
+
+def _gate_span(rec: Any, step_id: str, decision: str, actor: str = "") -> None:
+    """``cairn.gate`` for one gate decision (#222): started when the pause began
+    (``awaiting_since``) and ended now, at the decision, so its duration is the wait
+    — emitted by whichever request or process decides, as a child of the stored
+    root. A data gate (a predicate) has no wait: it is an instant span."""
+    if not tracing_active():
+        return
+    st = (getattr(rec, "step_state", None) or {}).get(step_id)
+    waiting = getattr(st, "awaiting_since", None)
+    status = str(getattr(st, "status", "") or "")
+    kind = status.removeprefix("awaiting_") if status.startswith("awaiting_") else "data"
+    with span("cairn.gate", {
+        "step": step_id, "kind": kind, "decision": decision, "actor": actor or None,
+        "run_id": rec.pipeline_id,
+    }, parent=getattr(rec, "trace_context", None), start_time=waiting):
+        pass
+
+
 _NO_WORKSPACE_REASON = "record names no workspace"
 _NO_WORKSPACE_VERDICT = "workspace_unresolved"
 #: What a refused ``_submit_step`` returns (it otherwise returns ``None``): the
@@ -364,6 +461,20 @@ _NO_WORKSPACE_VERDICT = "workspace_unresolved"
 #: Both refusals return it: a record that names no workspace, and a wire that
 #: cannot resolve.
 _REFUSED = False
+
+
+async def _close_task_reservation(reservation: Any, cost: dict) -> None:
+    """Close a task leg's hold the way ``execute_leg`` closes a flow attempt's:
+    settle at the measured spend, or release when nothing was spent."""
+    if reservation is None:
+        return
+    from cairn.core.budget_reservations import release, settle  # noqa: PLC0415 - as execute_leg
+
+    actual = float((cost or {}).get("total_usd") or 0.0)
+    if actual > 0:
+        await settle(reservation, actual)
+    else:
+        await release(reservation)
 
 
 class PipelineBridge:
@@ -395,6 +506,10 @@ class PipelineBridge:
         # lock — for 20-30s+). Held here so the tasks aren't garbage-collected
         # mid-flight; stop() cancels them (a restart re-adopts from the store).
         self._leg_tasks: dict[str, asyncio.Task] = {}
+        #: #233 — pipelines whose terminal row (`pipeline.finished`) this process wrote
+        self._audited_terminal: set[str] = set()
+        #: #306 — pipelines this process announced to the run hooks (`pipeline.finished`)
+        self._hooked_terminal: set[str] = set()
         # ADR-0086 H5 (#1247) + #1532p2 — per-target count→admit critical
         # section. Was a single process-local lock, honestly documented as "a
         # brake, not a distributed mutex"; with the #1531 store-side count
@@ -1017,6 +1132,7 @@ class PipelineBridge:
                 st.started_at = getattr(run, "started_at", None) or _now()
                 if st.status == "awaiting_approval":
                     st.awaiting_since = _now()
+                    st.gate_context = None  # #258 — a paused run's wait, not a gate's
                 cur.step_state[sid] = st
                 cur.cursor = sorted(set(cur.cursor) | {sid})
                 changed = True
@@ -1078,56 +1194,6 @@ class PipelineBridge:
         losing its DB session (no lease, no reaper)."""
         return self._sections.hold(pipeline_id)
 
-    # ── launch from a bundle ───────────────────────────────────────────────
-
-    async def run_bundle(
-        self,
-        bundle: Any,
-        *,
-        pipeline_name: Optional[str] = None,
-        inputs: dict,
-        environment: Optional[str] = None,
-        workspace_id: str = "default",
-        trigger: Optional[dict] = None,
-    ) -> PipelineRecord:
-        """Launch a ``[[bundle.pipeline]]`` as a governed pipeline (ADR-0069 §5).
-
-        Selects the named pipeline (or the first), plans it, and starts it. A pipeline
-        pinned to ``mode = "graph"`` (legacy flatten) is rejected here — it runs through
-        ``compile_bundle`` (one run), not this path."""
-        from cairn.core.engine.bundle_pipeline import plan_bundle  # noqa: PLC0415 — avoids an import cycle at module load
-
-        pipes = getattr(bundle, "pipeline", None) or []
-        if not pipes:
-            raise ValueError("bundle has no [[bundle.pipeline]] to run")
-        if pipeline_name:
-            pipe = next((p for p in pipes if p.name == pipeline_name), None)
-            if pipe is None:
-                raise ValueError(f"no pipeline named {pipeline_name!r} in this bundle")
-        else:
-            pipe = pipes[0]
-        if getattr(pipe, "mode", "pipeline") == "graph":
-            raise ValueError(
-                f"pipeline {pipe.name!r} is mode='graph' (legacy flatten) — run it via "
-                "compile_bundle, not the pipeline path"
-            )
-        plan = plan_bundle(pipe)
-        meta = getattr(bundle, "meta", None)
-        ref = f"{getattr(meta, 'name', '')}@{getattr(meta, 'version', '')}" if meta else ""
-        env = environment or (getattr(meta, "profile", "") or None)
-        # ADR-0069 Phase 4: under CAIRN_RUNTIME=temporal the pipeline is owned by a durable
-        # PipelineWorkflow (crash-safe); otherwise the in-process bridge advances it.
-        from cairn.core import settings  # noqa: PLC0415
-        if settings.runtime() == "temporal":
-            return await self._start_temporal_pipeline(
-                plan, inputs=inputs, bundle_ref=ref, environment=env,
-                workspace_id=workspace_id, trigger=trigger,
-            )
-        return await self.start_pipeline(
-            plan, inputs=inputs, bundle_ref=ref, environment=env,
-            workspace_id=workspace_id, trigger=trigger,
-        )
-
     async def _start_temporal_pipeline(
         self, plan: Any, *, inputs: dict, bundle_ref: str, environment: Optional[str],
         workspace_id: str, trigger: Optional[dict], admission: Optional[dict] = None,
@@ -1139,11 +1205,11 @@ class PipelineBridge:
         from temporalio.client import Client  # noqa: PLC0415 — optional dep (temporal extra)
 
         from cairn.core import settings  # noqa: PLC0415
-        from cairn.core.storage.pipeline_store import new_pipeline_id  # noqa: PLC0415
 
-        pid = new_pipeline_id()
+        pid, trace_context = _launch_root(
+            plan, bundle_ref=bundle_ref, workspace_id=workspace_id, environment=environment)
         rec = PipelineRecord(
-            pipeline_id=pid, bundle_ref=bundle_ref, pipeline_name=getattr(plan, "name", ""),
+            pipeline_id=pid, trace_context=trace_context, bundle_ref=bundle_ref, pipeline_name=getattr(plan, "name", ""),
             status="queued", plan=plan, inputs=dict(inputs or {}), environment=environment,
             workspace_id=workspace_id, trigger={**(trigger or {}), "owner": "temporal"},
             governance=dict(getattr(plan, "governance", None) or {}),  # #1688
@@ -1181,12 +1247,10 @@ class PipelineBridge:
         step(s). Returns the persisted record.
 
         Under ``CAIRN_RUNTIME=temporal`` the pipeline is owned by a durable
-        PipelineWorkflow instead. The check lives HERE — this is the method the
-        ONE launch door (`launch_pipeline`: CLI, console, cron) calls — not only
-        in the legacy wrapper: with it there alone, every modern launch path
-        silently ran in-process/non-durable under the temporal runtime. The
-        drift was masked because the asserting tests failed on the missing
-        `temporalio` import instead of on the routing.
+        PipelineWorkflow instead. The check lives HERE because this is the
+        method the ONE launch door (`launch_pipeline`: CLI, console, cron) calls;
+        a check anywhere else would let a launch run in-process and non-durable
+        under the temporal runtime.
         """
         from cairn.core import settings  # noqa: PLC0415 — cycle: settings → storage → dispatch
 
@@ -1196,7 +1260,10 @@ class PipelineBridge:
                 environment=environment, workspace_id=workspace_id,
                 trigger=trigger, admission=admission,
             )
+        pid, trace_context = _launch_root(
+            plan, bundle_ref=bundle_ref, workspace_id=workspace_id, environment=environment)
         rec = PipelineRecord(
+            pipeline_id=pid, trace_context=trace_context,
             bundle_ref=bundle_ref, pipeline_name=getattr(plan, "name", ""),
             status="running", plan=plan, inputs=dict(inputs or {}),
             environment=environment, workspace_id=workspace_id, trigger=trigger or {},
@@ -1310,6 +1377,7 @@ class PipelineBridge:
                     announce = False  # no pipeline to settle the leg against
                     return
                 if rec.status in PIPELINE_TERMINAL:
+                    await self._audit_run_terminal(pid, step_id, term, run)   # #233 — still an outcome
                     return  # a leg finishing after its pipeline ended: announced, no-op
                 await self._apply_leg_terminal(rec, pid, step_id, term, run_id, run,
                                                after_restart)
@@ -1343,7 +1411,15 @@ class PipelineBridge:
         """The step-and-pipeline half of :meth:`_handle_terminal`, run under the
         pipeline lock once the terminal is known to apply."""
         output = reconstruct_step_output(run)
+        await self._audit_run_terminal(pid, step_id, term, run)
         st = rec.step_state.get(step_id) or StepState()
+        if term == "cancelled" and st.status == "skipped" and st.verdict == "cancelled":
+            # The pipeline's cancel settled this step before announcing its run's
+            # cancel (#2541, ADR-0159): it stays cancelled, not `failed`, and the
+            # cancel already decided the pipeline's outcome.
+            rec.cursor = [c for c in rec.cursor if c != step_id]
+            await self._settle(rec)
+            return
         st.run_id = run_id
         st.status = "done" if term == "done" else "failed"
         st.verdict = _verdict_of(run, output)
@@ -1374,6 +1450,16 @@ class PipelineBridge:
         step = rec.plan.step(step_id) if rec.plan else None
         if step is not None:
             await self._emit_step_event(rec, step, output)
+
+    async def _audit_run_terminal(self, pid: str, step_id: str, term: str, run: Any) -> None:
+        """#233 — ``leg.finished`` for a leg run's terminal. A FLOW leg wrote its own row
+        from the engine outcome (:func:`audit_flow_leg_finished`: attempts, engine, cost),
+        so only the other kinds are written here."""
+        ref = str(getattr(run, "template_ref", "") or "")
+        if not audit_bound() or ref.startswith("flow:"):
+            return
+        await audit_leg_finished(pid, step_id, ref=ref, state=term, run=run,
+                                 reason=str(getattr(run, "error", "") or ""))
 
     async def _decide_loop(self, rec: PipelineRecord, step_id: str) -> bool:
         """Act on a bounded loop whose current iteration just completed (#1155).
@@ -1421,6 +1507,7 @@ class PipelineBridge:
             st = rec.step_state.get(step_id) or StepState()
             st.status = GATE_STATUS
             st.verdict = "loop_exhausted"
+            st.gate_context = None  # #258 — an earlier pause's evidence is not this pause's
             rec.step_state[step_id] = st
             rec.cursor = sorted(set(rec.cursor) | {step_id})
             self._recompute_status(rec)
@@ -1471,6 +1558,10 @@ class PipelineBridge:
         and parked for a person when it is not safe. Passes driven by run
         events or the advance door never set it."""
         rec = _rec or await self.store.get(pipeline_id)
+        if rec is not None and rec.status in PIPELINE_TERMINAL:
+            await self._audit_pipeline_finished(rec)   # #233 — ended on a path that skipped `_settle`
+            await self._settle_outputs(rec)            # ADR-0161 — likewise
+            await self._fire_pipeline_finished(rec)    # #306 — likewise, after the outputs
         if rec is None or rec.status != "running":
             return
         plan = rec.plan
@@ -1512,15 +1603,20 @@ class PipelineBridge:
                 st.ended_at = _now()
                 rec.step_state[s.id] = st
                 await self._audit(rec, s.id, "routed_off", {"when": s.when})
+                await audit_leg_finished(rec.pipeline_id, s.id, ref=s.ref, state="skipped",
+                                         reason=f"routed off: when {s.when}")
                 continue  # NOT a failure — the next steps see the skip as satisfied
             # GATE — governance as a trigger condition, evaluated by core over
             # persisted output. Fail → the step never submits; the pipeline
             # terminates with a cited reason (ADR-0069 acceptance).
             if s.gate and not eval_gate_predicate(s.gate, bundle_input=rec.inputs, steps=outputs):
+                _gate_span(rec, s.id, "blocked")  # #222
                 st.status = "skipped"
                 st.verdict = "gate_blocked"
                 rec.step_state[s.id] = st
                 await self._audit(rec, s.id, "gate_blocked", {"gate": s.gate})
+                await audit_leg_finished(rec.pipeline_id, s.id, ref=s.ref, state="skipped",
+                                         reason=f"blocked by gate: {s.gate}")
                 await self._fail_pipeline(rec, f"step '{s.id}' blocked by gate: {s.gate}")
                 return
             # The step is READY (deps done + gate passed). What gates the actual submit?
@@ -1604,6 +1700,7 @@ class PipelineBridge:
             logger.exception("leg %s (%s): failed to terminalize", s.ref, run.id)
 
     @_in_record_workspace
+    @_in_pipeline_trace
     async def _submit_step(self, rec: PipelineRecord, s: Any, outputs: dict, *,
                            after_restart: bool = False) -> Optional[bool]:
         """Resolve a ready step's inputs from persisted output + submit it as its OWN
@@ -1643,6 +1740,10 @@ class PipelineBridge:
             rec.cursor = [c for c in rec.cursor if c != s.id]
             await self._audit(rec, s.id, "gate_passed",
                               {"predicate": s.gate} if data_gate else {})
+            if data_gate:
+                _gate_span(rec, s.id, "data")  # #222 — a human gate's span is the decision's
+            await audit_leg_finished(rec.pipeline_id, s.id, ref=s.ref, state="done",
+                                     reason="data gate predicate true" if data_gate else "gate approved")
             # #1627 — a loop body may END on a gate: the last word of a
             # retrain cycle is a human deciding whether to promote.
             # A gate leg has no RUN, so its completion never reaches
@@ -1706,6 +1807,7 @@ class PipelineBridge:
         rec.step_state[s.id] = st
         rec.cursor = sorted(set(rec.cursor) | {s.id})
         await self._audit(rec, s.id, "step_submitted", {"run_id": run.id, "ref": s.ref})
+        await audit_leg_submitted(rec, s.id, run, s.ref)   # #233 — hash-chained trail
 
     async def _submit_flow_leg(self, rec: PipelineRecord, s: Any, resolved: dict) -> Any:
         """Submit a `flow:` leg as its OWN governed run — no template wrapper (#1127).
@@ -1749,6 +1851,7 @@ class PipelineBridge:
                 bundle_pipeline_id=rec.pipeline_id,
                 step_id=s.id,
                 workspace_id=rec.workspace_id,
+                trace_id=current_trace_id(),  # #222 — the pipeline's trace
                 owner=liveness.self_owner(),  # ADR-0125 D1 — the poll loop runs here
             )
 
@@ -1817,6 +1920,7 @@ class PipelineBridge:
         st = rec.step_state.get(s.id) or StepState()
         st.status = "awaiting_approval"
         st.awaiting_since = _now()
+        st.gate_context = None  # #258 — another authority's pause: an earlier gate's evidence is not its
         rec.step_state[s.id] = st
         detail = {
             "run_id": getattr(run, "id", ""),
@@ -1890,6 +1994,7 @@ class PipelineBridge:
         )
 
     @_in_record_workspace
+    @_flow_leg_traced
     async def _run_flow_leg(self, rec: PipelineRecord, s: Any, run: Any, resolved: dict,
                             *, adopt: Optional[dict] = None) -> None:
         """The background half of a flow leg: execute → persist outcome → emit the
@@ -2003,6 +2108,7 @@ class PipelineBridge:
             bundle_pipeline_id=rec.pipeline_id,
             step_id=s.id,
             workspace_id=rec.workspace_id,
+            trace_id=current_trace_id(),  # #222 — the pipeline's trace
             owner=liveness.self_owner(),  # ADR-0125 D1 — the op runs in this process
         )
         await self.dispatcher.store.create(run)
@@ -2038,6 +2144,14 @@ class PipelineBridge:
         decides), never an unhandled crash — the belt here terminalizes on
         anything unexpected so a leg can never strand its pipeline."""
         op_name = s.ref[len("task:"):] if s.ref.startswith("task:") else s.ref
+        # #129 / #63 — a task leg is accounted like the other legs: its LLM spend is
+        # measured in a cost scope and recorded on its run (so gate cost lines and
+        # later legs' admission see it), and under a capped series it reserves before
+        # it spends and settles after, as a flow leg does in `execute_leg`.
+        from cairn.core import obs  # noqa: PLC0415 - keep obs off the bridge's import path
+        from cairn.core.dispatch.dispatcher import _aggregate_cost  # noqa: PLC0415 - the template path's rollup
+        cost_ctx: Any = None
+        reservation: Any = None
         try:
             # #1687 — `dataset:<name>[@N]` refs resolve HERE for task legs, with
             # the SAME functions the flow path uses in `execute_leg` (#1466/
@@ -2061,22 +2175,31 @@ class PipelineBridge:
             # #1288 — a declared `timeout:` bounds the op call; expiry is a
             # FAILED leg naming the limit (outcome, not crash). No timeout →
             # unbounded, today's behavior.
+            reservation = await self._reserve_task_leg(rec, s, run)
             limit = getattr(s, "timeout_s", None)
-            if limit:
-                try:
-                    output = await asyncio.wait_for(
-                        self._invoke_task_op(op_name, resolved, rec, s),
-                        timeout=float(limit))
-                except asyncio.TimeoutError:
-                    raise TimeoutError(
-                        f"task leg exceeded its declared timeout of {limit}s"
-                    ) from None
-            else:
-                output = await self._invoke_task_op(op_name, resolved, rec, s)
+            with obs.cost_scope(f"leg-{rec.pipeline_id}-{s.id}") as cost_ctx:
+                if limit:
+                    try:
+                        output = await asyncio.wait_for(
+                            self._invoke_task_op(op_name, resolved, rec, s),
+                            timeout=float(limit))
+                    except asyncio.TimeoutError:
+                        raise TimeoutError(
+                            f"task leg exceeded its declared timeout of {limit}s"
+                        ) from None
+                else:
+                    output = await self._invoke_task_op(op_name, resolved, rec, s)
+            # the run's `cost` always carries the rollup; the payload names the LLM spend
+            # only when there was some, so a leg that spent nothing keeps its shape
+            llm_usd = round(cost_ctx.cost_usd, 6)
+            payloads = [{"output": output, **({"llm_cost_usd": llm_usd} if llm_usd else {})}]
+            cost = _aggregate_cost(payloads)
             await self.dispatcher.store.update(
                 run.id, status="done", ended_at=_now(),
-                result_payloads=[{"output": output}],
+                result_payloads=payloads, cost=cost,
             )
+            await _close_task_reservation(reservation, cost)
+            reservation = None
             await self.dispatcher._emit(
                 run.id, "done", {"leg": s.ref, "step_id": s.id, "error": ""},
                 pipeline_id=rec.pipeline_id)
@@ -2085,15 +2208,34 @@ class PipelineBridge:
             # generic handler below turned it into `failed` and killed the
             # pipeline mid-flight, after earlier legs had already been paid for.
             logger.info("task leg %s (%s) awaits approval", s.ref, run.id)
+            # the gate fired before the operator ran: nothing was spent, the hold goes
+            await _close_task_reservation(reservation, {})
+            reservation = None
             async with self._lock(rec.pipeline_id):
                 cur = await self.store.get(rec.pipeline_id) or rec
                 await self._pause_leg_for_approval(cur, s, run, e.request)
+        except asyncio.CancelledError:
+            # a cancelled leg still settles what it spent, as a cancelled flow attempt does
+            spent = round(float(getattr(cost_ctx, "cost_usd", 0.0) or 0.0), 6)
+            try:
+                await _close_task_reservation(reservation, _aggregate_cost([{"llm_cost_usd": spent}]))
+            except Exception:  # noqa: BLE001 — cancellation proceeds either way
+                logger.exception("task leg %s (%s): failed to close its reservation", s.ref, run.id)
+            raise
         except Exception as e:  # noqa: BLE001 — outcome, not crash (incl. CapabilityNotDeclared)
             logger.exception("task leg %s (%s) failed", s.ref, run.id)
             err = f"{type(e).__name__}: {e}"
+            # what a failed attempt already spent is still spend (#1441's rule)
+            spent = round(float(getattr(cost_ctx, "cost_usd", 0.0) or 0.0), 6)
+            cost = _aggregate_cost([{"llm_cost_usd": spent}])
+            try:
+                await _close_task_reservation(reservation, cost)
+            except Exception:  # noqa: BLE001 — the leg's outcome is recorded either way
+                logger.exception("task leg %s (%s): failed to close its reservation", s.ref, run.id)
             try:
                 await self.dispatcher.store.update(
-                    run.id, status="failed", ended_at=_now(), error=err)
+                    run.id, status="failed", ended_at=_now(), error=err,
+                    **({"cost": cost} if spent else {}))
                 await self.dispatcher._emit(
                     run.id, "failed", {"leg": s.ref, "step_id": s.id, "error": err},
                     pipeline_id=rec.pipeline_id)
@@ -2125,6 +2267,31 @@ class PipelineBridge:
         return ContractEnvelope.from_dict({**data, "operator_ref": entry.operator_ref,
                                            "operator_version": entry.operator_version})
 
+    async def _reserve_task_leg(self, rec: PipelineRecord, s: Any, run: Any) -> Any:
+        """#63 — a task leg's budget claim, made the way ``execute_leg`` makes a flow
+        leg's: only under a capped series, against what the pipeline's other legs
+        actually spent, for the leg's estimate (``leg_price_kwargs``). A refusal is a
+        failed leg with the reason, on the audit trail; ``None`` when uncapped."""
+        from cairn.core.budget_reservations import BudgetExceeded, reserve  # noqa: PLC0415 - as execute_leg
+
+        gov = getattr(rec, "governance", None) or {}
+        series_id = str(gov.get("series", "") or "")
+        budget_usd = budget_cap_usd(rec)
+        if not (series_id and budget_usd):
+            return None
+        spent_usd, spend_error = await self._admission_spend(rec, s, capped=True, adopt=None)
+        if spend_error:
+            raise RuntimeError(spend_error)
+        est = float(leg_price_kwargs(rec, s.id, run).get("estimated_usd") or 0.0)
+        try:
+            return await reserve(series_id, est_usd=est, spent_usd=float(spent_usd or 0.0),
+                                 budget_usd=float(budget_usd), run_id=str(run.id))
+        except BudgetExceeded as e:
+            await self._audit(rec, s.id, "budget_refused", {
+                "series": series_id, "estimated_usd": est, "spent_usd": spent_usd,
+                "budget_usd": budget_usd, "reason": str(e)[:300]})
+            raise
+
     async def _invoke_task_op(self, op_name: str, resolved: dict,
                               rec: PipelineRecord, s: Any) -> dict:
         """One operator call with pre-resolved inputs.
@@ -2150,7 +2317,6 @@ class PipelineBridge:
         from cairn.core.approval.enforce import (  # noqa: PLC0415 - cycle, as above
             ApprovalIntent, approved_state, enforce_gate,
         )
-        from cairn.core.obs.telemetry import span  # noqa: PLC0415
         from cairn.core.operator.registry import default_registry  # noqa: PLC0415
         from cairn.core.operator.runtime import (  # noqa: PLC0415 - cycle, as above
             invoke_operator_core, resolve_is_mocked,
@@ -2193,7 +2359,7 @@ class PipelineBridge:
         with span("cairn.operator", {
             "operator": op_label, "node": s.id, "executor": "in_process",
             "mocked": bool(is_mocked), "run_id": str(rec.pipeline_id),
-        }):
+        }, parent=rec.trace_context):  # #222 — under the pipeline root, in any process
             # ONE invoke path with the template operation node (#1542): config
             # layering + governance-strip + secret scoping + sharding all
             # happen inside the core, not re-implemented (and drifted) here.
@@ -2456,6 +2622,7 @@ class PipelineBridge:
                     st.ended_at = _now()
                     cur.step_state[s.id] = st
                     await self.store.put(cur)
+        await audit_leg_finished(rec.pipeline_id, s.id, ref=s.ref, state="cancelled", run=run, reason=reason)
         await self.dispatcher._emit(run.id, "cancelled",
                                     {"leg": s.ref, "step_id": s.id, "error": reason},
                                     pipeline_id=rec.pipeline_id)
@@ -2559,7 +2726,7 @@ class PipelineBridge:
         # fresh (unreadable → refused) vs adopted (unreadable → unknown, never
         # refused; a fresh retry after it is refused by execute_leg) rule.
         series_id = str(gov.get("series", "") or "")
-        budget_usd = float((gov.get("budget") or {}).get("usd", 0.0) or 0.0)
+        budget_usd = budget_cap_usd(rec)   # ADR-0155 D4: the recorded effective cap
         spent_usd, spend_error = await self._admission_spend(
             rec, s, capped=bool(series_id and budget_usd), adopt=adopt)
 
@@ -2625,6 +2792,9 @@ class PipelineBridge:
             {"leg": s.ref, "step_id": s.id, "error": outcome.error or ""},
             pipeline_id=rec.pipeline_id,
         )
+        await audit_flow_leg_finished(
+            rec.pipeline_id, s.id, ref=s.ref, run=run, outcome=outcome, status=_leg_run_status(outcome),
+            engine=str((getattr(hooks, "leg_handle", None) or {}).get("engine", "") or ""))
 
     def _leg_engine(self, s: Any) -> Any:
         """The environment's engine for this leg's FLOW's kind.
@@ -2670,6 +2840,20 @@ class PipelineBridge:
     #: finalizer whose wires never resolved (its producer never ran) has nothing
     #: to tear down, and saying so is not a failure.
     _FINALIZER_SETTLED = ("done", "failed", "skipped")
+
+    @staticmethod
+    def _finalizer_awaiting_approval(rec: PipelineRecord, step_id: str) -> bool:
+        """#218 — the one step a person may still decide once the terminal intent is
+        set: a ``finalizer:`` whose operator a profile or policy gated, parked at
+        ``awaiting_approval``. The pipeline cannot settle until it does (its status
+        waits on every finalizer), so refusing the decision stranded the pipeline
+        in ``running`` and left whatever the finalizer releases (a paid box) held.
+        Every other step stays refused (#1787): no new work starts after the
+        teardown began."""
+        step = rec.plan.step(step_id) if rec.plan else None
+        st = rec.step_state.get(step_id)
+        return bool(getattr(step, "finalizer", False)) and st is not None \
+            and st.status == "awaiting_approval"
 
     @staticmethod
     def _finalizer_steps(rec: PipelineRecord) -> list[Any]:
@@ -2720,6 +2904,8 @@ class PipelineBridge:
                 st.ended_at = _now()
                 rec.step_state[s.id] = st
                 await self._audit(rec, s.id, "finalizer_skipped", {"error": str(e)})
+                await audit_leg_finished(rec.pipeline_id, s.id, ref=s.ref, state="skipped",
+                                         reason=f"finalizer skipped: {e}")
                 continue
             try:
                 if await self._submit_step(rec, s, outputs) is _REFUSED:
@@ -2754,17 +2940,86 @@ class PipelineBridge:
         await self.store.put(rec)
         if not was_terminal and rec.status in PIPELINE_TERMINAL:
             await self._announce_terminal(rec, failure_reason)
+            await self._settle_outputs(rec)
+            await self._fire_pipeline_finished(rec)  # #306 — after status AND outputs are stored
+
+    async def _settle_outputs(self, rec: PipelineRecord) -> None:
+        """ADR-0161 — once a pipeline is ``done``, resolve its plan's ``outputs:``,
+        store them on the record, then publish them on its ``emits:`` topic. Exactly
+        once: ``rec.outputs`` is ``None`` until this writes it, and the emit follows
+        that write. A pipeline that declares neither is untouched."""
+        plan = rec.plan
+        if (rec.status != "done" or rec.outputs is not None or plan is None
+                or not (plan.outputs or plan.emits)):
+            return
+        rec.outputs, rec.outputs_errors = resolve_pipeline_outputs(
+            plan.outputs, inputs=rec.inputs, steps=await self._collected_outputs(rec))
+        await self.store.put(rec)
+        if rec.outputs_errors:
+            await self._audit(rec, "", "outputs_unresolved", {"errors": rec.outputs_errors})
+        if await emit_pipeline_outputs(rec, bus=self._bus):
+            await self._audit(rec, "", "emitted", {"event": plan.emits})
 
     async def _announce_terminal(self, rec: PipelineRecord, failure_reason: str = "") -> None:
         """The side effects a terminal transition owes — fired on the transition,
         so a deferred failure announces when it is APPLIED, not when it was
         decided (and never twice)."""
+        await self._audit_pipeline_finished(rec, failure_reason)
         if rec.status != "failed":
             return
         reason = failure_reason or str((rec.trigger or {}).get("failure_reason") or "")
         await self._audit(rec, "", "pipeline_failed", {"reason": reason})
         await self._notify_pipeline_failed(rec, reason)
         logger.info("pipeline %s failed: %s", rec.pipeline_id, reason)
+
+    async def _audit_pipeline_finished(self, rec: PipelineRecord, failure_reason: str = "") -> None:
+        """#233 — ``pipeline.finished``: the terminal state with the pipeline's total settled
+        spend, once per pipeline per process. Read from the legs' run records, never estimated."""
+        # setdefault: a bridge built without __init__ (tests use __new__) has no set yet
+        audited = self.__dict__.setdefault("_audited_terminal", set())
+        if rec.pipeline_id in audited or not audit_bound():
+            return
+        audited.add(rec.pipeline_id)
+        try:
+            spent = await pipeline_spent_usd(rec, self.dispatcher.store)
+        except Exception:  # noqa: BLE001 — unknown spend is omitted, never reported as 0
+            spent = None
+        reason = failure_reason or str((rec.trigger or {}).get("failure_reason") or "")
+        await audit_pipeline_event(
+            "pipeline.finished", pipeline_id=rec.pipeline_id,
+            outcome={"done": "ok", "cancelled": "ok"}.get(rec.status, "error"),
+            state=rec.status, reason=reason, spent_usd=spent,
+            budget_usd=((getattr(rec, "governance", None) or {}).get("budget") or {}).get("usd"))
+
+    async def _fire_pipeline_finished(self, rec: PipelineRecord) -> None:
+        """#306 — the ``pipeline.finished`` run hook: a terminal pipeline, announced to
+        every installed ``cairn.run_hooks`` provider once per pipeline per process.
+
+        Called next to :meth:`_audit_pipeline_finished` on every terminal path, AFTER
+        the record is put with its final status and (``done``) after
+        :meth:`_settle_outputs` stored its outputs. Its own once-guard, not the audit's:
+        that one is only taken when an audit sink is bound, and the hook fires with or
+        without one. Notify-only and fail-open: a provider failure is logged by
+        :func:`run_hooks.fire`, and anything else that escapes is logged here — the
+        terminal transition is already persisted and never depends on a provider.
+        The caller holds the pipeline's critical section, so a provider must not call
+        back into the bridge for this pipeline and should hand slow work off."""
+        if rec.status not in PIPELINE_TERMINAL:
+            return
+        # setdefault: a bridge built without __init__ (tests use __new__) has no set yet
+        hooked = self.__dict__.setdefault("_hooked_terminal", set())
+        if rec.pipeline_id in hooked:
+            return
+        hooked.add(rec.pipeline_id)
+        from cairn.core.pack import run_hooks  # noqa: PLC0415 — off the hot path
+
+        try:
+            await run_hooks.fire(run_hooks.PIPELINE_FINISHED, pipeline_id=rec.pipeline_id,
+                                 pipeline_ref=rec.bundle_ref, status=rec.status,
+                                 workspace_id=rec.workspace_id)
+        except Exception:  # noqa: BLE001 — a hook must never break a terminal transition
+            logger.warning("pipeline.finished run hooks failed for %s", rec.pipeline_id,
+                           exc_info=True)
 
     def _recompute_status(self, rec: PipelineRecord) -> None:
         """`done` when every step is done/skipped; `paused` when something waits on a
@@ -2780,11 +3035,14 @@ class PipelineBridge:
         every finalizer has settled. Until then the record honestly reads
         `running`, because it is: the `finally:` block is executing."""
         finals = {s.id for s in self._finalizer_steps(rec)}
+        was_terminal = rec.status in PIPELINE_TERMINAL
         if not finals:
             statuses = [v.status for v in rec.step_state.values()]
             if all(x in ("done", "skipped") for x in statuses):
                 rec.status = "done"
                 rec.ended_at = _now()
+                if not was_terminal:
+                    _settle_span(rec)
                 self._cleanup_pipeline_triggers(rec.pipeline_id)
             elif (any(x in ("awaiting_advance", "awaiting_approval") for x in statuses)
                   and not any(x in ("running", "queued") for x in statuses)):
@@ -2809,6 +3067,8 @@ class PipelineBridge:
             return
         rec.status = rec.terminal_intent
         rec.ended_at = _now()
+        if not was_terminal:
+            _settle_span(rec)
         self._cleanup_pipeline_triggers(rec.pipeline_id)
 
     # ── human-in-the-loop: advance a manual / approval step ─────────────────
@@ -2842,7 +3102,7 @@ class PipelineBridge:
             # DIRECTLY, bypassing `_advance`'s terminal-intent guard. Without
             # this, approving a gate on a cancelled pipeline would start a leg
             # after the teardown had already begun.
-            if getattr(rec, "terminal_intent", ""):
+            if getattr(rec, "terminal_intent", "") and not self._finalizer_awaiting_approval(rec, step_id):
                 raise ValueError(
                     f"pipeline {pipeline_id!r} is finalizing "
                     f"({rec.terminal_intent}) — no further step can advance")
@@ -2852,9 +3112,11 @@ class PipelineBridge:
                     f"step {step_id!r} is not awaiting (status="
                     f"{st.status if st else 'unknown'})"
                 )
+            awaiting = st.status
             # Temporal-owned pipeline (Phase 4): the durable workflow holds the wait —
             # deliver an `approve_step` signal; the workflow re-checks the gate + advances.
             if (rec.trigger or {}).get("owner") == "temporal":
+                _gate_span(rec, step_id, "approved" if approver else "advanced", approver or "")  # #222
                 # #2299 — record the approver BEFORE the signal: the released step's
                 # SUBMIT re-runs the flow-leg gate against the stored approval, and a
                 # signal that wins the race would re-gate it as unapproved.
@@ -2862,6 +3124,7 @@ class PipelineBridge:
                     st.approver = approver
                     rec.step_state[step_id] = st
                     await self.store.put(rec)
+                await self._audit_gate_decision(rec, step_id, approver, awaiting)   # #233 — before the leg it releases
                 await self._signal_temporal(pipeline_id, "approve_step", step_id)
                 await self._audit(rec, step_id, "approved" if approver else "advanced",
                                   {"approver": approver, "owner": "temporal"})
@@ -2890,6 +3153,7 @@ class PipelineBridge:
                                           reviewer=approver or "",
                                           rationale=f"blocked by gate: {step.gate}")
                 return await self.store.get(pipeline_id)  # type: ignore[return-value]
+            _gate_span(rec, step_id, "approved" if approver else "advanced", approver or "")  # #222
             if approver:
                 st.approver = approver
             if fire_key is not None:
@@ -2900,6 +3164,7 @@ class PipelineBridge:
                 await self.store.put(rec)
                 await self._audit(rec, step_id, "fire_recorded", {"fired_key": fire_key})
             self._cleanup_step_triggers(pipeline_id, step_id)  # a schedule/event step is now firing
+            await self._audit_gate_decision(rec, step_id, approver, awaiting)   # #233 — before the leg it releases
             if await self._submit_step(rec, step, outputs) is _REFUSED:
                 await self._decide_review(
                     pipeline_id, step_id, "rejected", reviewer=approver or "",
@@ -2916,15 +3181,94 @@ class PipelineBridge:
             await self.store.put(rec)
             return rec
 
-    async def cancel_pipeline(self, pipeline_id: str) -> PipelineRecord:
+    async def _audit_gate_decision(self, rec: PipelineRecord, step_id: str, approver: Optional[str],
+                                   awaiting: str) -> None:
+        """#233 — ``pipeline.gate_approved`` (a person, the token's identity) or
+        ``pipeline.step_advanced`` (a manual/schedule/event wait released with no named
+        person), in the hash-chained trail. Written by the control plane for BOTH owners."""
+        await audit_pipeline_event(
+            "pipeline.gate_approved" if approver else "pipeline.step_advanced",
+            pipeline_id=rec.pipeline_id, step_id=step_id, actor=approver, wait=awaiting,
+            owner=(rec.trigger or {}).get("owner") or "inprocess")
+
+    async def reject_step(
+        self, pipeline_id: str, step_id: str, *, decider: str, reason: str,
+    ) -> PipelineRecord:
+        """Reject a gate parked at ``awaiting_approval`` (ADR-0156 D5) — the attributable
+        "no" beside :meth:`advance_step`'s "yes". The step becomes ``skipped`` with the
+        verdict ``rejected`` and ``approver=decider``; the pipeline fails through
+        :meth:`_fail_pipeline` (so finalizers run and in-flight legs are handled as on any
+        failure), with ``step '<step>' rejected by <decider>: <reason>`` as the failure
+        reason; the gate's review is decided ``rejected`` (reviewer + rationale); and a
+        ``pipeline.rejected`` event carries ``{step, decider, reason}``. The pipeline's
+        status vocabulary is unchanged: the status is ``failed``, the verdict tells a
+        rejection from any other failure. Any other wait is refused (``ValueError``):
+        a manual, schedule or event wait is released or cancelled, not rejected.
+
+        Under a Temporal owner the verdict and decider are recorded first, then the
+        ``reject_step`` signal (the twin of ``approve_step``) ends the durable workflow as
+        failed; it schedules nothing more."""
+        async with self._lock(pipeline_id):
+            rec = await self.store.get(pipeline_id)
+            if rec is None:
+                raise ValueError(f"no pipeline {pipeline_id!r}")
+            if rec.status in ("done", "failed", "cancelled"):
+                raise ValueError(f"pipeline {pipeline_id!r} is {rec.status}")
+            if getattr(rec, "terminal_intent", "") and not self._finalizer_awaiting_approval(rec, step_id):
+                raise ValueError(
+                    f"pipeline {pipeline_id!r} is finalizing "
+                    f"({rec.terminal_intent}) — no step can be rejected")
+            st = rec.step_state.get(step_id)
+            if st is None or st.status != "awaiting_approval":
+                raise ValueError(
+                    f"step {step_id!r} is not awaiting approval (status="
+                    f"{st.status if st else 'unknown'}) — only a gate parked at "
+                    f"awaiting_approval can be rejected")
+            reason_line = f"step '{step_id}' rejected by {decider}: {reason}"
+            _gate_span(rec, step_id, "rejected", decider)  # #222
+            st.verdict = "rejected"
+            st.approver = decider
+            if (rec.trigger or {}).get("owner") == "temporal":
+                rec.step_state[step_id] = st
+                rec.trigger = {**(rec.trigger or {}), "failure_reason": reason_line}
+                await self.store.put(rec)
+                await self._signal_temporal(pipeline_id, "reject_step", step_id)
+            else:
+                st.status = "skipped"
+                st.ended_at = st.ended_at or _now()
+                rec.step_state[step_id] = st
+                self._cleanup_step_triggers(pipeline_id, step_id)
+                await self._fail_pipeline(rec, reason_line)
+            await self._decide_review(pipeline_id, step_id, "rejected",
+                                      reviewer=decider, rationale=reason)
+            await self._audit(rec, step_id, "rejected",
+                              {"step": step_id, "decider": decider, "reason": reason})
+            await audit_pipeline_event(
+                "pipeline.gate_rejected", pipeline_id=pipeline_id, step_id=step_id, actor=decider,
+                outcome="deny", reason=reason, owner=(rec.trigger or {}).get("owner") or "inprocess")
+            return await self.store.get(pipeline_id)  # type: ignore[return-value]
+
+    async def cancel_pipeline(self, pipeline_id: str, *, actor: Optional[str] = None) -> PipelineRecord:
         """Cancel a pipeline as a unit (no new steps submit).
 
         #2540 — a child run a gate paused at ``awaiting_approval`` is settled
         ``cancelled`` (:meth:`_cancel_stranded_child_runs`): nothing executes
-        it and nobody can approve a leg of a cancelled pipeline. ``queued`` and
+        it and nobody can approve a leg of a cancelled pipeline. A ``running``
+        TASK leg this bridge executes is cancelled and waited for, bounded, BEFORE
+        the finalizers are submitted (ADR-0159, :meth:`_cancel_running_task_legs`),
+        so an in-flight ``compute/acquire`` has finished stopping what it started
+        when ``compute/release`` looks at the box (#219). Other ``queued`` and
         ``running`` child runs are left to their own paths — a leg executing in
         some process finishes and its completion no-ops once the pipeline is
         terminal; a queued leg settles itself (`_settle_cancelled_while_queued`).
+        One exception (ADR-0151 D9): a ``running`` FLOW leg on a box the
+        pipeline releases — its recorded compute target equals the connection a
+        ``finalizer:`` ``compute.release`` step resolves to — has its recorded
+        engine job cancelled through ``cancel_recorded_job`` BEFORE the
+        finalizers are submitted (:meth:`_cancel_legs_on_released_boxes`), so the
+        box stop is never the only kill. The run itself still settles through
+        its own path; a cancel that fails is logged and audited and never holds
+        the release back. Every other running flow leg is unchanged (#207).
         Cancel is one-shot, so it never sees an owner DEAD (that takes two probes,
         ADR-0125 D3) and leaves ``queued``/``running`` legs alone. A leg still
         ``running`` when its process dies AFTER this cancel is settled
@@ -2934,13 +3278,15 @@ class PipelineBridge:
         (``scripts/ops/settle_dangling_runs.py``, D6).
         A finalizer's run is never touched: the teardown is what a cancel still
         owes (#1787). A Temporal-owned pipeline has its workflow cancelled
-        first, which is how its executing legs stop; #2555 (8): its
+        first, which is how its executing legs stop; #233: ``actor`` (the caller's token
+        identity) goes on the audit trail with the cancel; #2555 (8): its
         ``awaiting_approval`` child runs are then settled the same way, because
         nothing in the workflow or its activities does (cancelling the workflow
         cancels only the activity awaiting the run). Calling cancel again on a
         cancelled pipeline settles any ``awaiting_approval`` run an earlier
         cancel left."""
         stranded_owner = False
+        cancelled_legs: list[tuple[str, str, str, str]] = []
         async with self._lock(pipeline_id):
             rec = await self.store.get(pipeline_id)
             if rec is None:
@@ -2952,7 +3298,15 @@ class PipelineBridge:
                     await self._cancel_temporal(pipeline_id)  # cancel the durable workflow
                 self._cleanup_pipeline_triggers(pipeline_id)
                 await self._audit(rec, "", "pipeline_cancelled", {})
-                self._settle_human_waits_on_cancel(rec)
+                await audit_pipeline_event(
+                    "pipeline.cancelled", pipeline_id=pipeline_id, actor=actor, prior_status=rec.status,
+                    owner=(rec.trigger or {}).get("owner") or "inprocess")
+                for sid in self._settle_human_waits_on_cancel(rec):
+                    await audit_leg_finished(pipeline_id, sid, ref=getattr(rec.plan.step(sid), "ref", ""),
+                                             state="cancelled", reason="pipeline cancelled while waiting")
+                # ADR-0159 — the pipeline's own running task legs stop before any
+                # finalizer is submitted, so a teardown never races the work it ends.
+                cancelled_legs = await self._cancel_running_task_legs(rec, actor=actor)
                 if self._finalizer_steps(rec):
                     # #1787 — cancel is the third terminal state a `finally:`
                     # must survive, and the one that used to leave a box billing
@@ -2961,11 +3315,18 @@ class PipelineBridge:
                     # pipeline's own can start once it is set — and the record
                     # becomes `cancelled` when the teardown has settled.
                     rec.terminal_intent = "cancelled"
+                    # ADR-0151 D9 — the job on a box this pipeline releases is
+                    # cancelled BEFORE the release stops the box, so a box stop
+                    # is never the only kill. Best-effort: it never blocks it.
+                    await self._cancel_legs_on_released_boxes(rec)
                     await self._settle(rec)
                 else:
                     rec.status = "cancelled"
                     rec.ended_at = _now()
+                    _settle_span(rec)
                     await self.store.put(rec)
+                    await self._audit_pipeline_finished(rec)
+                    await self._fire_pipeline_finished(rec)  # #306
                 # The human queue closes at REQUEST time either way: a cancelled
                 # pipeline must not still be collecting approvals while its
                 # teardown runs.
@@ -2973,9 +3334,167 @@ class PipelineBridge:
                                                workspace_id=rec.workspace_id)
         # Outside the critical section: the `run.cancelled` emits below reach
         # `_on_run_terminal`, which takes this pipeline's section itself.
+        for run_id, step_id, ref, reason in cancelled_legs:
+            await self.dispatcher._emit(run_id, "cancelled",
+                                        {"leg": ref, "step_id": step_id, "error": reason},
+                                        pipeline_id=pipeline_id)
         if stranded_owner:
             await self._cancel_stranded_child_runs(rec)
         return rec
+
+    #: ADR-0159 — how long a pipeline cancel waits for its cancelled task legs to
+    #: wind down (an in-flight `compute/acquire` stops the box it was starting)
+    #: before the finalizers run. A leg still going after this is settled
+    #: `cancelled` anyway: the teardown must not wait on it forever.
+    _TASK_LEG_CANCEL_WAIT_S = 60.0
+
+    async def _cancel_running_task_legs(self, rec: PipelineRecord, *,
+                                        actor: Optional[str] = None) -> list[tuple[str, str, str, str]]:
+        """ADR-0159 — cancel every ``running`` non-finalizer task leg this bridge
+        executes, wait for them (bounded by :attr:`_TASK_LEG_CANCEL_WAIT_S`), and
+        settle each one ``cancelled``: the step ``skipped`` with verdict
+        ``cancelled`` (as `_settle_cancelled_while_queued` does), the run through
+        :meth:`RunDispatcher.cancel` (remote jobs, budget holds, ``leg.cancelled``
+        audit with ``actor``) and then ``cancelled``. A leg that finished on its
+        own before the cancel reached it keeps its own outcome.
+
+        Called inside the pipeline's section: a cancelled leg never takes it (its
+        ``CancelledError`` path only closes its reservation). Returns
+        ``(run_id, step_id, ref, reason)`` for the caller to emit outside it. A
+        task leg owned by another process is not in ``_leg_tasks`` and is left
+        alone, as before (#207)."""
+        finals = {s.id for s in self._finalizer_steps(rec)}
+        legs: dict[str, tuple[Any, asyncio.Task]] = {}
+        for sid, st in rec.step_state.items():
+            if sid in finals or st.status != "running" or not st.run_id:
+                continue
+            task = self._leg_tasks.get(st.run_id)
+            if task is None or task.done():
+                continue
+            try:
+                run = await self.dispatcher.store.get(st.run_id)
+            except Exception:  # noqa: BLE001 — unreadable: cancel the task, settle what we can
+                run = None
+            if leg_kind_of(str(getattr(run, "template_ref", "") or "")) != "task":
+                continue
+            task.cancel()
+            legs[sid] = (run, task)
+        if not legs:
+            return []
+        await asyncio.wait([t for _, t in legs.values()], timeout=self._TASK_LEG_CANCEL_WAIT_S)
+        settled: list[tuple[str, str, str, str]] = []
+        for sid, (run, task) in legs.items():
+            if task.done() and not task.cancelled():
+                continue  # it finished before the cancel landed: its own terminal stands
+            st = rec.step_state[sid]
+            ref = str(getattr(run, "template_ref", "") or "")
+            reason = f"pipeline cancelled while task leg '{sid}' was running"
+            if not task.done():
+                logger.warning("task leg %s (%s) still running %.0fs after its cancel; settled cancelled",
+                               sid, st.run_id, self._TASK_LEG_CANCEL_WAIT_S)
+            st.status = "skipped"
+            st.verdict = "cancelled"
+            st.ended_at = _now()
+            try:
+                await self.dispatcher.cancel(st.run_id, actor=actor)
+                updated = await self.dispatcher.store.update(
+                    st.run_id, status="cancelled", ended_at=_now(), error=reason)
+            except Exception:  # noqa: BLE001 — settle the rest regardless
+                logger.exception("pipeline %s: could not settle cancelled task leg %s", rec.pipeline_id, sid)
+                continue
+            await audit_leg_finished(rec.pipeline_id, sid, ref=ref, state="cancelled", run=run, reason=reason)
+            if str(getattr(updated, "status", "") or "") == "cancelled":
+                settled.append((st.run_id, sid, ref, reason))
+        return settled
+
+    #: The capability a box-stopping finalizer provides (`compute/release`, ADR-0151 D6).
+    _RELEASE_CAPABILITY = "compute.release"
+
+    def _is_release_step(self, s: Any) -> bool:
+        """A task step whose operator provides ``compute.release``: from its manifest,
+        else from the class's declared capabilities, so a registry without the
+        manifest metadata does not fail open (the box would stop under its job)."""
+        ref = str(getattr(s, "ref", "") or "")
+        if leg_kind_of(ref) != "task":
+            return False
+        name = ref[len("task:"):]
+        try:
+            from cairn.core.operator.registry import default_registry  # noqa: PLC0415 — cycle, as _task_op_risk
+
+            md = default_registry.get_metadata(name)
+            if md is not None:
+                caps = getattr(md, "provides_capabilities", None) or []
+            else:
+                caps = getattr(default_registry.get(name), "capabilities", None) or []
+        except Exception:  # noqa: BLE001 — unknown operator: not a release
+            return False
+        return self._RELEASE_CAPABILITY in list(caps)
+
+    async def _released_boxes(self, rec: PipelineRecord) -> set[str]:
+        """The connections this pipeline's ``finalizer:`` release steps will stop,
+        resolved the way the finalizer itself will resolve its inputs."""
+        boxes: set[str] = set()
+        steps = [s for s in self._finalizer_steps(rec) if self._is_release_step(s)]
+        if not steps:
+            return boxes
+        raw_outputs = await self._collected_outputs(rec)
+        loops = (rec.plan.loops if rec.plan else None) or {}
+        for s in steps:
+            try:
+                resolved = resolve_step_inputs(s, bundle_input=rec.inputs,
+                                               steps=iteration_view(raw_outputs, s.id, loops))
+            except WireResolutionError:
+                continue  # the finalizer will be skipped too: it stops nothing
+            box = str((resolved or {}).get("connection") or "").strip()
+            if box:
+                boxes.add(box)
+        return boxes
+
+    async def _cancel_legs_on_released_boxes(self, rec: PipelineRecord) -> None:
+        """ADR-0151 D9 — on a pipeline cancel, cancel the engine job of every
+        ``running`` flow leg on a box this pipeline's ``compute.release`` finalizer
+        is about to stop, BEFORE the finalizers are submitted.
+
+        The leg's box is its RECORDED compute target (``Run.compute_target``, set
+        at admission), falling back to :meth:`_leg_target` for a run that carries
+        none. The cancel goes through :func:`cancel_recorded_job` with the handle
+        the leg persisted (``StepState.handle``); it never raises. A cancel that
+        was not sent is logged there and audited here (``leg_job_cancel``,
+        ``sent: false``), and the release still runs: the box must stop either
+        way. The run is not settled here — its poll loop sees the cancelled job
+        and settles it through its own path. Any other running leg is left
+        alone, as before (#207)."""
+        boxes = await self._released_boxes(rec)
+        if not boxes:
+            return
+        for s in rec.plan.steps if rec.plan else []:
+            st = rec.step_state.get(s.id)
+            if (st is None or st.status != "running" or not st.handle
+                    or leg_kind_of(getattr(s, "ref", "")) != "flow"):
+                continue
+            target = ""
+            if st.run_id:
+                try:
+                    run = await self.dispatcher.store.get(st.run_id)
+                    target = str(getattr(run, "compute_target", "") or "")
+                except Exception:  # noqa: BLE001 — fall back to the selection below
+                    logger.debug("leg %s: run %s unreadable", s.id, st.run_id, exc_info=True)
+            target = target or self._leg_target(s)
+            if target not in boxes:
+                continue
+            try:
+                engine = self._leg_engine(s)
+            except Exception:  # noqa: BLE001 — no engine to reach: report it, release anyway
+                logger.exception("leg %s (%s): no engine to cancel the job on before release",
+                                 s.id, st.run_id)
+                engine = None
+            sent = await cancel_recorded_job(engine, st.handle)
+            if not sent:
+                logger.warning("leg %s (%s): job %s on %s was not cancelled before release",
+                               s.id, st.run_id, (st.handle or {}).get("job_id"), target)
+            await self._audit(rec, s.id, "leg_job_cancel",
+                              {"run_id": st.run_id, "job_id": (st.handle or {}).get("job_id"),
+                               "target": target, "sent": sent, "before": "release"})
 
     async def _cancel_stranded_child_runs(self, rec: PipelineRecord) -> None:
         """#2540 — settle the cancelled pipeline's ``awaiting_approval`` child runs.
@@ -3030,7 +3549,7 @@ class PipelineBridge:
             except Exception:  # noqa: BLE001 — settle the rest regardless
                 logger.exception("pipeline %s: could not cancel child run %s", pid, run.id)
 
-    def _settle_human_waits_on_cancel(self, rec: PipelineRecord) -> None:
+    def _settle_human_waits_on_cancel(self, rec: PipelineRecord) -> list[str]:
         """#2541 — a step parked on a person will never run once its pipeline is
         cancelled, so it stops reading as waiting: `skipped` with verdict
         `cancelled`, the same settlement `_settle_cancelled_while_queued` gives a
@@ -3040,12 +3559,15 @@ class PipelineBridge:
         Finalizer steps are left alone (#1787): their settlement is the teardown's
         own business, and marking one `skipped` here would count it as settled."""
         finals = {s.id for s in self._finalizer_steps(rec)}
+        settled: list[str] = []
         for sid, st in rec.step_state.items():
             if sid in finals or st.status not in ("awaiting_approval", "awaiting_advance"):
                 continue
             st.status = "skipped"
             st.verdict = "cancelled"
             st.ended_at = _now()
+            settled.append(sid)
+        return settled
 
     # ── Temporal-owned pipelines (Phase 4): signal / cancel the workflow ────
 
@@ -3126,6 +3648,7 @@ class PipelineBridge:
         # ADR-0125 D5 — the fire key belongs to the wait that is ending: a loop
         # iteration's earlier fire must never park a step that has not fired.
         st.fired_key = None
+        st.gate_context = gate_ctx  # #258 — on the step, so every reader of the record has it
         rec.step_state[s.id] = st
         detail = {"trigger": s.trigger, "status": status}
         if gate_ctx:
@@ -3354,9 +3877,12 @@ class PipelineBridge:
         if not self._finalizer_steps(rec):
             rec.status = "failed"
             rec.ended_at = _now()
+            _settle_span(rec)
             self._cleanup_pipeline_triggers(rec.pipeline_id)
             await self._audit(rec, "", "pipeline_failed", {"reason": reason})
             await self.store.put(rec)
+            await self._audit_pipeline_finished(rec, reason)   # #233
+            await self._fire_pipeline_finished(rec)            # #306
             # #1791 — opt-in per [profile.notify]; the pause events are the default.
             await self._notify_pipeline_failed(rec, reason)
             logger.info("pipeline %s failed: %s", rec.pipeline_id, reason)
@@ -3391,11 +3917,10 @@ class PipelineBridge:
     def _budget_context(self, rec: PipelineRecord) -> dict[str, Any]:
         """Cost context WHEN PRESENT — never invented. The only cost number the
         bridge actually holds at a pause is the budget this pipeline was
-        admitted under (``governance.budget``, #1688); a gate author who wants a
+        admitted under (``governance.budget``, #1688, bounded by the deployment: ADR-0155); a gate author who wants a
         measured number surfaces it with ``show:``, and that arrives separately
         as the gate context's fields."""
-        budget = ((getattr(rec, "governance", None) or {}).get("budget") or {})
-        usd = budget.get("usd") if isinstance(budget, dict) else None
+        usd = budget_cap_usd(rec)   # ADR-0155 D4: the effective cap the launch door recorded
         return {"budget_usd": usd} if usd else {}
 
     async def _spend_evidence(self, rec: PipelineRecord) -> dict[str, Any]:
@@ -3464,7 +3989,7 @@ class PipelineBridge:
                     pipeline_name=rec.pipeline_name or rec.bundle_ref,
                     reason=reason,
                     cost=self._budget_context(rec),
-                    commands=(f"cairn remote findings {rec.pipeline_id}",),
+                    commands=(f"cairn status {rec.pipeline_id} --results",),
                     dedupe_key=failure_dedupe_key(rec.pipeline_id, rec.ended_at or ""),
                 ),
                 registry=getattr(self, "_notify_registry", None),

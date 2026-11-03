@@ -56,7 +56,7 @@ BACKFILL = frozenset({
     "eval", "git", "lineage", "llm", "logs_analytics",
     "mcp", "memory_local", "monitor_threshold", "notify_slack",
     "postmortem", "rag_local", "rag_rerank", "redact_regex",
-    "redteam", "remote", "report", "s3", "secrets_env", "secrets_infisical",
+    "redteam", "report", "s3", "secrets_env", "secrets_infisical",
     "serving",
 })
 

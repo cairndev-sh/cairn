@@ -197,6 +197,7 @@ def build_pipelines_router(dispatcher, pipeline_bridge) -> APIRouter:
     # request models the inline block shared.
     from cairn.core.triggers.server import (  # noqa: PLC0415 — routers ↔ server cycle at import time
         PipelineApproveRequest,
+        PipelineRejectRequest,
     )
 
     r = APIRouter()
@@ -419,7 +420,7 @@ def build_pipelines_router(dispatcher, pipeline_bridge) -> APIRouter:
         )
         from cairn.core.dispatch.start import explain_pipeline_ref  # noqa: PLC0415 - cycle
         from cairn.core.engine.pipeline_resolve import AmbiguousRefError  # noqa: PLC0415 - cycle
-        from cairn.core.pipeline_presets import PresetNotFoundError  # noqa: PLC0415 - cycle
+        from cairn.core.pipeline_presets import PresetNotFoundError, PresetPathRefusedError  # noqa: PLC0415 - cycle
 
         try:
             return await explain_pipeline_ref(
@@ -427,6 +428,8 @@ def build_pipelines_router(dispatcher, pipeline_bridge) -> APIRouter:
                 workspace_id=current_workspace())
         except (PipelineNotFoundError, PresetNotFoundError) as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
+        except PresetPathRefusedError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
         except AmbiguousRefError as e:  # pragma: no cover — the prefix disambiguates
             raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -632,7 +635,8 @@ def build_pipelines_router(dispatcher, pipeline_bridge) -> APIRouter:
         from cairn.core.dispatch.pipeline_preview import preview_launch  # noqa: PLC0415 - cycle
         from cairn.core.engine.pipeline_resolve import AmbiguousRefError  # noqa: PLC0415
         from cairn.core.pipeline_presets import (  # noqa: PLC0415 - cycle
-            PIPELINE_PREFIX, PresetNotFoundError, resolve_preset,
+            PIPELINE_PREFIX, PresetNotFoundError, PresetPathRefusedError, assert_preset_paths_resolved,
+            resolve_preset,
         )
 
         ref = str(body.get("ref") or "").strip()
@@ -643,13 +647,14 @@ def build_pipelines_router(dispatcher, pipeline_bridge) -> APIRouter:
             preset_inputs: dict[str, Any] = {}
             if (name := str(body.get("preset") or "").strip()):
                 canon = f"{PIPELINE_PREFIX}{d.pack}/{d.name}"
-                rec, _src = await resolve_preset(current_workspace(), canon, name)
+                rec, src = await resolve_preset(current_workspace(), canon, name)
+                assert_preset_paths_resolved(rec, src)
                 preset_inputs = dict(rec.inputs or {})
             return preview_launch(d, inputs=dict(body.get("inputs") or {}),
                                   preset_inputs=preset_inputs)
         except (PipelineNotFoundError, PresetNotFoundError) as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
-        except AmbiguousRefError as e:
+        except (AmbiguousRefError, PresetPathRefusedError) as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
 
     # ── launch presets (#1789, ADR-0071 §6) ──────────────────────────────────
@@ -901,10 +906,37 @@ def build_pipelines_router(dispatcher, pipeline_bridge) -> APIRouter:
             raise HTTPException(status_code=409, detail=str(e))
         return {"pipeline_id": pipeline_id, "step_id": step_id, "status": rec.status}
 
+    @r.post("/pipelines/{pipeline_id}/steps/{step_id}/reject", dependencies=[Depends(require_auth), Depends(support.writable_workspace)])
+    async def reject_pipeline_step(
+        pipeline_id: str, step_id: str, req: PipelineRejectRequest,
+        token: Annotated[Optional[str], Depends(_oauth2_scheme)] = None,
+    ) -> dict[str, Any]:
+        """ADR-0156 D4 — refuse a gate at `awaiting_approval`, attributed and with a reason.
+        Approve's guards in approve's order; the pipeline ends `failed`, the step's verdict
+        is `rejected`. Any other wait is 409 (release or cancel it instead)."""
+        rec = await _pipeline_in_ws_or_404(pipeline_id)
+        reason = req.reason.strip()
+        if not reason:
+            raise HTTPException(status_code=422, detail="reason is required")
+        await _assert_may_decide(rec, step_id, token)  # before anything is recorded (403)
+        decider = await decision_actor(token, req.approver, fallback="console")
+        try:
+            rec = await pipeline_bridge.reject_step(
+                pipeline_id, step_id, decider=decider, reason=reason)
+        except ValueError as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        return {"pipeline_id": pipeline_id, "step_id": step_id, "status": rec.status,
+                "verdict": "rejected", "decider": decider}
+
     @r.post("/pipelines/{pipeline_id}/cancel", dependencies=[Depends(require_auth), Depends(support.writable_workspace)])
-    async def cancel_pipeline_route(pipeline_id: str) -> dict[str, Any]:
+    async def cancel_pipeline_route(
+        pipeline_id: str,
+        token: Annotated[Optional[str], Depends(_oauth2_scheme)] = None,
+    ) -> dict[str, Any]:
         await _pipeline_in_ws_or_404(pipeline_id)
-        rec = await pipeline_bridge.cancel_pipeline(pipeline_id)
+        # #233 — who stopped a (possibly paid) run: the token's identity, as approve records it
+        actor = await decision_actor(token, None, fallback="anonymous")
+        rec = await pipeline_bridge.cancel_pipeline(pipeline_id, actor=actor)
         return {"pipeline_id": pipeline_id, "status": rec.status}
 
     return r

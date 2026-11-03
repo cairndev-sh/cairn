@@ -1,12 +1,12 @@
-"""``cairn run`` — start a flow, or fire one trigger event through the pipeline.
+"""``cairn run`` — start a pipeline and follow it, run the dev loop, or fire one trigger event.
 
 Two paths live here, and ADR-0105 D1 (#2118) is the line between them:
 
 * **the governed start** — REFUSED for a bare flow ref since ADR-0106 D1
   (#2134): only a declared pipeline runs, so ``cairn run <pack>/<flow>``
   answers with the one-leg wrapper to add (``$inherit`` makes it ~14 lines)
-  and ``cairn pipeline run pipeline:<pack>/<name>`` starts it. A ref that
-  already names a pipeline is redirected to that command. See
+  and ``cairn run pipeline:<pack>/<name>`` starts it, through the launch door,
+  and follows it (ADR-0165 D3). See :func:`_startable` and
   :func:`_start_governed_sync`.
 * **the local dev loop** — ``--interactive`` (HITL at the terminal), ``--mock``
   and ``--dry-run`` compile and run the flow IN THIS PROCESS: no pipeline
@@ -51,6 +51,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any, Optional
 
 import typer
@@ -194,7 +195,7 @@ def _print_summary(run_id: str, exit_code: int) -> None:
     print()
     print(f"run_id:  {run_id}")
     print(f"trace:   {location}")
-    print(f"replay:  cairn replay {run_id}")
+    print(f"replay:  cairn status {run_id} --replay")
     print(f"status:  {'ok' if exit_code == 0 else 'failed'}")
 
 
@@ -539,14 +540,14 @@ def _not_a_template_lines(ref: str, kind: str, *, dev_loop: bool, detail: str = 
     out = [f"preflight · {ref}", f"  ✕ {ref} is a {kind} — {what}"]
     if kind == "pipeline":
         bare = ref.removeprefix("pipeline:")
-        out.append(f"    → cairn pipeline explain {bare}   (every leg, gate and config "
+        out.append(f"    → cairn run {bare} --dry-run   (every leg, gate and config "
                    f"value, offline)")
         if dev_loop:
-            out.append(f"    → cairn pipeline run {bare}")
+            out.append(f"    → cairn run {bare}")
     else:
-        verb = "run" if dev_loop else "explain"
-        out.append(f"    → a {kind} runs as a leg of a declared pipeline: `cairn pipeline ls`, "
-                   f"then `cairn pipeline {verb} <pipeline>`")
+        flag = "" if dev_loop else " --dry-run"
+        out.append(f"    → a {kind} runs as a leg of a declared pipeline: `cairn run`, "
+                   f"then `cairn run <pipeline>{flag}`")
     return out
 
 
@@ -587,7 +588,7 @@ def _preflight_sync(template_ref: str, input_file: Optional[str], *,
     return 0 if pf.ready else 1
 
 
-def _dry_run_template(template_ref: str, input_path: str) -> int:
+def _dry_run_template(template_ref: str, input_path: str, *, check_connections: bool = True) -> int:
     """``cairn run --dry-run`` — the preflight verdict (ready/blocked + cost +
     gates + blockers) followed by the execution plan (the node DAG). No operators
     run, no trace written. Exit 0 when ready, 1 when blocked."""
@@ -597,7 +598,7 @@ def _dry_run_template(template_ref: str, input_path: str) -> int:
         return 2
 
     # 1. the verdict (shared composition — same one the console + ask render).
-    rc = _preflight_sync(template_ref, input_path, dev_loop=True)
+    rc = _preflight_sync(template_ref, input_path, dev_loop=True, check_connections=check_connections)
 
     # 2. the plan DAG — extra detail unique to the CLI dry-run. Best-effort: a
     #    compile failure already shows up as a verdict blocker, so don't double-fault.
@@ -701,7 +702,7 @@ def _start_governed_sync(
         # Not a refusal of the intent — a redirect to the command that carries a
         # pipeline's presets, declared inputs and multi-leg reporting.
         console.print(f"[red]{template_ref!r} names a pipeline, not a flow[/red] — "
-                      f"start it with: cairn pipeline run {template_ref}", soft_wrap=True)
+                      f"start it with: cairn run {template_ref}", soft_wrap=True)
         return 2
     # unreachable: `resolve_start_ref` returns PIPELINE or raises (ADR-0106 D1)
     raise AssertionError(f"resolve_start_ref returned {kind!r} for {template_ref!r}")
@@ -730,176 +731,237 @@ def _start_governed_from_file(template_ref: str, input_path: str, **kw: Any) -> 
 # ─── entry points ───────────────────────────────────────────────────
 
 
+# Help text refs: every start is a one-leg pipeline (ADR-0105 D1); the command owns
+# that pipeline (#1702); the dev loop writes no run row (#2128).
 def cmd(
-    trigger_file: str = typer.Argument(
-        ...,
-        help="Either a path to a trigger JSON file (default mode), or — "
-             "when --input is given — a namespaced template reference "
-             "like 'incident/orchestrated-incident'.",
+    target: Optional[str] = typer.Argument(
+        None,
+        help="A pipeline ref (<pack>/<name>). Also: a flow or template with the dev-loop flags, "
+             "a pipeline file (.py), or a trigger JSON file. With nothing: list what can run.",
     ),
-    source: Optional[str] = typer.Option(
-        None, "--source",
-        help="Trigger source for raw payloads. One of "
-             "pattern/alert/metric/schedule/manual/cascade. Default: manual.",
+    input_: Optional[list[str]] = typer.Option(
+        None, "--input", "-i", help="An input as key=value, or a JSON file of inputs as @FILE; repeatable.",
     ),
-    service: Optional[str] = typer.Option(
-        None, "--service",
-        help="Service the trigger targets. Falls back to payload.service.",
+    set_: Optional[list[str]] = typer.Option(
+        None, "--set", "-s", help="An input override as key=value; repeatable. JSON-parsed when possible.",
     ),
-    environment: str = typer.Option(
-        "production", "--env",
-        help="Policy environment: dev / staging / production.",
+    preset: Optional[str] = typer.Option(
+        None, "--preset", "-p", help="Start from a saved or pack-shipped input set; --input overrides it per key.",
     ),
-    input_file: Optional[str] = typer.Option(
-        None, "--input",
-        help="Path to an input JSON for direct-template mode. When set, "
-             "the positional arg is treated as a <pack>/<template> ref "
-             "and the template runs directly against this input (no "
-             "skill matching, no policy).",
+    save_preset: Optional[str] = typer.Option(
+        None, "--save-preset", help="After a launch that worked, save its inputs under this name.",
+    ),
+    environment: Optional[str] = typer.Option(
+        None, "--environment", "-e", "--env", help="The environment to run in.",
+    ),
+    workspace: Optional[str] = typer.Option(
+        None, "--workspace", "-w", help="With --dry-run: whose variables and saved presets apply.",
+    ),
+    detach: bool = typer.Option(False, "--detach", help="Start it and return, without following it."),
+    interval: float = typer.Option(2.0, "--interval", help="Seconds between polls while following."),
+    series: Optional[str] = typer.Option(
+        None, "--series", help="Attach a pipeline file's run to a budgeted series.",
+    ),
+    from_run: Optional[str] = typer.Option(
+        None, "--from", help="The run this one is derived from, recorded as `parent_run`.",
     ),
     dry_run: bool = typer.Option(
-        False, "--dry-run",
-        help="Direct-template mode: compile + validate + show the execution "
-             "plan (the node DAG) without running any operator. Starts nothing, "
-             "so it is not a governed pipeline.",
+        False, "--dry-run", help="Show what would happen and run nothing.",
+    ),
+    no_connections: bool = typer.Option(
+        False, "--no-connections", help="With --dry-run: skip the connection-health check.",
     ),
     mock: bool = typer.Option(
         False, "--mock",
-        help="Direct-template mode: stub LLM responses and run operators that "
-             "declare supports_mock through .mock(); refuse before execution if "
-             "any reachable operator lacks mock support. "
-             "Runs IN-PROCESS: no pipeline record, no run row, not a governed "
-             "pipeline (#2128). Cannot be combined with --series.",
-    ),
-    mode: str = typer.Option(
-        "live", "--mode",
-        help="Direct-template mode: 'live' (default, unchanged) or 'sandbox' — "
-             "the Playground sandbox (ADR-0101 D3 / ADR-0073): write-class "
-             "operators are stubbed while side-effect-free reads run for real, "
-             "so the metrics are real and the spend is ~0. Narrower than --mock, "
-             "which stubs everything.",
+        help="Dev loop: stub model calls and mockable operators, in this process, with no record. "
+             "With --check: run the check's operators in mock mode.",
     ),
     interactive: bool = typer.Option(
         False, "--interactive", "-I",
-        help="Direct-template mode: at each governed HITL gate, prompt "
-             "approve/reject in the terminal and resume in-process (no server). "
-             "Runs IN-PROCESS: no pipeline record, no run row, not a governed "
-             "pipeline (#2128). Cannot be combined with --series.",
+        help="Dev loop: run in this process, with no record, and prompt at each gate.",
     ),
-    detach: bool = typer.Option(
-        False, "--detach",
-        help="Start the one-leg pipeline and exit without waiting. Under the "
-             "in-process runtime that leaves it UNOWNED (nothing drives its "
-             "leg) — exit 2. Ignored by --interactive/--mock/--dry-run.",
+    mode: str = typer.Option(
+        "live", "--mode", help="Dev loop: 'sandbox' stubs write operators and runs reads for real.",
     ),
-    from_run: Optional[str] = typer.Option(
-        None, "--from",
-        help="Run lineage (#989): the id of the run this one is derived from, so "
-             "'eval → fix → finetune → promote' forms a provenance chain. Recorded "
-             "on the run as `parent_run`.",
+    check: bool = typer.Option(
+        False, "--check", help="Run a read-only check and exit on its verdict (for CI).",
     ),
-    series: Optional[str] = typer.Option(
-        None, "--series",
-        help="Attach this run to a budgeted SERIES (#993, ADR-0076 D5). The series "
-             "caps spend across the whole group: if it's already over its budget the "
-             "run is REJECTED before it starts. The run's cost is recorded + counts "
-             "toward the series total. Get the id from `cairn series ls`. A series "
-             "groups GOVERNED runs, so it is refused with --interactive/--mock "
-             "(#2128).",
+    fail_on: str = typer.Option(
+        "fail", "--fail-on", help="With --check: the severity that exits non-zero, 'fail' or 'warn'.",
     ),
-    set_: Optional[list[str]] = typer.Option(
-        None, "--set", "-s",
-        help="Override one input, repeatable: --set rows=100 --set model=gpt-4o-mini "
-             "(#1092, pipeline-file mode). Values are parsed as JSON when possible, "
-             "else kept as strings.",
+    skill: bool = typer.Option(False, "--skill", help="Treat the target as a skill name."),
+    service: Optional[str] = typer.Option(
+        None, "--service", help="With --skill or a trigger file: the service it targets.",
     ),
+    wait: bool = typer.Option(False, "--wait", help="With --skill: block on the server until done."),
+    source: Optional[str] = typer.Option(
+        None, "--source", help="A trigger file's source: pattern, alert, metric, schedule, manual or cascade.",
+    ),
+    timeout: Optional[float] = typer.Option(
+        None, "--timeout", help="Seconds to wait at a prompt before --on-timeout.",
+    ),
+    on_timeout: str = typer.Option(
+        "detach", "--on-timeout", help="At a prompt timeout: detach, reject or abort.",
+    ),
+    native: bool = typer.Option(False, "--native", help="Prompt with an OS dialog."),
+    dump: Optional[str] = typer.Option(None, "--dump", help="Write a pause's context to this file."),
+    json_out: bool = typer.Option(False, "--json", help="Print machine-readable results."),
+    endpoint: Optional[str] = typer.Option(None, "--endpoint", help="server URL (overrides profile/env)"),
+    token: Optional[str] = typer.Option(None, "--token", help="bearer token (overrides profile/env)"),
+    profile: Optional[str] = typer.Option(None, "--profile", help="config profile name"),
 ) -> None:
-    """Start a flow — as the ONE-LEG PIPELINE every start becomes (ADR-0105 D1).
+    """Run a pipeline and follow it, asking at each gate.
 
-    `cairn run <pack>/<flow> --input values.json` goes through the same launch
-    door as `POST /start`, the console and a trigger: the flow is wrapped in a
-    one-leg pipeline stamped `flow:<pack>/<name>`, its leg is a governed run
-    with the usual admission, budget, policy and audit trail, and the command
-    prints both ids. It then OWNS that pipeline (#1702) — under the in-process
-    runtime this process is the only thing driving it — so it stays until a
-    terminal state and exits on the leg's outcome. `--detach` opts out, loudly.
+    `cairn run <pack>/<pipeline>` goes through the launch door, stays attached, prompts at each gate,
+    follows any pipeline its events start, and ends with the results. With no terminal to ask on, it
+    says the `cairn decide` command and exits 2. Exit codes: 0 done, 1 failed or cancelled, 2 waiting
+    on a person, 77 session expired.
 
-    THREE FLAGS KEEP THE LOCAL DEV LOOP and run the flow IN-PROCESS instead.
-    They are NOT governed pipelines: no pipeline record, no console row, no leg
-    — and no run row either (#2128: every run belongs to a pipeline, so a run
-    that cannot have one is not written as a run). `--series` is refused with
-    them, because a series groups governed runs.
-
-      --interactive  HITL approve/reject at the terminal, resumed in-process
-      --mock         model calls are stubbed; unsupported operators are refused
-      --dry-run      the preflight verdict + the node DAG; nothing runs at all
-
-    Those write a replayable JSONL trace under the runs dir (`cairn replay
-    <run-id>`), cost included — which is what a dev loop wants, and what a
-    governed launch is not. Without `--input`, the positional argument is a
-    trigger JSON file and the run goes through skill matching: also local, also
-    unchanged.
+    `--dry-run`, `--mock` and `--interactive` are the dev loop: they run in-process, record nothing,
+    and are not a governed pipeline.
     """
+    from cairn.cli.commands import pipeline as pipeline_cli  # noqa: PLC0415 — keeps --help light
+    from cairn.cli.commands import remote  # noqa: PLC0415
+    from cairn.cli.commands import status as status_cli  # noqa: PLC0415
     from cairn.profiles import default_dev_profile  # noqa: PLC0415 — #2241 D: local compiles get local-dev
 
     default_dev_profile()
-    # ADR-0101 D3 (#1975) — one launch shape across the surfaces: `--mode` is
-    # what `POST /start` calls `mode`, and it reaches the SAME sandbox switch
-    # (`sandbox_mode`) the dispatcher opens for a Playground run. `live` is the
-    # default and is byte-for-byte today's behaviour.
+    if target is None:
+        pipeline_cli.ls_cmd()
+        print("\ncairn run <pipeline> starts one; --dry-run shows what it would do.")
+        return
+    if on_timeout not in ("detach", "reject", "abort"):
+        print("--on-timeout must be detach, reject or abort", file=sys.stderr)
+        raise typer.Exit(2)
+    # ADR-0101 D3 (#1975) — one launch shape across the surfaces: `--mode` is what `POST /start`
+    # calls `mode`, and it reaches the SAME sandbox switch the dispatcher opens for a Playground run.
     wanted_mode = (mode or "live").strip().lower()
     if wanted_mode not in ("live", "sandbox"):
         print(f"--mode must be 'live' or 'sandbox', got {mode!r}", file=sys.stderr)
         raise typer.Exit(2)
     sandbox = wanted_mode == "sandbox"
+    values = _collect_inputs(input_ or [], set_ or [])
 
-    # #1092 — pipeline-FILE mode: `cairn run my_pipeline.py`. A `.py` holding one
-    # cairn.pipeline_file.Pipeline resolves to its `workflow` + declared inputs, then takes
-    # the SAME direct-template path below, so the run record, gates, and console
-    # visibility are byte-identical to `cairn run pack/template --input …`.
-    if trigger_file.endswith(".py"):
+    if skill:
+        remote._submit_skill(target, values, follow=not detach, wait=wait, service=service,
+                             endpoint=endpoint, token=token, profile=profile)
+        return
+    if check:
+        from cairn.cli.commands import gate as gate_cli  # noqa: PLC0415 — keeps --help light
+
+        with _inputs_file(values) as path:
+            gate_cli.cmd(template_ref=target, input_file=path, sets=None, profile=None,
+                         fail_on=fail_on, json_out=json_out, mock=mock)
+        return
+    # #1092 — pipeline-FILE mode: a `.py` holding one cairn.pipeline_file.Pipeline.
+    if target.endswith(".py"):
         raise typer.Exit(_run_pipeline_file_sync(
-            trigger_file, environment_override=environment, mock=mock, sandbox=sandbox,
+            target, environment_override=environment, mock=mock, sandbox=sandbox,
             interactive=interactive, parent_run=from_run or "", series_override=series or "",
-            set_values=list(set_ or []), dry_run=dry_run, detach=detach,
+            set_values=[f"{k}={json.dumps(v)}" for k, v in values.items()], dry_run=dry_run, detach=detach,
         ))
-
+    # A trigger JSON file: local skill matching, unchanged.
+    if not values and Path(target).is_file() and not (dry_run or mock or interactive):
+        raise typer.Exit(_run_sync(target, source=source, service=service,
+                                   environment=environment or "production"))
     if dry_run:
-        if input_file is None:
-            print("--dry-run requires --input (direct-template mode)", file=sys.stderr)
+        with _inputs_file(values) as path:
+            if _names_a_pipeline(target):
+                pipeline_cli.explain_cmd(
+                    ref=target, input_=[f"{k}={json.dumps(v)}" for k, v in values.items()],
+                    environment=environment or "", preset=preset or "", workspace=workspace or "default",
+                    json_out=json_out)
+                return
+            raise typer.Exit(_dry_run_template(target, path, check_connections=not no_connections))
+    if interactive or mock:
+        with _inputs_file(values) as path:
+            raise typer.Exit(_run_template_sync(
+                target, path, environment=environment or "production", mock=mock, sandbox=sandbox,
+                interactive=interactive, parent_run=from_run or "", series_id=series or "",
+            ))
+    # The governed start. A flow is refused here, with the wrapper to add (ADR-0106 D1), before any
+    # engine is reached. A ref this machine doesn't have may still be on a configured server.
+    def _a_server() -> bool:
+        return (remote._explicit_endpoint(endpoint, profile)
+                or remote._reachable(remote._resolve(endpoint, token, profile)[0]))
+
+    if not _startable(target, a_server=_a_server):
+        raise typer.Exit(_start_governed_sync(target, values))
+    for flag, value, why in (("--series", series, "a pipeline's series is in its governance block"),
+                             ("--from", from_run, "it applies to a pipeline file"),
+                             ("--workspace", workspace, "it goes with --dry-run"),
+                             ("--mode sandbox", sandbox, "it goes with --mock or --interactive")):
+        if value:
+            print(f"{flag} doesn't apply to starting a pipeline: {why}", file=sys.stderr)
             raise typer.Exit(2)
-        raise typer.Exit(_dry_run_template(trigger_file, input_file))
+    raise typer.Exit(status_cli.launch_and_follow(
+        target, values, environment=environment, preset=preset, save_preset=save_preset, detach=detach,
+        interval=interval, timeout=timeout, on_timeout=on_timeout, native=native, dump=dump,
+        json_out=json_out, endpoint=endpoint, token=token, profile=profile))
 
-    if interactive and input_file is None:
-        print("--interactive requires --input (direct-template mode)", file=sys.stderr)
-        raise typer.Exit(2)
 
-    if input_file is not None:
-        # ADR-0105 D1 (#2118) — the plain start goes through the ONE door and
-        # becomes a one-leg pipeline. `--interactive` and `--mock` keep the
-        # in-process path: HITL at a terminal is not a governed approval, and a
-        # mocked run is not a run of anything.
-        if interactive or mock:
-            rc = _run_template_sync(
-                trigger_file, input_file, environment=environment, mock=mock,
-                sandbox=sandbox, interactive=interactive,
-                parent_run=from_run or "", series_id=series or "",
-            )
+def _parse_value(raw: str) -> Any:
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return raw  # a bare string is the common case
+
+
+def _collect_inputs(inputs: list[str], sets: list[str]) -> dict[str, Any]:
+    """``-i K=V``, ``-i @FILE``, a bare ``-i FILE`` (the old spelling) and ``--set K=V``, in order,
+    later keys winning. Exit 2 on anything else, before anything starts."""
+    values: dict[str, Any] = {}
+    for item in [*inputs, *sets]:
+        key, eq, raw = item.partition("=")
+        as_file = item[1:] if item.startswith("@") else item if not eq and Path(item).is_file() else None
+        if as_file is not None:
+            try:
+                loaded = json.loads(Path(as_file).read_text(encoding="utf-8"))
+            except (OSError, ValueError) as e:
+                print(f"--input {item}: can't read a JSON file: {e}", file=sys.stderr)
+                raise typer.Exit(2) from None
+            if not isinstance(loaded, dict):
+                print(f"--input {item}: must be a JSON object of input values, got "
+                      f"{type(loaded).__name__}", file=sys.stderr)
+                raise typer.Exit(2)
+            values.update(loaded)
+        elif eq and key:
+            values[key.strip()] = _parse_value(raw)
         else:
-            rc = _start_governed_from_file(
-                trigger_file, input_file, environment=environment, sandbox=sandbox,
-                parent_run=from_run or "", series_id=series or "", detach=detach,
-            )
-    else:
-        if sandbox:
-            print("--mode sandbox only applies to direct-template mode (--input)",
-                  file=sys.stderr)
-        if mock:
-            print("--mock only applies to direct-template mode (--input)", file=sys.stderr)
-        rc = _run_sync(
-            trigger_file, source=source, service=service, environment=environment,
-        )
-    raise typer.Exit(code=rc)
+            print(f"--input must be key=value or @FILE, got {item!r}", file=sys.stderr)
+            raise typer.Exit(2)
+    return values
+
+
+@contextlib.contextmanager
+def _inputs_file(values: dict[str, Any]) -> Any:
+    """The dev loop and the check read a file: hand them these values as one."""
+    with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8") as fh:
+        json.dump(values, fh)
+        fh.flush()
+        yield fh.name
+
+
+def _names_a_pipeline(ref: str) -> bool:
+    from cairn.core.pack import ensure_loaded  # noqa: PLC0415 — keeps --help light
+
+    ensure_loaded()
+    return (_not_an_agentic_template(ref) or ("", ""))[0] == "pipeline"
+
+
+def _startable(ref: str, *, a_server: Callable[[], bool]) -> bool:
+    """May this ref go to the launch door? A declared pipeline may; a flow never (the refusal in
+    :func:`_start_governed_sync` says why); an unknown ref only when there is a server, which may
+    have it installed."""
+    from cairn.core.dispatch.start import FlowNotRunnableError, UnknownStartRefError, resolve_start_ref  # noqa: PLC0415
+
+    try:
+        resolve_start_ref(ref)
+    except FlowNotRunnableError:
+        return False
+    except (UnknownStartRefError, ValueError):
+        return a_server()
+    return True
 
 
 def _parse_set(values: list[str]) -> dict[str, Any]:
@@ -923,7 +985,7 @@ def _parse_set(values: list[str]) -> dict[str, Any]:
 def _run_pipeline_file_sync(
     file_path: str,
     *,
-    environment_override: str,
+    environment_override: Optional[str],
     mock: bool,
     sandbox: bool,
     interactive: bool,
@@ -942,9 +1004,7 @@ def _run_pipeline_file_sync(
     governed or in-process, or the sentence above stops being true (ADR-0105 D1,
     #2118).
 
-    Env precedence: an explicit ``--env`` wins; otherwise the file's ``env``. We
-    read ``sys.argv`` to tell "explicitly passed" from "typer's default", because
-    the flag has a non-None default and Typer cannot report provenance here.
+    Env precedence: an explicit ``--environment`` wins; otherwise the file's ``env``.
     """
     from cairn.pipeline_file import PipelineFileError, load_pipeline_file, resolve_run_args
 
@@ -955,15 +1015,13 @@ def _run_pipeline_file_sync(
         print(f"{e}", file=sys.stderr)
         return 2
 
-    env_explicit = any(a == "--env" or a.startswith("--env=") for a in sys.argv[1:])
-    args = resolve_run_args(
-        cls, env=environment_override if env_explicit else None, inputs=overrides,
-    )
+    env_explicit = environment_override is not None
+    args = resolve_run_args(cls, env=environment_override, inputs=overrides)
     series_id = series_override or args["series"]
 
     print(f"pipeline: {cls.__name__}  ({file_path})")
     print(f"workflow: {args['workflow']}")
-    print(f"env:      {args['environment']}" + ("  [--env]" if env_explicit else "  [file]"))
+    print(f"env:      {args['environment']}" + ("  [--environment]" if env_explicit else "  [file]"))
     if series_id:
         print(f"series:   {series_id}")
     if args["inputs"]:
@@ -1005,33 +1063,6 @@ def _run_pipeline_file_sync(
             pass
 
 
-def preflight_cmd(
-    template_ref: str = typer.Argument(
-        ..., help="Namespaced agentic template reference, e.g. 'dataset-readiness/check'. "
-                  "A pipeline is checked with `cairn pipeline explain`.",
-    ),
-    input_file: Optional[str] = typer.Option(
-        None, "--input", "-i",
-        help="Path to a JSON object of input values. Optional — with no inputs "
-             "the verdict just lists what's missing.",
-    ),
-    profile: Optional[str] = typer.Option(
-        None, "--profile", "-p",
-        help="Environment/profile the plan resolves under. Default: the env-default profile.",
-    ),
-    no_connections: bool = typer.Option(
-        False, "--no-connections",
-        help="Skip the advisory connection-health check (faster; offline).",
-    ),
-) -> None:
-    """Preflight a workflow: the side-effect-free ready/blocked verdict — cost,
-    gates, and blockers — without starting a run (ADR-0072). Exit 0=ready, 1=blocked."""
-    from cairn.profiles import default_dev_profile  # noqa: PLC0415 — #2241 D: local compiles get local-dev
-
-    default_dev_profile()
-    raise typer.Exit(_preflight_sync(
-        template_ref, input_file, profile=profile, check_connections=not no_connections,
-    ))
 
 
 def main(argv: Optional[list[str]] = None) -> int:

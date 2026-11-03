@@ -116,7 +116,7 @@ async def drive_once(
     ``retriable`` (box/instance gone, OOM — not a clean training error) AND has a
     recorded ``checkpoint_uri`` AND is under ``max_attempts`` is RE-SUBMITTED to
     resume from that checkpoint instead of failing the run. Returns a
-    ``{done, failed, aborted, relaunched, running, claimed}`` tally."""
+    ``{done, failed, cancelled, aborted, relaunched, running, claimed}`` tally."""
     # ADR-0104 D2 (#565): a pull worker that died stops extending its lease. Put
     # its job back on the queue BEFORE this tick reads the active set, so a lost
     # worker costs one lease, not the run. Guarded because ``store`` is a
@@ -130,7 +130,7 @@ async def drive_once(
         except Exception:  # noqa: BLE001 — a failed sweep must not kill the loop
             logger.debug("worker-lease sweep failed", exc_info=True)
     active = await store.claim_active(limit=limit)
-    done = failed = aborted = relaunched = running = 0
+    done = failed = cancelled = aborted = relaunched = running = 0
     for rec in active:
         # #2025: live report events first, so a job that finishes this tick
         # has its whole curve in the store before the run resumes.
@@ -182,6 +182,12 @@ async def drive_once(
             await store.mark_failed(rec.id, status.error)
             await _safe_resume(resume, rec, status)
             failed += 1
+        elif status.state == "cancelled":
+            # ADR-0151 D9 — stopped by a cancel: terminal, never relaunched, and not
+            # a trajectory the learning gate may judge. Closed and resumed as such.
+            await store.mark_cancelled(rec.id)
+            await _safe_resume(resume, rec, status)
+            cancelled += 1
         elif cancel is not None and learning is not None and (status.metrics or {}).get("eval_losses"):
             # Mid-train quality gate: is it learning? If not, abort to stop spend.
             v = learning_verdict(status.metrics["eval_losses"], learning)
@@ -195,7 +201,7 @@ async def drive_once(
                 running += 1
         else:
             running += 1  # still running — leave it active for the next tick
-    return {"done": done, "failed": failed, "aborted": aborted, "relaunched": relaunched,
+    return {"done": done, "failed": failed, "cancelled": cancelled, "aborted": aborted, "relaunched": relaunched,
             "running": running, "claimed": len(active)}
 
 
@@ -399,6 +405,8 @@ def build_default_resume(dispatcher: Any) -> ResumeFn:
     async def resume(rec: RemoteJobRecord, status: JobStatus) -> None:
         if status.state == "succeeded":
             decision = {"status": "succeeded", "result": _result_dict(status.output)}
+        elif status.state == "cancelled":  # ADR-0151 D9 — a cancel, not a crash
+            decision = {"status": "cancelled", "error": status.error or "remote job cancelled"}
         else:
             decision = {"status": "failed", "error": status.error or "remote job failed"}
         await dispatcher.resume_run(rec.run_id, decision)

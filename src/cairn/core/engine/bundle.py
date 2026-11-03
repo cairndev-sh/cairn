@@ -104,7 +104,7 @@ class BundlePipeline(BaseModel):
     # ADR-0069 §5 — execution mode. "pipeline" (default): N governed runs chained by
     # the core PipelineBridge. "graph": the legacy flatten (ONE run, ADR-0069 Slice 5);
     # its compiler (compile_bundle.py) is removed, so nothing executes a "graph"
-    # pipeline — PipelineBridge.run_bundle refuses it.
+    # pipeline.
     mode: str = "pipeline"
 
 

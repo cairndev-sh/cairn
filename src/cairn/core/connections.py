@@ -490,7 +490,7 @@ def as_ssh_params(ctx: Any, *, operator: str) -> dict[str, Any]:
     compute = getattr(ctx, "compute", None)
     if compute is None:
         raise RuntimeError(
-            f"{operator} needs a compute.ssh connection — run `cairn connect ssh` "
+            f"{operator} needs a compute.ssh connection — run `cairn admin connect add ssh` "
             "and bind it via execution.compute_target"
         )
     cfg = getattr(compute, "config", None) or {}

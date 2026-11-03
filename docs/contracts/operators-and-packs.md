@@ -22,7 +22,12 @@
 only through `ctx.launch` (ADR-0120 D7, #2455: the dispatch layer's closure over the launch
 door; `None` outside a governed run). Side effects happen inside `run`;
 `cancel` must be safe on a terminal job; a `remote_job` operator owns submit/poll and the
-job channel. Failure: raise; the substrate records `Run.error` and `failure_type`.
+job channel. `poll` returns a `JobStatus` whose `state` is `running`, `succeeded`, `failed` or
+`cancelled`. `failed` may be `retriable` (a recoverable death, #552). `cancelled` (ADR-0151 D9)
+means a cancel stopped the job; it is terminal and never retriable, the control loop closes
+the record cancelled, and `run_job_lifecycle` ends with `JobCancelled`. The pull lane does not
+carry `cancelled`: the `/jobs` heartbeat accepts `queued`, `running`, `succeeded` and `failed`
+only, so a pull `Runner` reports a stopped job as `failed`. Failure: raise; the substrate records `Run.error` and `failure_type`.
 Idempotency is the operator's promise where it claims it (`supports_*`); nothing in the
 substrate retries an operator on its behalf except a leg's declared `retry:`. A pack imports
 only `cairn.core.operator` (plus `cairn.core.llm` / `cairn.core.eval` for those operators and
@@ -41,7 +46,7 @@ tests inside the pack.
 ## Entry-point groups (the discovery contract)
 `cairn.packs` · `cairn.operators` · `cairn.dataflow_engines` · `cairn.dataflow_stages` ·
 `cairn.flow_stages` · `cairn.dataset_readers` · `cairn.seeds`
-(the `cairn demo` data providers, ADR-0120 D4, `src/cairn/core/pack/seeds.py`; the one named
+(the `cairn admin demo` data providers, ADR-0120 D4, `src/cairn/core/pack/seeds.py`; the one named
 `platform-demo` also answers `POST /demo/seed?showcase=1` with `showcase=True`) ·
 `cairn.model_catalogs` (the licence door's catalogue providers, ADR-0120 D4,
 `src/cairn/core/pack/model_catalogs.py`) · `cairn.run_hooks` (the run/leg event listeners the
@@ -50,8 +55,11 @@ dispatch layer fires, plus the two query-shaped events whose provider may refuse
 is logged and ignored) and `pipeline.launching` (a pipeline launch, fired by the launch door
 before the pipeline record, with the launch's ref, inputs, workspace, account and trigger
 as read-only copies; a refusal is the door's `AdmissionRefusedError`, and a provider failure
-refuses the launch too); and `workspace.created`, fired by the admin router, #2421; ADR-0120
-D4, `src/cairn/core/pack/run_hooks.py`) · `cairn.routers`
+refuses the launch too); `pipeline.finished` (notify-only, #306: `pipeline_id`, `pipeline_ref`, `status`
+`done`/`failed`/`cancelled`, `workspace_id`, fired by the in-process pipeline bridge once per
+pipeline per process after the record is stored with its final status and, on `done`, its
+`outputs`; a provider failure is logged, never raised); and `workspace.created`, fired by the
+admin router, #2421; ADR-0120 D4, `src/cairn/core/pack/run_hooks.py`) · `cairn.routers`
 (HTTP surfaces beyond the public API, ADR-0120 D4, `src/cairn/core/triggers/router_providers.py`) ·
 `cairn.cli` (commands beyond the public CLI — a provider returns a `typer.Typer` or a list of
 `(name, typer.Typer)`, mounted after the public commands, which win every name; #2421,
@@ -71,7 +79,7 @@ checks this list against the code). Adding a group is an architecture change (ro
 
 ## Installability and versioning
 Each pack is a workspace member with its own `pyproject.toml`; `cairn.lock` pins the shipped
-closure by content hash (`uv run cairn lock --check` in CI). A pack must install and pass
+closure by content hash (`uv run cairn pack lock --check` in CI). A pack must install and pass
 its own tests against the public core surface alone. Versioning and deprecation follow
 `docs/compatibility.md`: operator input/output schemas are public; adding an optional
 field is additive; removing or retyping one is breaking and needs a manifest version bump

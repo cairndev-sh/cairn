@@ -237,6 +237,7 @@ async def reconcile_stale_runs(
     dead_leg_fn: Optional[DeadLegFn] = None,
     pipeline_status_fn: Optional[PipelineStatusFn] = None,
     cancel_fn: Optional[CancelFn] = None,
+    live_fn: Optional[Callable[[str], bool]] = None,
 ) -> list[str]:
     """One sweep: reconcile every run cairn still thinks is active whose Temporal
     workflow has actually reached a terminal state. Returns the reconciled run ids.
@@ -258,6 +259,10 @@ async def reconcile_stale_runs(
     it to the pipeline bridge (``dead_leg_fn``), whose adopt rules decide. A run
     this process owns (``self_owner``) is never judged.
 
+    A run ``live_fn`` says has a live task in this process is left to that task. A workflow
+    that has just ended is the moment its task records why, and writing first would take the
+    reason and fail the pipeline before it's known.
+
     A per-run failure is logged and skipped — one bad run must not abort the sweep.
     """
     now = now or datetime.now(timezone.utc)
@@ -274,6 +279,8 @@ async def reconcile_stale_runs(
             logger.warning("reconciler: list(status=%s) failed: %s", status, exc)
             continue
         for run in runs:
+            if live_fn is not None and live_fn(run.id):
+                continue  # its own task is still running here, and it records the end
             started = _parse_iso(getattr(run, "created_at", None))
             if started and (now - started).total_seconds() < grace_seconds:
                 continue  # inside the grace window — too young to judge
@@ -345,13 +352,25 @@ async def reconcile_stale_runs(
                     extra = _completion_fields(run, output, await _events_or_empty(store, run.id))
                     note = "terminal state AND result recovered from the runtime"
             try:
-                await store.update(
+                # The list and the probes above took time, and a workflow that has just ended is
+                # the moment its own task records why. That record is better than this one, so
+                # it isn't overwritten and no second terminal is published. The store refuses a
+                # move to a different terminal, but it allows failed to failed, so a write landing
+                # between these two lines can still lose its reason.
+                current = await store.get(run.id)
+                if current is None or current.status not in ACTIVE_STATUSES:
+                    logger.debug("reconciler: %s ended while it was being judged; leaving it", run.id)
+                    continue
+                updated = await store.update(
                     run.id,
                     status=terminal,
                     ended_at=now.isoformat(),
                     error=(None if terminal == "done" else f"reconciled: {note}"),
                     **extra,
                 )
+                if updated.status != terminal:  # the store's transition guard refused it
+                    logger.debug("reconciler: %s is %s; %s was refused", run.id, updated.status, terminal)
+                    continue
                 await store.append_event(
                     run.id,
                     terminal,
@@ -502,6 +521,7 @@ class RunReconciler:
         dead_leg_fn: Optional[DeadLegFn] = None,
         pipeline_status_fn: Optional[PipelineStatusFn] = None,
         cancel_fn: Optional[CancelFn] = None,
+        live_fn: Optional[Callable[[str], bool]] = None,
     ) -> None:
         self.store = store
         self.owner_probe = owner_probe
@@ -510,6 +530,7 @@ class RunReconciler:
         self.dead_leg_fn = dead_leg_fn
         self.pipeline_status_fn = pipeline_status_fn
         self.cancel_fn = cancel_fn
+        self.live_fn = live_fn
         self.status_fn = status_fn
         self.owner_alive_fn = owner_alive_fn
         self.result_fn = result_fn
@@ -546,7 +567,7 @@ class RunReconciler:
             owner_probe=self.owner_probe,
             self_owner=self.self_owner_fn() if self.self_owner_fn is not None else "",
             owner_watch=self.owner_watch, dead_leg_fn=self.dead_leg_fn,
-            pipeline_status_fn=self.pipeline_status_fn, cancel_fn=self.cancel_fn,
+            pipeline_status_fn=self.pipeline_status_fn, cancel_fn=self.cancel_fn, live_fn=self.live_fn,
         )
 
     async def _loop(self) -> None:

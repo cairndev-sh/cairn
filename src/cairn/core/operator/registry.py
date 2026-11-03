@@ -34,9 +34,9 @@ class DuplicateOperatorError(ValueError):
     """Raised when two operators try to register under the same name.
 
     Different ``version``s of the same name are allowed via :meth:`register`
-    keeping the latest; this exception fires when registration is strict
-    (the loader will use strict mode; in-process registration is
-    last-wins by default).
+    keeping the latest; this exception fires only when registration is
+    strict. Every production load is non-strict: the last registration
+    wins with a warning (see ``loader.load_all_operators``).
     """
 
 

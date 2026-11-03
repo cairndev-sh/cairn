@@ -152,3 +152,24 @@ def test_docker_and_remote_job_implemented():
     impl = ex.implemented_executors()
     assert "docker" in impl and "remote_job" in impl
     assert ex.is_implemented("remote_job") and ex.is_implemented("docker")
+
+
+async def test_lifecycle_cancelled_ends_without_spinning():
+    """ADR-0151 D9: `cancelled` is terminal — the lifecycle ends (JobCancelled, a
+    JobFailed) on the first poll instead of polling until max_polls."""
+    class _Cancelled(_FakeDriver):
+        async def poll(self, handle):
+            self._polls += 1
+            return JobStatus(state="cancelled", error="remote job cancelled")
+
+    d = _Cancelled()
+    try:
+        await run_job_lifecycle(d, poll_interval=0, max_polls=50)
+        err = None
+    except Exception as e:  # noqa: BLE001 — the terminal raise is what is checked
+        err = e
+    assert d._polls == 1, f"spun {d._polls} polls on a cancelled job ({type(err).__name__})"
+    from cairn.core.operator.jobs import JobCancelled
+
+    assert isinstance(err, JobCancelled) and "cancelled" in str(err)
+    assert issubclass(JobCancelled, JobFailed)

@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import AbstractAsyncContextManager
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Callable
 
 from cairn.core.runtime.temporal import require
 
@@ -19,8 +20,10 @@ logger = logging.getLogger("cairn.runtime.temporal.pipeline_activities")
 
 require()
 from temporalio import activity  # noqa: E402
+from cairn.core.dispatch.coordination import CriticalSections  # noqa: E402
 
 _DISPATCHER: Any = None  # worker-process dispatcher, built once (holds the store pool)
+_SECTIONS = CriticalSections(namespace="pipeline")
 
 _RUN_TERMINAL = ("done", "succeeded", "failed", "cancelled")
 # #2223 — the failure types of the flow-leg re-adoption checks live beside NEEDS_APPROVAL
@@ -42,19 +45,27 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-async def _pin_step_run(pstore: Any, pipeline_id: str, step_id: str, run_id: str) -> None:
+async def _pin_step_run(
+    pstore: Any,
+    pipeline_id: str,
+    step_id: str,
+    run_id: str,
+    *,
+    section: Callable[[str], AbstractAsyncContextManager[None]],
+) -> None:
     """Record the leg's run_id on the pipeline's step the moment it exists —
     the retry/adopt anchor (#1429). Best-effort: the workflow mirrors it too."""
     try:
-        rec = await pstore.get(pipeline_id)
-        st = rec.step_state.get(step_id) if rec else None
-        if rec is None or st is None:
-            return
-        st.run_id = run_id
-        st.status = "running"
-        st.started_at = st.started_at or _now()
-        rec.step_state[step_id] = st
-        await pstore.put(rec)
+        async with section(pipeline_id):
+            rec = await pstore.get(pipeline_id)
+            st = rec.step_state.get(step_id) if rec else None
+            if rec is None or st is None:
+                return
+            st.run_id = run_id
+            st.status = "running"
+            st.started_at = st.started_at or _now()
+            rec.step_state[step_id] = st
+            await pstore.put(rec)
     except Exception:  # noqa: BLE001 — read-model, never fail the leg on it
         logger.debug("_pin_step_run failed for %s/%s", pipeline_id, step_id, exc_info=True)
 
@@ -110,8 +121,19 @@ async def pipeline_submit_step(
     """
     from cairn.core.dispatch.leg_executor import leg_kind_of  # noqa: PLC0415 — engine code stays out of workflow imports
 
+    from cairn.core.obs.telemetry import span, use_parent  # noqa: PLC0415 — engine code stays out of workflow imports
+
+    # #222 — the workflow stays deterministic: it carries no trace state. The activity
+    # reads the root span's context from the pipeline record (stored at launch) and
+    # starts the leg as its child, in whatever worker process runs it.
+    parent = await _pipeline_trace_context(pipeline_id)
     if leg_kind_of(ref) == "flow":
-        return await _run_flow_leg(ref, resolved, pipeline_id, step_id, environment, step or {})
+        with span("cairn.flow_leg", {"flow": ref, "step": step_id, "run_id": pipeline_id,
+                                     "owner": "temporal"}, parent=parent) as sp:
+            run_id = await _run_flow_leg(ref, resolved, pipeline_id, step_id, environment, step or {})
+            if sp is not None:
+                sp.set_attribute("leg_run_id", run_id)
+            return run_id
     from cairn.core.storage.pipeline_store import default_pipeline_store  # noqa: PLC0415 — cycle
     from cairn.core.workspace import workspace_scope  # noqa: PLC0415 — engine code stays out of workflow imports
 
@@ -119,12 +141,31 @@ async def pipeline_submit_step(
     # request context, so the pipeline record names the leg's workspace — the one the
     # leg's run is stamped with and its connections and secrets resolve in.
     rec = await _leg_pipeline_record(default_pipeline_store(), pipeline_id, step_id)
-    with workspace_scope(getattr(rec, "workspace_id", "") or ""):
+    with workspace_scope(getattr(rec, "workspace_id", "") or ""), use_parent(parent):
         run = await _dispatcher().run_template(
             ref, resolved, environment=environment or None,
             bundle_pipeline_id=pipeline_id, step_id=step_id,
         )
+    from cairn.core.dispatch.leg_hooks import audit_leg_submitted  # noqa: PLC0415 — cycle
+
+    await audit_leg_submitted(rec, step_id, run, ref)   # #233 — from the activity, not the workflow
     return run.id
+
+
+async def _pipeline_trace_context(pipeline_id: str) -> dict:
+    """The W3C context of the pipeline's root span, from its record (#222). Best
+    effort and ``{}`` when tracing is off: reading it must never fail or delay a leg
+    (the leg's own governed read of the record, ``_leg_pipeline_record``, still runs)."""
+    from cairn.core.obs.telemetry import tracing_active  # noqa: PLC0415 — engine code stays out of workflow imports
+
+    if not tracing_active():
+        return {}
+    try:
+        from cairn.core.storage.pipeline_store import default_pipeline_store  # noqa: PLC0415 — cycle
+        rec = await default_pipeline_store().get(pipeline_id)
+        return dict(getattr(rec, "trace_context", None) or {})
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 async def _leg_pipeline_record(pstore: Any, pipeline_id: str, step_id: str, *,
@@ -270,7 +311,10 @@ async def _run_flow_leg(
     from cairn.core.dataflow.defs import flow_def_for  # noqa: PLC0415 — cycle: defs → pack registry
     from cairn.core.dispatch.dispatcher import new_run_id  # noqa: PLC0415 — cycle
     from cairn.core.dispatch.leg_executor import execute_leg, parse_flow_ref, recorded_stage_contracts  # noqa: PLC0415 — cycle
-    from cairn.core.dispatch.leg_hooks import FlowLegHooks, flow_leg_record, leg_price_kwargs, pipeline_spent_usd  # noqa: PLC0415 — cycle
+    from cairn.core.dispatch.leg_hooks import (  # noqa: PLC0415 — cycle
+        FlowLegHooks, audit_flow_leg_finished, audit_leg_submitted, budget_cap_usd, flow_leg_record,
+        leg_price_kwargs, pipeline_spent_usd,
+    )
     from cairn.core.dispatch.pipeline_bridge import (  # noqa: PLC0415 — cycle
         _flow_leg_output,
         _leg_retry_policy,
@@ -284,6 +328,7 @@ async def _run_flow_leg(
     from temporalio.exceptions import ApplicationError  # noqa: PLC0415 — engine code stays out of workflow imports
 
     d = _dispatcher()
+    sections = _SECTIONS
     pstore = default_pipeline_store()
     # Governance + workspace come from the pipeline record (the workflow doesn't
     # carry them). #2223 — an UNREADABLE store is not an ABSENT record: a read
@@ -301,7 +346,7 @@ async def _run_flow_leg(
     # the earlier legs ACTUALLY spent. Read before anything is created; an
     # unreadable run store is "unknown", so the activity retries (#2223).
     series_id = str(gov.get("series", "") or "")
-    budget_usd = float((gov.get("budget") or {}).get("usd", 0.0) or 0.0)
+    budget_usd = budget_cap_usd(rec)   # ADR-0155 D4: the recorded effective cap, as in the bridge
     spent_usd = 0.0
     if series_id and budget_usd:
         try:
@@ -367,7 +412,19 @@ async def _run_flow_leg(
             workspace_id=workspace_id,
         )
         await d.store.create(run)
-        await _pin_step_run(pstore, pipeline_id, step_id, run.id)
+        async def heartbeat_until_pin() -> None:
+            while True:
+                activity.heartbeat()
+                await asyncio.sleep(5.0)
+
+        heartbeat_task = asyncio.create_task(heartbeat_until_pin())
+        try:
+            await _pin_step_run(pstore, pipeline_id, step_id, run.id, section=sections.hold)
+        finally:
+            heartbeat_task.cancel()
+            await asyncio.gather(heartbeat_task, return_exceptions=True)
+        # #233 — the hash-chained trail, from the activity (a workflow body stays deterministic)
+        await audit_leg_submitted(rec, step_id, run, ref)
 
     # The flow's OWN kind picks the engine (#1180 bugs 5-6: kind from the def,
     # with the pack dir/manifest name alias fallback). #2126 — through
@@ -391,6 +448,7 @@ async def _run_flow_leg(
         pipeline_id=pipeline_id, step_id=step_id, leg_ref=ref, run_id=run.id,
         pipeline_store=pstore, run_store=d.store, emit=d._emit,
         artifact_store=build_artifact_store(), engine=engine,
+        section=sections.hold,
     )
     resolved = dict(resolved or {})
     retry_policy = _leg_retry_policy(resolved.pop("retry", None))
@@ -439,6 +497,9 @@ async def _run_flow_leg(
         "done" if outcome.ok else "failed",
         {"leg": ref, "step_id": step_id, "error": outcome.error or ""},
     )
+    await audit_flow_leg_finished(pipeline_id, step_id, ref=ref, run=run, outcome=outcome,
+                                  status=_leg_run_status(outcome),
+                                  engine=str((getattr(hooks, "leg_handle", None) or {}).get("engine", "") or ""))
     return run.id
 
 
@@ -507,6 +568,36 @@ async def pipeline_emit_event(event: str, output: dict, pipeline_id: str, step_i
         logger.warning("pipeline_emit_event failed for %r (step %s): %s", event, step_id, e)
 
 
+async def _settle_pipeline_outputs(store: Any, pipeline_id: str) -> None:
+    """ADR-0161 D3 — the bridge's ``_settle_outputs`` for a Temporal-owned pipeline,
+    through the same helpers: resolve the plan's ``outputs:`` from the done legs' runs,
+    store them, then emit them. Once: ``outputs`` is ``None`` until written here.
+    Never fails the mirror."""
+    from cairn.core.dispatch.leg_hooks import emit_pipeline_outputs, resolve_pipeline_outputs  # noqa: PLC0415
+    from cairn.core.dispatch.pipeline_bridge import reconstruct_step_output  # noqa: PLC0415
+
+    try:
+        async with _SECTIONS.hold(pipeline_id):
+            rec = await store.get(pipeline_id)
+            plan = getattr(rec, "plan", None)
+            if (rec is None or rec.status != "done" or rec.outputs is not None or plan is None
+                    or not (plan.outputs or plan.emits)):
+                return
+            runs = _dispatcher().store
+            steps: dict = {}
+            for sid, st in rec.step_state.items():
+                if st.status == "done" and st.run_id:
+                    run = await runs.get(st.run_id)
+                    if run is not None:
+                        steps[sid] = reconstruct_step_output(run)
+            rec.outputs, rec.outputs_errors = resolve_pipeline_outputs(
+                plan.outputs, inputs=rec.inputs, steps=steps)
+            await store.put(rec)
+        await emit_pipeline_outputs(rec)
+    except Exception:  # noqa: BLE001 — the read-model never fails the workflow
+        logger.warning("pipeline %s: settling outputs failed", pipeline_id, exc_info=True)
+
+
 @activity.defn(name="cairn.pipeline_mirror_state")
 async def pipeline_mirror_state(pipeline_id: str, step_state: dict, status: str) -> None:
     """Mirror the workflow's authoritative state into the ``pipelines`` read-model so the
@@ -530,41 +621,103 @@ async def pipeline_mirror_state(pipeline_id: str, step_state: dict, status: str)
         )
 
         store = default_pipeline_store()
-        rec = await store.get(pipeline_id)
-        if rec is None:
-            # #2223 — never INVENT a record: a synthesized one (empty governance, the
-            # "default" workspace) would let the next leg run ungoverned. The bridge
-            # writes the record before the workflow starts; absent means deleted.
-            logger.warning("pipeline_mirror_state: no record for %s; not recreating it", pipeline_id)
-            return
-        now = _now()
-        merged: dict[str, StepState] = {}
-        for sid, st in (step_state or {}).items():
-            incoming = {k: v for k, v in st.items() if k in StepState.model_fields}
-            prev = rec.step_state.get(sid)
-            if prev is not None:
-                keep = prev.model_dump()
-                # activity-owned fields win when the workflow has nothing newer
-                for k in ("handle", "run_id", "started_at", "ended_at", "approver", "awaiting_since"):
-                    if incoming.get(k) is None and keep.get(k) is not None:
-                        incoming[k] = keep[k]
-            new = StepState(**incoming)
-            was = str(getattr(prev, "status", "") or "pending")
-            if new.status == "running" and not new.started_at:
-                new.started_at = now
-            if new.status in _STEP_TERMINAL and not new.ended_at and (was != new.status or prev is None):
-                new.ended_at = now
-            if new.status.startswith("awaiting_") and not new.awaiting_since:
-                new.awaiting_since = now
-            merged[sid] = new
-        rec.step_state = merged
-        rec.status = status
-        rec.updated_at = now
-        if status in ("done", "failed", "cancelled") and not rec.ended_at:
-            rec.ended_at = now
-        await store.put(rec)
+        # The mirror is a whole-record read-modify-write. It must use the same
+        # section as pin/handle/approver writers or a stale workflow snapshot can
+        # put those fields back after a sibling leg updates them.
+        async with _SECTIONS.hold(pipeline_id):
+            rec = await store.get(pipeline_id)
+            if rec is None:
+                # #2223 — never INVENT a record: a synthesized one (empty governance, the
+                # "default" workspace) would let the next leg run ungoverned. The bridge
+                # writes the record before the workflow starts; absent means deleted.
+                logger.warning("pipeline_mirror_state: no record for %s; not recreating it", pipeline_id)
+                return
+            now = _now()
+            newly_terminal = status in ("done", "failed", "cancelled") and not rec.ended_at
+            merged: dict[str, StepState] = {}
+            for sid, st in (step_state or {}).items():
+                incoming = {k: v for k, v in st.items() if k in StepState.model_fields}
+                prev = rec.step_state.get(sid)
+                if prev is not None:
+                    keep = prev.model_dump()
+                    # activity-owned fields win when the workflow has nothing newer
+                    for k in ("handle", "run_id", "started_at", "ended_at", "approver", "awaiting_since"):
+                        if incoming.get(k) is None and keep.get(k) is not None:
+                            incoming[k] = keep[k]
+                new = StepState(**incoming)
+                was = str(getattr(prev, "status", "") or "pending")
+                if new.status == "running" and not new.started_at:
+                    new.started_at = now
+                if new.status in _STEP_TERMINAL and not new.ended_at and (was != new.status or prev is None):
+                    new.ended_at = now
+                if new.status.startswith("awaiting_") and not new.awaiting_since:
+                    new.awaiting_since = now
+                merged[sid] = new
+                if new.status in _STEP_TERMINAL and (was != new.status or prev is None):
+                    try:
+                        await _audit_step_terminal(rec, sid, new)
+                    except Exception:  # noqa: BLE001 — audit never breaks the mirror
+                        logger.debug("leg audit failed for %s/%s", pipeline_id, sid, exc_info=True)
+            rec.step_state = merged
+            rec.status = status
+            rec.updated_at = now
+            newly_terminal = status in ("done", "failed", "cancelled") and not rec.ended_at
+            if newly_terminal:
+                rec.ended_at = now
+            await store.put(rec)
+        if newly_terminal:
+            from cairn.core.obs.telemetry import span  # noqa: PLC0415 — engine code stays out of workflow imports
+            with span("cairn.pipeline.settle", {"run_id": pipeline_id, "status": status, "owner": "temporal"},
+                      parent=getattr(rec, "trace_context", None)):  # #222 — the trace's closing span
+                pass
+            try:
+                await _audit_pipeline_terminal(rec)
+            except Exception:  # noqa: BLE001 — audit never breaks the mirror
+                logger.debug("pipeline audit failed for %s", pipeline_id, exc_info=True)
+            if status == "done":
+                await _settle_pipeline_outputs(store, pipeline_id)
     except Exception as e:  # noqa: BLE001 — read-model, never fail the workflow on it
         logger.debug("pipeline_mirror_state failed for %s: %s", pipeline_id, e)
+
+
+async def _audit_step_terminal(rec: Any, step_id: str, st: Any) -> None:
+    """#233 — ``leg.finished`` for a step the workflow settled. A flow leg that ran wrote its
+    own row from the engine outcome (``_run_flow_leg``); every other terminal (a template
+    leg, a skipped or refused step) is written here, from the activity that mirrors it."""
+    from cairn.core.dispatch.leg_hooks import audit_bound, audit_leg_finished  # noqa: PLC0415 — cycle
+
+    if not audit_bound():
+        return
+    step = rec.plan.step(step_id) if getattr(rec, "plan", None) else None
+    ref = str(getattr(step, "ref", "") or "")
+    if ref.startswith("flow:") and st.run_id:
+        return
+    run = None
+    if st.run_id:
+        try:
+            run = await _dispatcher().store.get(st.run_id)
+        except Exception:  # noqa: BLE001 — the row is written without the cost
+            run = None
+    await audit_leg_finished(rec.pipeline_id, step_id, ref=ref, state=st.status, run=run,
+                             reason=str(st.verdict or getattr(run, "error", "") or ""))
+
+
+async def _audit_pipeline_terminal(rec: Any) -> None:
+    """#233 — ``pipeline.finished`` with the total settled spend (a cancel the control plane
+    recorded already stamped ``ended_at``, so it is not written twice)."""
+    from cairn.core.dispatch.leg_hooks import audit_bound, audit_pipeline_event, pipeline_spent_usd  # noqa: PLC0415 — cycle
+
+    if not audit_bound():
+        return
+    try:
+        spent = await pipeline_spent_usd(rec, _dispatcher().store)
+    except Exception:  # noqa: BLE001 — unknown spend is omitted, never reported as 0
+        spent = None
+    await audit_pipeline_event(
+        "pipeline.finished", pipeline_id=rec.pipeline_id,
+        outcome={"done": "ok", "cancelled": "ok"}.get(rec.status, "error"),
+        state=rec.status, reason=str((rec.trigger or {}).get("failure_reason") or ""), spent_usd=spent,
+        budget_usd=((getattr(rec, "governance", None) or {}).get("budget") or {}).get("usd"))
 
 
 ACTIVITIES = [

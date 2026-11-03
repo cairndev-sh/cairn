@@ -245,6 +245,20 @@ def test_a_reclaimed_spot_cluster_is_retriable():
     assert st.state == "failed" and st.retriable is True
 
 
+def test_failed_terminal_status_returns_fetched_partial_cost(tmp_path, monkeypatch):
+    monkeypatch.setattr(sp, "fetch_dir", lambda wd: tmp_path / wd.rsplit("/", 1)[-1])
+    monkeypatch.setattr(sp.results, "read_metrics", lambda workdir: {"cost_usd": 0.43})
+    eng, _fake, _fetch, handle = _submitted(
+        tmp_path, [], payload={"error": "stage failed"},
+        statuses=[{"status": "UP", "job_status": "FAILED"}],
+    )
+
+    status = asyncio.run(eng.poll(handle))
+
+    assert status.state == "failed"
+    assert status.metrics["cost_usd"] == 0.43
+
+
 # ── teardown + receipt ──────────────────────────────────────────────────────
 
 

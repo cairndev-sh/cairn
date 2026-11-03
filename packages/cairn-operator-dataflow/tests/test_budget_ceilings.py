@@ -8,8 +8,11 @@ of letting a run finish looking guarded.
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 
+from cairn.core import obs
 from cairn.core.dataflow.contract import Budget, DataflowSpec, StageRef
 
 from cairn.core.dataflow import runner
@@ -93,6 +96,54 @@ def test_no_declared_ceiling_means_no_flag_and_no_abort(registry):
     res = run_dataflow(_spec([StageRef(stage="a")]), _wd())
     assert "cost_budget_unenforced" not in res.stats
     assert res.stats["stages_done"] == 1
+
+
+def test_failed_stage_metrics_keep_cumulative_metered_spend(monkeypatch, tmp_path):
+    def paid_stage(wd, config, inputs):
+        obs.record_llm("gpt-4o-mini", 10, 5, 0.2, usd=0.2)
+        return {}
+
+    def failing_stage(wd, config, inputs):
+        obs.record_llm("gpt-4o-mini", 10, 5, 0.3, usd=0.3)
+        raise RuntimeError("stage failed after its paid call")
+
+    monkeypatch.setattr(runner, "load_stages", lambda: {
+        "paid": paid_stage,
+        "fails": failing_stage,
+    })
+
+    with pytest.raises(RuntimeError, match="paid call"):
+        run_dataflow(DataflowSpec(stages=[
+            StageRef(stage="paid"), StageRef(stage="fails"),
+        ]), tmp_path)
+
+    metrics = json.loads((tmp_path / "metrics.json").read_text(encoding="utf-8"))
+    assert metrics["cost_usd"] == pytest.approx(0.5)
+    assert metrics["stages_done"] == 1
+
+
+def test_builtin_failed_status_surfaces_partial_cost(tmp_path, monkeypatch):
+    import asyncio
+
+    from cairn.core.dataflow import EngineJobHandle
+    from operator_dataflow import engines as engines_module
+    from operator_dataflow.engines import BuiltinLocalEngine
+
+    class _ExitedProcess:
+        returncode = 1
+
+    (tmp_path / "metrics.json").write_text('{"cost_usd": 0.5}', encoding="utf-8")
+    monkeypatch.setitem(engines_module._PROCS, "failed-job", {
+        "proc": _ExitedProcess(), "workdir": tmp_path, "deadline": None,
+        "budget_hit": False, "cancelled": False,
+    })
+
+    status = asyncio.run(BuiltinLocalEngine().poll(
+        EngineJobHandle(job_id="failed-job", engine="builtin", meta={}),
+    ))
+
+    assert status.state == "failed"
+    assert status.metrics["cost_usd"] == 0.5
 
 
 # ── malformed stats must not be the thing that kills a run ─────────────────

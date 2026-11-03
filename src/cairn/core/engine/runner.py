@@ -75,6 +75,34 @@ async def run_within_budget(
         }
 
 
+def template_cost_cap(compiled: Any) -> Optional[float]:
+    """A compiled template's ``budget.max_cost_usd``, or ``None``."""
+    return getattr(getattr(getattr(compiled, "spec", None), "budget", None), "max_cost_usd", None)
+
+
+def cost_cap_reason(output: Any) -> str:
+    """Why a cost cap stopped the run that produced ``output``, or ``""``. The wall-clock
+    limit's output has no ``reason``: that one still ends ``done``."""
+    if isinstance(output, dict) and output.get("budget_exceeded"):
+        return str(output.get("reason") or "")
+    return ""
+
+
+def budget_exceeded_output(reason: str) -> dict[str, Any]:
+    """The output of a run a cost cap stopped, which `cairn gate` and scoring read."""
+    return {"type": "budget_exceeded", "budget_exceeded": True, "reason": reason, "output": ""}
+
+
+def _mark_if_over_cap(output: Any, ctx: Any) -> Any:
+    """Spend that never raised, because a handler swallowed it, still counts."""
+    from cairn.core import obs  # noqa: PLC0415 — matches the run path
+
+    reason = "" if cost_cap_reason(output) else obs.over_cap_reason(ctx, ctx.cost_usd)
+    if reason and isinstance(output, dict):
+        return {**output, "budget_exceeded": True, "reason": reason}
+    return output
+
+
 def _attached_store_policies_from_env() -> set[str] | None:
     """The active environment's store-policy attach-list (#317, ADR-0053).
 
@@ -210,7 +238,7 @@ class Runner:
             )
             import logging
             log = logging.getLogger("cairn.runner")
-            for chain in chain_skills:
+            for chain in [] if cost_cap_reason(result.raw_output) else chain_skills:
                 if _cascade_depth >= self.cascade_depth_limit:
                     log.warning(
                         "cascade depth limit (%d) reached; skipping chain %s → %s",
@@ -358,19 +386,16 @@ class Runner:
         # per-investigation budget.max_cost_usd ceiling enforced via BudgetCallback).
         from cairn.core import obs
 
-        with obs.cost_scope(f"run-{loaded.spec.name}") as cost_ctx:
+        cost_cap = template_cost_cap(loaded.compiled_template)
+        with obs.cost_scope(f"run-{loaded.spec.name}", max_cost_usd=cost_cap) as cost_ctx:
             try:
                 template_output = await run_within_budget(
                     loaded.compiled_template, invocation_input
                 )
             except obs.BudgetExceeded as be:
                 _log.warning("skill %s aborted on cost budget: %s", loaded.spec.name, be)
-                template_output = {
-                    "type": "budget_exceeded",
-                    "budget_exceeded": True,
-                    "reason": str(be),
-                    "output": "",
-                }
+                template_output = budget_exceeded_output(str(be))
+            template_output = _mark_if_over_cap(template_output, cost_ctx)
             if isinstance(template_output, dict):
                 template_output["cost_usd"] = round(cost_ctx.cost_usd, 6)
 
@@ -401,28 +426,35 @@ class Runner:
         #     output and (when below the confidence bar) re-runs the template with
         #     feedback, bounded by critique.max_passes ∧ budget.max_iterations.
         #     No-op unless the template declares an enabled `critique` block.
-        if getattr(loaded.compiled_template.spec, "critique", None) is not None:
+        # #417: a run a cost cap stopped gets no critique, which would spend again. Any
+        # other run's critique counts towards the same cap, so its scope starts from
+        # what the run has spent.
+        if (getattr(loaded.compiled_template.spec, "critique", None) is not None
+                and not cost_cap_reason(template_output)):
+            crit_ctx = None
             try:
                 from cairn.core.guards.critique import run_critique_loop
 
                 budget = getattr(loaded.compiled_template.spec, "budget", None)
                 max_iters = getattr(budget, "max_iterations", None) if budget else None
-                with obs.cost_scope(f"critique-{loaded.spec.name}") as crit_ctx:
+                with obs.cost_scope(f"critique-{loaded.spec.name}", max_cost_usd=cost_cap) as crit_ctx:
+                    crit_ctx.cost_usd = cost_ctx.cost_usd
                     template_output = await run_critique_loop(
                         loaded.compiled_template,
                         template_output,
                         invocation_input,
                         max_iterations_cap=max_iters,
                     )
-                    if isinstance(template_output, dict):
-                        template_output["cost_usd"] = round(
-                            template_output.get("cost_usd", 0.0) + crit_ctx.cost_usd, 6
-                        )
             except obs.BudgetExceeded as be:
                 _log.warning("skill %s critique aborted on cost budget: %s",
                              loaded.spec.name, be)
+                template_output = budget_exceeded_output(str(be))
             except Exception as e:  # critique must never break an investigation
                 _log.warning("critique loop raised %s; ignoring", e)
+            if crit_ctx is not None:
+                template_output = _mark_if_over_cap(template_output, crit_ctx)
+                if isinstance(template_output, dict):
+                    template_output["cost_usd"] = round(crit_ctx.cost_usd, 6)
 
         # Stream the evidence as soon as the investigation produced it — this
         # is the "partial output" a follower sees before the run completes.
@@ -440,7 +472,8 @@ class Runner:
 
         # 2. Evaluate each action candidate against policies
         action_decisions: list[ActionDecision] = []
-        for candidate in loaded.action_candidates:
+        # #417: a run a cost cap stopped doesn't act on what it found so far.
+        for candidate in () if cost_cap_reason(template_output) else loaded.action_candidates:
             request = ActionRequest(
                 candidate=candidate,
                 environment=env,  # type: ignore[arg-type]
@@ -518,6 +551,7 @@ class Runner:
             template_ast=template_ast,
             trigger=loaded.trigger,
             raw_output=template_output,
+            llm_cost_usd=float(template_output.get("cost_usd") or 0.0) if isinstance(template_output, dict) else 0.0,
             actions=action_decisions,
             action_outcomes=action_outcomes,
             duration_seconds=duration,

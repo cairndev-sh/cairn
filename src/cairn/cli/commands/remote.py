@@ -1,4 +1,4 @@
-"""``cairn remote`` — drive a running cairn-server from the terminal.
+"""The client helpers ``cairn status``, ``decide``, ``run`` and ``setup --server`` share to drive a running cairn-server.
 
 Submit runs, list/inspect them, stream their logs live, cancel them, and
 resolve HITL approvals — against a local or hosted server. Talks the server's
@@ -12,6 +12,11 @@ Config lives at ``~/.cairn/config.toml``::
     endpoint = "http://localhost:9090"
     token = "eyJ..."        # written by `remote login`
 
+The file holds a credential, so it is written 0600. A verb whose session meets a 401
+prints one line, ``session expired at HH:MM — run `cairn remote login```, and exits
+:data:`EXIT_SESSION_EXPIRED`, watches included (#230). The CLI does not renew its
+sign-in: ADR-0142 D8 keeps the CLI on the access token alone.
+
 Resolution precedence for endpoint/token: explicit ``--endpoint``/``--token`` >
 env (``CAIRN_REMOTE_ENDPOINT`` / ``CAIRN_REMOTE_TOKEN``) > the named/default profile
 > ``http://localhost:9090`` (no token).
@@ -19,6 +24,7 @@ env (``CAIRN_REMOTE_ENDPOINT`` / ``CAIRN_REMOTE_TOKEN``) > the named/default pro
 from __future__ import annotations
 from cairn.core.settings import getenv
 
+import base64
 import contextlib
 import json
 import os
@@ -36,16 +42,12 @@ import typer
 
 from cairn.cli.commands.dev import dev_env
 
-app = typer.Typer(
-    name="remote",
-    help="Drive a remote cairn-server: login / submit / ps / status / logs / cancel / approve / reject.",
-    no_args_is_help=True,
-    add_completion=False,
-)
-
 _TERMINAL = {"done", "failed", "cancelled"}
 _LIFECYCLE = {"queued", "running", "awaiting_approval", "resumed", *_TERMINAL}
 _DEFAULT_ENDPOINT = "http://localhost:9090"
+#: #230 — the exit code of a session the server refused (sysexits' EX_NOPERM), so a
+#: script polling the CLI can tell "sign in again" from a failure.
+EXIT_SESSION_EXPIRED = 77
 
 
 # ─── config (~/.cairn/config.toml) ─────────────────────────────
@@ -85,13 +87,16 @@ def _dump_config(cfg: dict) -> str:
 
 
 def _save_config(cfg: dict) -> None:
+    """Write the config 0600 from the start and swap it in whole (#230): it holds the
+    access token, and a second cairn process reading the profile must never see half
+    a file."""
     p = _config_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(_dump_config(cfg), encoding="utf-8")
-    try:
-        p.chmod(0o600)  # the token is a credential
-    except OSError:
-        pass
+    tmp = p.with_name(f".{p.name}.{os.getpid()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(_dump_config(cfg))
+    os.replace(tmp, p)
 
 
 def _resolve(
@@ -108,6 +113,38 @@ def _resolve(
     ).rstrip("/")
     tok = token or getenv("CAIRN_REMOTE_TOKEN") or prof.get("token")
     return ep, tok
+
+
+# ─── session expiry (#230) ─────────────────────────────────────────
+
+
+def _token_claims(token: str) -> dict:
+    """The JWT's claims, read without verifying it (the server verifies; the CLI only
+    wants ``exp`` to say when the session ended). ``{}`` when unreadable."""
+    try:
+        seg = token.split(".")[1]
+        return json.loads(base64.urlsafe_b64decode(seg + "=" * (-len(seg) % 4)))
+    except Exception:  # noqa: BLE001 — not a JWT: nothing to show
+        return {}
+
+
+def _token_exp(token: str) -> Optional[float]:
+    exp = _token_claims(token).get("exp")
+    return float(exp) if isinstance(exp, (int, float)) else None
+
+
+def _session_ended(token: Optional[str], *, then: str = ""):
+    """The one line a session the server refused ends on, and its exit code. With no
+    token at all there is no session: the plain 401 message, exit 1, as before."""
+    if not token:
+        _fail("401 Unauthorized — run `cairn setup`, or `cairn setup --server <url>` (or set CAIRN_REMOTE_TOKEN).")
+    exp = _token_exp(token)
+    if exp is not None and exp <= time.time():
+        line = f"session expired at {time.strftime('%H:%M', time.localtime(exp))}"
+    else:
+        line = "session refused by the server (401)"
+    typer.secho(f"{line} — run `cairn setup`, or `cairn setup --server <url>`{then}", fg="red", err=True)
+    raise typer.Exit(EXIT_SESSION_EXPIRED)
 
 
 # ─── http helpers ──────────────────────────────────────────────────
@@ -160,6 +197,41 @@ def _reachable(ep: str) -> bool:
     return False
 
 
+# ─── which store the engine reads (#229) ───────────────────────────
+
+
+def engine_store_fingerprint(
+    endpoint: Optional[str] = None, profile: Optional[str] = None,
+) -> Optional[tuple[str, Optional[str]]]:
+    """``(endpoint, fingerprint)`` of the engine this CLI is configured for (the
+    endpoint `cairn remote` uses), read from its ``/healthz``; ``None`` when nothing
+    answers there. The fingerprint is ``None`` for an engine that does not report one."""
+    ep, _ = _resolve(endpoint, None, profile)
+    try:
+        with _api(ep, None, timeout=2.0) as c:
+            body = c.healthz() or {}
+    except Exception:  # noqa: BLE001 — no engine, or no answer: nothing to compare with
+        return None
+    return ep, body.get("store_fingerprint")
+
+
+def store_check() -> Optional[tuple[str, Optional[str], Optional[bool]]]:
+    """``(this CLI's connection store, the engine's endpoint, same store?)`` — what
+    `cairn connect` and `cairn doctor` compare before trusting a write; ``None`` for an
+    in-memory store. The endpoint is ``None`` when no engine answers; *same* is
+    ``None`` when there is nothing to compare with."""
+    from cairn.core.settings import connection_store_identity  # noqa: PLC0415 — keep `cairn remote` light
+
+    mine = connection_store_identity()
+    if mine is None:
+        return None
+    engine = engine_store_fingerprint()
+    if engine is None:
+        return mine[0], None, None
+    ep, fp = engine
+    return mine[0], ep, (None if fp is None else fp == mine[1])
+
+
 @contextlib.contextmanager
 def _ephemeral():
     with socket.socket() as s:
@@ -181,7 +253,7 @@ def _ephemeral():
         while not _reachable(ep):
             if proc.poll() is not None:
                 _fail("ephemeral engine exited during startup — "
-                      "run `cairn dev --engine-only` to see why.")
+                      "run `cairn setup --foreground --engine-only` to see why.")
             if time.monotonic() > deadline:
                 _fail("ephemeral engine did not become healthy within 30s.")
             time.sleep(0.3)
@@ -210,7 +282,8 @@ def _session(endpoint: Optional[str], token: Optional[str], profile: Optional[st
 
 
 def _call(fn, *args, **kwargs):
-    """Run one client call, translating API errors to the CLI's exit style."""
+    """Run one client call, translating API errors to the CLI's exit style. A 401
+    ends the session loudly with exit 77 (#230)."""
     import httpx  # noqa: PLC0415 — lazy with the client
     from cairn_client import CairnAPIError  # noqa: PLC0415
 
@@ -218,10 +291,30 @@ def _call(fn, *args, **kwargs):
         return fn(*args, **kwargs)
     except CairnAPIError as e:
         if e.status_code == 401:
-            _fail("401 Unauthorized — run `cairn remote login` (or set CAIRN_REMOTE_TOKEN).")
+            _session_ended(getattr(getattr(fn, "__self__", None), "token", None))
         _fail(f"{e.status_code}: {e.detail[:300]}")
     except httpx.HTTPError as e:
         _fail(f"transport error talking to the engine: {type(e).__name__}: {e}")
+
+
+def _run_status(endpoint: str, token: Optional[str], run_id: str) -> Optional[str]:
+    """A run's status for a stream that closed without a terminal frame (#230). A 401
+    exits 77 and any other client error is said, never a silent exit 0 that looks like a
+    quiet run; a transport error or a 5xx (an engine restarting, a proxy) is ``None``: reconnect."""
+    import httpx  # noqa: PLC0415 — lazy with the client
+    from cairn_client import CairnAPIError  # noqa: PLC0415
+
+    try:
+        with _api(endpoint, token) as c:
+            return (c.run(run_id) or {}).get("status")
+    except CairnAPIError as e:
+        if e.status_code == 401:
+            _session_ended(token)
+        if e.status_code >= 500:
+            return None
+        _fail(f"{e.status_code}: {e.detail[:300]}")
+    except httpx.HTTPError:
+        return None
 
 
 def _poll_pipeline(c, pipeline_id: str) -> dict:
@@ -240,27 +333,16 @@ def _poll_pipeline(c, pipeline_id: str) -> dict:
             time.sleep(2.0)
         except CairnAPIError as e:
             if e.status_code == 401:
-                # #1234 — the token outlived by a long pipeline (default TTL
-                # ~60 min). The pipeline keeps running server-side; tell the
-                # user how to re-attach instead of printing a bare 401.
-                _fail(
-                    "token expired mid-watch (the pipeline is still running "
-                    "server-side). Refresh it (`cairn remote login`, or set "
-                    f"CAIRN_REMOTE_TOKEN) and re-attach: `cairn remote status {pipeline_id}`."
-                )
+                # #1234, #230 — the token outlived by a long pipeline (default TTL
+                # ~60 min). Say so in one line with how to re-attach, and exit 77:
+                # the pipeline keeps running server-side.
+                _session_ended(c.token, then=(
+                    f", then re-attach: `cairn status {pipeline_id} --follow` "
+                    "(it is still running server-side)"))
             _fail(f"{e.status_code}: {e.detail[:300]}")
     _fail("engine stopped responding (5 consecutive poll timeouts).")
 
 
-def _parse_kv(pairs: list[str]) -> dict:
-    out: dict = {}
-    for item in pairs:
-        if "=" not in item:
-            typer.secho(f"--input must be key=value, got {item!r}", fg="red", err=True)
-            raise typer.Exit(2)
-        k, v = item.split("=", 1)
-        out[k.strip()] = v
-    return out
 
 
 def _print_event(seq, ev_type, data) -> None:
@@ -277,26 +359,58 @@ def _print_event(seq, ev_type, data) -> None:
     typer.secho(line, fg=color or None)
 
 
-def _tail(endpoint: str, token: Optional[str], run_id: str, *, after_seq: int = 0) -> None:
+#: How long a follow keeps trying when nothing answers: 1, 2, 4, 8, 16, 30, 30, 30 seconds, about two
+#: minutes, which outlasts an engine restarting. Anything the server does answer starts the count over.
+_RECONNECT_TRIES = 8
+_RECONNECT_MAX_WAIT_S = 30.0
+
+
+class _Reconnect:
+    """Paces a follow's reconnects, and ends it with what to type when nothing comes back."""
+
+    def __init__(self, run_id: str, reattach: str) -> None:
+        self.run_id, self.reattach, self.failures = run_id, reattach, 0
+
+    def after_close(self, *, lost: bool, progressed: bool) -> None:
+        """A stream ended with the run not finished. ``lost``: the server didn't answer, or refused
+        the stream. A stream dropped while the status check says the run is fine isn't lost: a
+        proxy's idle timeout does that during a long, quiet leg, so it never counts towards giving up."""
+        if progressed or not lost:
+            self.failures = 0
+        if not lost:
+            time.sleep(1.0)
+            return
+        self.failures += 1
+        if self.failures > _RECONNECT_TRIES:
+            typer.secho(f"lost the connection after {_RECONNECT_TRIES} tries; run {self.run_id} may still "
+                        f"be live. Re-attach: {self.reattach}", fg="red", err=True)
+            raise typer.Exit(1)
+        time.sleep(min(_RECONNECT_MAX_WAIT_S, 2.0 ** (self.failures - 1)))
+
+
+def _tail(endpoint: str, token: Optional[str], run_id: str, *, after_seq: int = 0, flow: bool = False) -> None:
     """Follow a run's SSE event stream, resuming with ``after_seq`` if the
     connection drops before the run reaches a terminal state."""
     import httpx
     last = after_seq
+    reconnect = _Reconnect(run_id, f"cairn status {run_id} --logs --follow")
     while True:
         ev_type = data = seq = None
-        saw_terminal = False
+        saw_terminal = refused = False
+        before = last
         try:
             with _sse_client(endpoint, token, timeout=None) as c:
                 with c.stream("GET", f"/runs/{run_id}/stream", params={"after_seq": last}) as r:
-                    if r.status_code == 401:
-                        _fail("401 Unauthorized — run `cairn remote login`.")
+                    if r.status_code == 401:  # #230 — end loudly, exit 77
+                        _session_ended(token)
                     if r.status_code == 404:
                         _fail(f"run {run_id} not found")
                     r.raise_for_status()
                     for line in r.iter_lines():
                         if line == "":
                             if ev_type is not None:
-                                _print_event(seq, ev_type, data)
+                                if not flow or ev_type in _LIFECYCLE:
+                                    _print_event(seq, ev_type, data)
                                 if seq is not None:
                                     last = seq
                                 if ev_type in _TERMINAL:
@@ -315,64 +429,50 @@ def _tail(endpoint: str, token: Optional[str], run_id: str, *, after_seq: int = 
                             data = line[5:].strip()
         except typer.Exit:
             raise
+        except httpx.HTTPStatusError:
+            refused = True
         except httpx.HTTPError:
             pass  # dropped — fall through to a status check, then reconnect
         if saw_terminal:
             return
         # Stream closed without a terminal frame: check status; stop if the run
         # actually finished, otherwise reconnect from the last seq we saw.
-        try:
-            with _api(endpoint, token) as c:
-                if c.run(run_id).get("status") in _TERMINAL:
-                    return
-        except Exception:
+        status = _run_status(endpoint, token, run_id)
+        if status in _TERMINAL:
             return
+        reconnect.after_close(lost=refused or status is None, progressed=last != before)
 
 
 # ─── commands ──────────────────────────────────────────────────────
 
-_EP = typer.Option(None, "--endpoint", "-e", help="server URL (overrides profile/env)")
 _TOK = typer.Option(None, "--token", help="bearer token (overrides profile/env)")
 _PROF = typer.Option(None, "--profile", help="config profile name")
 
 
-@app.command()
-def login(
-    username: Optional[str] = typer.Option(None, "--username", "-u", help="admin username"),
-    password: Optional[str] = typer.Option(None, "--password", "-p", help="prompted if omitted"),
-    endpoint: Optional[str] = _EP,
-    profile: Optional[str] = _PROF,
-):
-    """Authenticate to the server (POST /token) and store the JWT in the profile."""
-    ep, _ = _resolve(endpoint, None, profile)
-    username = username or typer.prompt("Username", default="admin")
-    password = password or typer.prompt("Password", hide_input=True)
+
+
+def _sign_in(ep: str, username: str, password: str, prof_name: str, *, make_default: bool = False) -> Optional[str]:
+    """POST /token and store the JWT under this config profile. Returns the token."""
     with _api(ep, None) as c:
         token = _call(c.login, username, password)
     cfg = _load_config()
-    prof_name = profile or cfg.get("default_profile") or "default"
     cfg.setdefault("profiles", {}).setdefault(prof_name, {})
     cfg["profiles"][prof_name]["endpoint"] = ep
     cfg["profiles"][prof_name]["token"] = token
+    if make_default:
+        cfg["default_profile"] = prof_name
     cfg.setdefault("default_profile", prof_name)
     _save_config(cfg)
     typer.secho(f"logged in to {ep} (profile '{prof_name}'); token saved to {_config_path()}", fg="green")
+    return token
 
 
-@app.command()
-def submit(
-    skill: str = typer.Argument(..., help="skill name to fire"),
-    input_: list[str] = typer.Option([], "--input", "-i", help="payload key=value (repeatable)"),
-    follow: bool = typer.Option(False, "--follow", "-f", help="stream logs until the run ends"),
-    wait: bool = typer.Option(False, "--wait", help="block server-side until done (realtime lane) instead of async"),
-    service: Optional[str] = typer.Option(None, "--service"),
-    endpoint: Optional[str] = _EP,
-    token: Optional[str] = _TOK,
-    profile: Optional[str] = _PROF,
-):
-    """Submit a run by skill name. Async by default (returns a run_id immediately)."""
+
+
+def _submit_skill(skill: str, payload: dict, *, follow: bool, wait: bool, service: Optional[str],
+                  endpoint, token, profile) -> None:
     ep, tok = _resolve(endpoint, token, profile)
-    body = {"skill_name": skill, "service": service, "payload": _parse_kv(input_), "wait": wait}
+    body = {"skill_name": skill, "service": service, "payload": payload, "wait": wait}
     with _api(ep, tok, timeout=None if wait else 30.0) as c:
         out = _call(c.trigger_manual, body)
     run_id = out.get("run_id")
@@ -381,123 +481,23 @@ def submit(
         _tail(ep, tok, run_id)
 
 
-def _runs_table(invs: list[dict]):
-    """Build a Rich table of runs — shared by `ps` (one-shot) and `watch` (live)."""
-    from rich.table import Table
-
-    _style = {"running": "yellow", "done": "green", "failed": "red",
-              "cancelled": "red", "queued": "dim"}
-    table = Table(show_header=True, header_style="bold")
-    for col in ("run_id", "status", "lane", "skills", "template", "created"):
-        table.add_column(col)
-    for inv in invs:
-        results = inv.get("results") or []
-        tmpl = results[0].get("template_name") if results else ""
-        st = inv.get("status", "")
-        st_cell = f"[{_style[st]}]{st}[/]" if st in _style else st
-        table.add_row(
-            inv.get("id", ""), st_cell, inv.get("lane", ""),
-            str(inv.get("matched_skills", "")), tmpl or "", inv.get("created_at", ""),
-        )
-    return table
 
 
-@app.command()
-def ps(
-    status: Optional[str] = typer.Option(None, "--status", help="queued|running|done|failed|cancelled"),
-    limit: int = typer.Option(50, "--limit", "-n"),
-    endpoint: Optional[str] = _EP,
-    token: Optional[str] = _TOK,
-    profile: Optional[str] = _PROF,
-):
-    """List runs on the server (one-shot)."""
-    from rich.console import Console
-    ep, tok = _resolve(endpoint, token, profile)
-    with _api(ep, tok) as c:
-        invs = _call(c.runs, status=status, limit=limit)
-    Console().print(_runs_table(invs))
-    if not invs:
-        typer.echo("(no runs)")
 
 
-@app.command()
-def watch(
-    interval: float = typer.Option(2.0, "--interval", "-n", help="refresh interval (seconds)"),
-    status: Optional[str] = typer.Option(None, "--status", help="filter by status"),
-    limit: int = typer.Option(50, "--limit"),
-    once: bool = typer.Option(False, "--once", help="render one frame and exit (scripts/CI)"),
-    endpoint: Optional[str] = _EP,
-    token: Optional[str] = _TOK,
-    profile: Optional[str] = _PROF,
-):
-    """Live-refreshing dashboard of runs on the server (Ctrl-C to stop)."""
-    from rich.console import Console
-    from rich.live import Live
-
-    ep, tok = _resolve(endpoint, token, profile)
-
-    def _frame():
-        with _api(ep, tok) as c:
-            return _runs_table(_call(c.runs, status=status, limit=limit))
-
-    console = Console()
-    if once:
-        console.print(_frame())
-        return
-    with Live(_frame(), console=console, refresh_per_second=4) as live:
-        try:
-            while True:
-                time.sleep(max(0.5, interval))
-                live.update(_frame())
-        except KeyboardInterrupt:
-            pass
 
 
-@app.command()
-def status(
-    run_id: str = typer.Argument(...),
-    endpoint: Optional[str] = _EP,
-    token: Optional[str] = _TOK,
-    profile: Optional[str] = _PROF,
-):
-    """Show one run's lifecycle record."""
-    ep, tok = _resolve(endpoint, token, profile)
-    with _api(ep, tok) as c:
-        typer.echo(json.dumps(_call(c.run, run_id), indent=2))
 
 
-@app.command()
-def logs(
-    run_id: str = typer.Argument(...),
-    follow: bool = typer.Option(False, "--follow", "-f", help="tail live via SSE until terminal"),
-    after_seq: int = typer.Option(0, "--after-seq", help="resume after this event seq"),
-    endpoint: Optional[str] = _EP,
-    token: Optional[str] = _TOK,
-    profile: Optional[str] = _PROF,
-):
-    """Print a run's event log (snapshot), or tail it live with --follow."""
-    ep, tok = _resolve(endpoint, token, profile)
-    if follow:
-        _tail(ep, tok, run_id, after_seq=after_seq)
-        return
-    with _api(ep, tok) as c:
-        out = _call(c.run_events, run_id, after_seq=after_seq)
-    for ev in (out or {}).get("events", []):
-        _print_event(ev.get("seq"), ev.get("type"), ev.get("data"))
 
 
-@app.command()
-def cancel(
-    run_id: str = typer.Argument(...),
-    endpoint: Optional[str] = _EP,
-    token: Optional[str] = _TOK,
-    profile: Optional[str] = _PROF,
-):
-    """Cancel a running run (best-effort)."""
+def _cancel_run(run_id: str, endpoint, token, profile) -> None:
     ep, tok = _resolve(endpoint, token, profile)
     with _api(ep, tok) as c:
         out = _call(c.cancel_run, run_id)
     typer.secho(f"status={(out or {}).get('status')}", fg="yellow")
+
+
 
 
 # ─── interactive HITL watch loop (an internal issue) ──────────────
@@ -576,7 +576,7 @@ def _decide(*, decision_opt, native, timeout, on_timeout) -> Optional[str]:
     if not _is_interactive():
         typer.secho(
             "non-interactive (no TTY) — not prompting. Decide with "
-            "`cairn remote approve|reject <run_id>`, or pass --decision.",
+            "`cairn decide <id> approve|reject`, or follow it with `cairn status <id> --follow --decision approve`.",
             fg="yellow", err=True,
         )
         return None
@@ -647,14 +647,16 @@ def _watch_hitl(endpoint, token, run_id: str, *, approver, decision_opt,
     import httpx  # noqa: PLC0415 — lazy like _tail (heavy http client)
 
     last = 0
+    reconnect = _Reconnect(run_id, f"cairn status {run_id} --follow")
     while True:
         ev_type = data = seq = None
-        paused = saw_terminal = False
+        paused = saw_terminal = refused = False
+        before = last
         try:
             with _sse_client(endpoint, token, timeout=None) as c:
                 with c.stream("GET", f"/runs/{run_id}/stream", params={"after_seq": last}) as r:
-                    if r.status_code == 401:
-                        _fail("401 Unauthorized — run `cairn remote login`.")
+                    if r.status_code == 401:  # #230 — end loudly, exit 77
+                        _session_ended(token)
                     if r.status_code == 404:
                         _fail(f"run {run_id} not found")
                     r.raise_for_status()
@@ -684,21 +686,22 @@ def _watch_hitl(endpoint, token, run_id: str, *, approver, decision_opt,
                             data = line[5:].strip()
         except typer.Exit:
             raise
+        except httpx.HTTPStatusError:
+            refused = True
         except httpx.HTTPError:
             pass  # dropped — fall through to a status check, then reconnect
         if saw_terminal:
             return 0
         if not paused:
-            try:
-                with _api(endpoint, token) as c:
-                    st = c.run(run_id).get("status")
-            except Exception:
-                return 0
+            st = _run_status(endpoint, token, run_id)  # #230 — as in `_tail`
             if st in _TERMINAL:
                 return 0
             if st != "awaiting_approval":
+                reconnect.after_close(lost=refused or st is None, progressed=last != before)
                 continue  # transient close — reconnect from `last`
             paused, data = True, None  # missed the event but the run is parked
+            if refused:  # a stream that keeps refusing must not turn answers into a tight loop
+                time.sleep(1.0)
 
         _render_pause(endpoint, token, run_id, data, dump)
         decision = _decide(decision_opt=decision_opt, native=native,
@@ -706,7 +709,7 @@ def _watch_hitl(endpoint, token, run_id: str, *, approver, decision_opt,
         if decision is None:
             typer.secho(
                 f"detached — run {run_id} is still paused. Resume later:\n"
-                f"    cairn remote approve {run_id}   (or: reject {run_id})",
+                f"    cairn decide {run_id} approve   (or: reject)",
                 fg="yellow",
             )
             return 2
@@ -723,7 +726,7 @@ def _watch_hitl(endpoint, token, run_id: str, *, approver, decision_opt,
         # loop: re-subscribe from `last` for post-resume events (next gate / terminal)
 
 
-def _resume(run_id: str, decision: str, approver: str, endpoint, token, profile) -> None:
+def _resume(run_id: str, decision: str, approver: str, endpoint, token, profile, note: Optional[str] = None) -> None:
     """Deliver a HITL decision to a run paused at an operation gate (ADR-0034).
 
     Targets ``POST /runs/{id}/resume`` (an internal issue) — the run-level
@@ -733,63 +736,30 @@ def _resume(run_id: str, decision: str, approver: str, endpoint, token, profile)
     """
     ep, tok = _resolve(endpoint, token, profile)
     with _api(ep, tok) as c:
-        out = _call(c.resume_run, run_id, decision=decision, approver=approver)
+        out = _call(c.resume_run, run_id, decision=decision, approver=approver, note=note)
     typer.echo(json.dumps(out, indent=2))
 
 
-@app.command()
-def approve(
-    run_id: str = typer.Argument(..., help="the paused run id (status awaiting_approval)"),
-    watch: bool = typer.Option(False, "--watch", "-w", help="stream the run and prompt at each HITL pause"),
-    decision: Optional[str] = typer.Option(None, "--decision", help="non-interactive decision for --watch (approve|reject)"),
-    timeout: Optional[float] = typer.Option(None, "--timeout", help="seconds to wait at the prompt before --on-timeout"),
-    on_timeout: str = typer.Option("detach", "--on-timeout", help="on prompt timeout: detach | reject | abort"),
-    native: bool = typer.Option(False, "--native", help="use an OS confirm dialog (terminal fallback)"),
-    flow: bool = typer.Option(False, "--flow", help="show only lifecycle/transition events"),
-    dump: Optional[str] = typer.Option(None, "--dump", help="write the pause context to this file"),
-    approver: str = typer.Option("cli-user", "--approver"),
-    endpoint: Optional[str] = _EP,
-    token: Optional[str] = _TOK,
-    profile: Optional[str] = _PROF,
-):
-    """Approve a run paused at an operation-gate HITL interrupt (ADR-0034).
-
-    With ``--watch``, stream the run and prompt (or auto-decide) at each pause —
-    the interactive HITL loop (#53). Without it, post an immediate approval.
-    """
-    if on_timeout not in ("detach", "reject", "abort"):
-        _fail("--on-timeout must be detach | reject | abort")
-    if watch:
-        ep, tok = _resolve(endpoint, token, profile)
-        raise typer.Exit(_watch_hitl(
-            ep, tok, run_id, approver=approver, decision_opt=decision, native=native,
-            timeout=timeout, on_timeout=on_timeout, flow=flow, dump=dump,
-        ))
-    _resume(run_id, "approve", approver, endpoint, token, profile)
+# ADR-0034; the interactive HITL loop: #53
 
 
-@app.command()
-def reject(
-    run_id: str = typer.Argument(..., help="the paused run id (status awaiting_approval)"),
-    approver: str = typer.Option("cli-user", "--approver"),
-    endpoint: Optional[str] = _EP,
-    token: Optional[str] = _TOK,
-    profile: Optional[str] = _PROF,
-):
-    """Reject a run paused at an operation-gate HITL interrupt — skips the gated op."""
-    _resume(run_id, "reject", approver, endpoint, token, profile)
+def _reject_gate(pipeline_id: str, step: str, reason: Optional[str], approver: str, endpoint, token, profile) -> None:
+    """Reject a pipeline gate: the pipeline ends failed, the step's verdict is ``rejected``, and
+    the decider and reason are recorded (ADR-0156 D5)."""
+    if not (reason or "").strip():
+        _fail("--reason is required when rejecting a pipeline gate step")
+    with _session(endpoint, token, profile) as (ep, tok, _local):
+        with _api(ep, tok) as c:
+            out = _call(c.reject_step, pipeline_id, step, reason=reason.strip(), approver=approver)
+    typer.secho(
+        f"rejected — step {step} of {pipeline_id}; pipeline status={(out or {}).get('status')}",
+        fg="yellow")
 
 
-@app.command()
-def console(
-    endpoint: Optional[str] = _EP,
-    token: Optional[str] = _TOK,
-    profile: Optional[str] = _PROF,
-):
-    """Launch the interactive Textual console (Toad-style) over the server — a
-    live runs view, a command bar with autocomplete, and clickable HITL
-    approve/reject. Needs textual and textual-autocomplete, which cairndev does not
-    install (there is no 'tui' extra): the error says how to add them."""
+# the two forms: ADR-0156 D6
+
+
+def open_console(endpoint: Optional[str], token: Optional[str], profile: Optional[str]) -> None:
     ep, tok = _resolve(endpoint, token, profile)
     try:
         from cairn.cli.tui.app import run_console
@@ -803,7 +773,8 @@ def console(
     run_console(ep, tok)
 
 
-@app.command(name="hash-password")
+
+
 def hash_password_cmd(
     password: Optional[str] = typer.Option(None, "--password", "-p", help="prompted if omitted"),
 ):
@@ -816,12 +787,11 @@ def hash_password_cmd(
         _fail(str(e))
 
 
-@app.command(name="worker-token")
 def worker_token_cmd(
     name: str = typer.Option(..., "--name", "-n", help="names the worker or pool, e.g. gpu-a"),
     days: int = typer.Option(30, "--days", help="how long the token is valid (1-365 days)"),
 ):
-    """Print a worker-pool token for `cairn worker --pull --token` (cairn-platform#224).
+    """Print a worker-pool token for `cairn admin worker --pull --token`.
 
     Only a worker credential claims pull-lane jobs: this token, or the deployment
     admin's. It is signed locally with the deployment's CAIRN_JWT_SECRET, so run
@@ -835,6 +805,8 @@ def worker_token_cmd(
         typer.echo(mint_worker_pool_token(name, days))
     except ValueError as e:
         _fail(str(e))
+
+
 
 
 # ─── pipelines (#1195 slice 2 — the multi-leg surface, client-backed) ──────
@@ -858,35 +830,8 @@ def _pipeline_line(p: dict) -> str:
             f"{done}/{len(steps)} steps  {name}")
 
 
-@app.command()
-def pipelines(
-    status: Optional[str] = typer.Option(None, "--status", help="filter: running|paused|done|failed"),
-    endpoint: Optional[str] = _EP,
-    token: Optional[str] = _TOK,
-    profile: Optional[str] = _PROF,
-):
-    """List pipelines on the server."""
-    with _session(endpoint, token, profile) as (ep, tok, _local):
-        with _api(ep, tok) as c:
-            out = _call(c.pipelines, status=status)
-    rows = (out or {}).get("pipelines", [])
-    for p in rows:
-        typer.echo(_pipeline_line(p))
-    if not rows:
-        typer.echo("(no pipelines)")
 
 
-@app.command()
-def pipeline(
-    pipeline_id: str = typer.Argument(...),
-    endpoint: Optional[str] = _EP,
-    token: Optional[str] = _TOK,
-    profile: Optional[str] = _PROF,
-):
-    """Show one pipeline's full durable record (plan + step_state)."""
-    with _session(endpoint, token, profile) as (ep, tok, _local):
-        with _api(ep, tok) as c:
-            typer.echo(json.dumps(_call(c.pipeline, pipeline_id), indent=2))
 
 
 def _print_steps(p: dict) -> None:
@@ -924,22 +869,55 @@ def _failed_steps(p: dict) -> list[tuple[str, str]]:
             if str(st.get("status", "")) == "failed"]
 
 
+def _safe_line(value: Any) -> str:
+    """One line for a person's terminal. A gate's values can come from a model's output, so a
+    newline or an escape sequence must not forge a row on the screen someone approves from."""
+    text = "".join(c if c.isprintable() else f"\\x{ord(c):02x}" for c in str(value))
+    return text if len(text) <= 100 else text[:97] + "..."
+
+
+def _print_gate_evidence(p: dict) -> None:
+    """#258 — what the person at each waiting gate is deciding on: the gate's ``show:``
+    fields, spend against the cap, the cost estimate and the admission decision, read
+    from the step. A gate with no context (a manual wait) prints nothing."""
+    for sid, st in (p.get("step_state") or {}).items():
+        ctx = st.get("gate_context") if str(st.get("status", "")) == "awaiting_approval" else None
+        if not ctx:
+            continue
+        who = ctx.get("approvers")
+        typer.secho(f"  gate {sid}" + (f"  (approvers: {_safe_line(who)})" if who else ""), bold=True)
+        ev = ctx.get("evidence") or {}
+        rows = [(str(k), v) for k, v in (ctx.get("fields") or {}).items()]
+        if "cost_usd" in ev:
+            cap = ev.get("cost_cap_usd")
+            rows.append(("spent", f"${ev['cost_usd']:.2f}" + (f" of ${cap:.2f} cap" if cap else "")))
+        if "estimate_usd" in ev or ev.get("estimate_basis"):
+            usd = f"${ev['estimate_usd']:.2f} " if "estimate_usd" in ev else ""
+            rows.append(("estimate", f"{usd}({ev.get('estimate_basis', '')})"))
+        verdict = (ctx.get("admission") or {}).get("verdict")
+        if verdict:
+            rows.append(("admission", verdict))
+        width = max((len(k) for k, _ in rows), default=0)
+        for key, value in rows:
+            typer.echo(f"    {_safe_line(key):<{width}}  {_safe_line(value)}")
+
+
 def _print_pipeline_next(pipeline_id: str, p: dict, *, approver: str = "") -> None:
     """The next command for whatever state this pipeline just reached."""
     status = str(p.get("status") or "")
     who = f" --approver {approver}" if approver else ""
     if status == "paused":
+        _print_gate_evidence(p)
         for sid in _waiting_steps(p) or ["<step>"]:
-            _next("approve", f"cairn remote advance {pipeline_id} {sid}{who}")
+            _next("approve", f"cairn decide {pipeline_id} approve --step {sid}{who}")
     for sid, run_id in _failed_steps(p):
-        _next("logs", f"cairn remote logs {run_id}"
+        _next("logs", f"cairn status {run_id} --logs"
                       + (f"   # leg {sid}" if sid else ""))
     if status in ("failed", "done", "paused"):
-        _next("findings", f"cairn remote findings {pipeline_id}")
+        _next("findings", f"cairn status {pipeline_id} --results")
     if status not in ("done", "failed", "cancelled"):
         # last line, deliberately: the one command that keeps you attached.
-        _next("watch", f"cairn remote pipeline {pipeline_id}"
-                       "    # or re-run launch with --watch to follow it live")
+        _next("watch", f"cairn status {pipeline_id} --follow")
 
 
 # ─── launch presets (#1789, ADR-0071 §6) ──────────────────────────────────
@@ -949,14 +927,7 @@ def _print_pipeline_next(pipeline_id: str, p: dict, *, approver: str = "") -> No
 # a terminal and another from the console is worse than no preset at all.
 
 
-@app.command(name="presets")
-def presets_cmd(
-    ref: str = typer.Argument(..., help="installed pipeline ref, e.g. training/retrain-cycle"),
-    endpoint: Optional[str] = _EP,
-    token: Optional[str] = _TOK,
-    profile: Optional[str] = _PROF,
-):
-    """List the launch presets for a pipeline (saved + pack-shipped)."""
+def list_presets(ref: str, endpoint: Optional[str], token: Optional[str], profile: Optional[str]) -> None:
     with _session(endpoint, token, profile) as (ep, tok, _local):
         with _api(ep, tok) as c:
             out = _call(c.pipeline_presets, ref)
@@ -971,15 +942,7 @@ def presets_cmd(
         typer.echo(f"(no presets for {(out or {}).get('ref', ref)})")
 
 
-@app.command(name="delete-preset")
-def delete_preset_cmd(
-    ref: str = typer.Argument(...),
-    name: str = typer.Argument(...),
-    endpoint: Optional[str] = _EP,
-    token: Optional[str] = _TOK,
-    profile: Optional[str] = _PROF,
-):
-    """Delete a SAVED preset (a pack-shipped one of the same name reappears)."""
+def delete_preset(ref: str, name: str, endpoint: Optional[str], token: Optional[str], profile: Optional[str]) -> None:
     with _session(endpoint, token, profile) as (ep, tok, _local):
         with _api(ep, tok) as c:
             out = _call(c.delete_pipeline_preset, ref, name)
@@ -987,105 +950,60 @@ def delete_preset_cmd(
                 fg="green" if (out or {}).get("deleted") else "yellow")
 
 
-@app.command()
-def launch(
-    ref: str = typer.Argument(..., help="installed pipeline ref, e.g. training/e2e-finetune"),
-    input_: list[str] = typer.Option([], "--input", "-i", help="pipeline input key=value (repeatable)"),
-    preset: Optional[str] = typer.Option(
-        None, "--preset", "-p",
-        help="launch from a saved/pack-shipped input set; --input overrides it per key"),
-    save_preset: Optional[str] = typer.Option(
-        None, "--save-preset",
-        help="after a successful launch, save this launch's inputs under this name"),
-    environment: Optional[str] = typer.Option(None, "--environment"),
-    watch: bool = typer.Option(False, "--watch", "-w", help="poll step states until paused/terminal"),
-    interval: float = typer.Option(3.0, "--interval", help="poll interval for --watch (seconds)"),
-    endpoint: Optional[str] = _EP,
-    token: Optional[str] = _TOK,
-    profile: Optional[str] = _PROF,
-):
-    """Launch an installed pipeline (each leg becomes its own governed run)."""
-    with _session(endpoint, token, profile) as (ep, tok, local):
-        if local and not watch:
-            # the engine dies with this command — returning early would kill
-            # the in-flight legs, so an ephemeral launch always watches
-            typer.secho("ephemeral engine — watching until the pipeline parks "
-                        "(gate or terminal).", fg="yellow", err=True)
-            watch = True
-        # generous timeout: the inprocess engine can stall the event loop with
-        # a leg's CPU-heavy cold start, and the launch POST is NOT retryable
-        # (it lands even when the response can't flush — retry = double-launch)
-        with _api(ep, tok, timeout=300.0) as c:
-            overrides = _parse_kv(input_)
-            out = _call(c.launch_pipeline, ref, overrides,
-                        environment=environment, preset=preset)
-            pid = (out or {}).get("pipeline_id")
-            typer.secho(f"pipeline_id={pid} status={(out or {}).get('status')}", fg="green")
-            if save_preset:
-                # #1789 criterion 3 — save from a launch that WORKED, so a preset
-                # can only ever be a set of inputs the door already accepted.
-                # Saved AFTER the launch for exactly that reason. The saved set is
-                # the merge the server used: the chosen preset's inputs with these
-                # --input keys on top (read back from the server rather than
-                # rebuilt here, so the CLI is not re-deriving the merge rule).
-                inputs = dict(overrides)
-                if preset:
-                    listed = _call(c.pipeline_presets, ref) or {}
-                    base = next((p for p in listed.get("presets", [])
-                                 if p.get("name") == preset), None)
-                    if base:
-                        inputs = {**(base.get("inputs") or {}), **overrides}
-                saved = _call(c.save_pipeline_preset, ref, save_preset, inputs)
-                typer.secho(f"saved preset {save_preset!r} "
-                            f"({(saved or {}).get('input_count', 0)} inputs)", fg="green")
-            if not (watch and pid):
-                # #1792 — a launch that returns immediately must still say how
-                # to follow it; this is the line whose absence sent the flagship
-                # sessions to curl. The launch response carries no step_state
-                # (nothing has run), so these are the two reads that work at
-                # any state rather than a per-step advance line.
-                _next("findings", f"cairn remote findings {pid}")
-                _next("watch", f"cairn remote pipeline {pid}"
-                               "    # or re-run launch with --watch to follow it live")
-                return
-            last_render = ""
-            while True:
-                p = _poll_pipeline(c, pid)
-                render = json.dumps(p.get("step_state"), sort_keys=True)
-                if render != last_render:
-                    typer.echo(f"  {p.get('status')}")
-                    _print_steps(p)
-                    last_render = render
-                if p.get("status") in ("done", "failed", "cancelled"):
-                    # #1792 — a failed leg names the run whose logs explain it.
-                    _print_pipeline_next(pid, p)
-                    raise typer.Exit(0 if p.get("status") == "done" else 1)
-                if p.get("status") == "paused":
-                    # #1792 — the partial line finished: EVERY waiting step, and
-                    # the --approver flag that lands the decision in the audit
-                    # trail (a gate released by "who?" is a gate half-recorded).
-                    typer.secho(f"⏸ paused — {len(_waiting_steps(p)) or 1} step(s) "
-                                f"waiting on a human", fg="yellow")
-                    _print_pipeline_next(pid, p, approver=os.environ.get("USER", "cli-user"))
-                    raise typer.Exit(2)
-                time.sleep(max(0.5, interval))
 
 
-@app.command()
-def advance(
-    pipeline_id: str = typer.Argument(...),
-    step_id: str = typer.Argument(..., help="the step waiting on a human (gate / manual)"),
-    approver: Optional[str] = typer.Option(
-        None, "--approver",
-        help="who decided a gate — recorded when auth is off; under auth the server "
-             "records the signed-in identity"),
-    endpoint: Optional[str] = _EP,
-    token: Optional[str] = _TOK,
-    profile: Optional[str] = _PROF,
-):
-    """Approve/advance a pipeline step that is waiting on a human.
 
-    A gate (``awaiting_approval``) is decided through ``POST …/approve``, which
+
+# ADR-0160
+def list_triggers(endpoint: Optional[str], token: Optional[str], profile: Optional[str]) -> None:
+    with _session(endpoint, token, profile) as (ep, tok, _local):
+        with _api(ep, tok) as c:
+            out = _call(c.stored_triggers)
+    rows = (out or {}).get("triggers", [])
+    for t in rows:
+        state = "enabled" if t.get("enabled") else "paused"
+        typer.echo(f"{t.get('id', ''):48s} {t.get('source', ''):8s} {state:8s} {t.get('declared_by') or 'by hand'}")
+    if not rows:
+        typer.echo("(no stored triggers in this workspace)")
+
+
+def set_trigger(trigger_id: str, enabled: bool, endpoint, token, profile) -> None:
+    with _session(endpoint, token, profile) as (ep, tok, _local):
+        with _api(ep, tok) as c:
+            out = _call(c.set_trigger_enabled, trigger_id, enabled)
+    state = "enabled" if (out or {}).get("enabled") else "paused"
+    typer.secho(f"{(out or {}).get('id', trigger_id)} {state}; applies {(out or {}).get('applies', 'now')}",
+                fg="green" if enabled else "yellow")
+
+
+
+
+# ADR-0131
+
+
+
+
+def _save_preset(c, ref: str, preset: Optional[str], overrides: dict, name: str, *, err: bool = False) -> None:
+    """#1789 criterion 3 — save from a launch that WORKED, so a preset can only ever be a set of
+    inputs the door already accepted. Saved AFTER the launch for exactly that reason. The saved set
+    is the merge the server used: the chosen preset's inputs with these inputs on top (read back
+    from the server rather than rebuilt here, so the CLI is not re-deriving the merge rule)."""
+    inputs = dict(overrides)
+    if preset:
+        listed = _call(c.pipeline_presets, ref) or {}
+        base = next((p for p in listed.get("presets", []) if p.get("name") == preset), None)
+        if base:
+            inputs = {**(base.get("inputs") or {}), **overrides}
+    saved = _call(c.save_pipeline_preset, ref, name, inputs)
+    typer.secho(f"saved preset {name!r} ({(saved or {}).get('input_count', 0)} inputs)", fg="green", err=err)
+
+
+
+
+
+
+def _advance_step(pipeline_id: str, step_id: str, approver: Optional[str], endpoint, token, profile) -> None:
+    """A gate (``awaiting_approval``) is decided through ``POST …/approve``, which
     records the approver; any other waiting step (``awaiting_advance``) is
     released through ``POST …/advance``."""
     with _session(endpoint, token, profile) as (ep, tok, local):
@@ -1126,18 +1044,13 @@ def advance(
                     time.sleep(2.0)
 
 
-@app.command(name="cancel-pipeline")
-def cancel_pipeline_cmd(
-    pipeline_id: str = typer.Argument(...),
-    endpoint: Optional[str] = _EP,
-    token: Optional[str] = _TOK,
-    profile: Optional[str] = _PROF,
-):
-    """Cancel a whole pipeline (best-effort across its in-flight legs)."""
+def _cancel_pipeline(pipeline_id: str, endpoint, token, profile) -> None:
     with _session(endpoint, token, profile) as (ep, tok, _local):
         with _api(ep, tok) as c:
             out = _call(c.cancel_pipeline, pipeline_id)
     typer.secho(f"status={(out or {}).get('status')}", fg="yellow")
+
+
 
 
 # ─── findings (#1790) ─────────────────────────────────────────────────
@@ -1175,15 +1088,10 @@ def _findings_table(found: dict, indent: str = "") -> None:
                    + ("" if _scalar(v) else "   (--json for the full value)"))
 
 
-@app.command()
-def findings(
-    target_id: str = typer.Argument(..., help="a run id, or a pipeline id (pl_…)"),
-    json_out: bool = typer.Option(False, "--json", help="print the raw JSON response"),
-    endpoint: Optional[str] = _EP,
-    token: Optional[str] = _TOK,
-    profile: Optional[str] = _PROF,
-):
-    """Show a run's findings, or every step's findings for a pipeline.
+
+
+def _show_findings(target_id: str, json_out: bool, endpoint, token, profile) -> None:
+    """A run's findings, or every non-pending step's for a pipeline.
 
     The id kind is auto-detected: `pl_…` is a pipeline (the store's id prefix),
     anything else is a run — and either way a 404 falls back to the other door,
@@ -1207,9 +1115,8 @@ def findings(
                     kind = door_kind
                     break
                 except CairnAPIError as e:
-                    if e.status_code == 401:
-                        _fail("401 Unauthorized — run `cairn remote login` "
-                              "(or set CAIRN_REMOTE_TOKEN).")
+                    if e.status_code == 401:  # #230 — end loudly, exit 77
+                        _session_ended(c.token)
                     if e.status_code != 404:
                         _fail(f"{e.status_code}: {e.detail[:300]}")
                     last = e

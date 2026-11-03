@@ -83,12 +83,12 @@ def test_a_missing_operator_is_refused():
     missing = dict(OPERATORS)
     missing.pop("data/profile")
     (problem,) = gate.operator_problems(missing)
-    assert problem.startswith("21 cairn.operators entry points, not 22")
+    assert problem.startswith("23 cairn.operators entry points, not 24")
 
 
 def test_a_second_distribution_declaring_a_builtin_name_is_refused():
     """Duplicates are kept, not collapsed: a shadowing declaration of `data/profile` by another
-    distribution is refused even though the distinct names still number 22."""
+    distribution is refused even though the distinct names still number 24."""
     pairs = list(OPERATORS.items()) + [("data/profile", "shadow-pack")]
     problems = gate.operator_problems(pairs)
     assert any(p.startswith("cairn.operators names declared more than once: {'data/profile'") for p in problems)

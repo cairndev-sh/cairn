@@ -1,4 +1,4 @@
-"""``cairn-admin`` and ``cairn remote console`` name what they need, not an extra that
+"""``cairn-admin`` and ``cairn admin console`` name what they need, not an extra that
 does not exist (0.1.2 verification, bug 6: ``cairndev[admin]`` and ``.[tui]``).
 
 Both are public code that needs packages cairndev does not install; the message
@@ -12,7 +12,7 @@ import sys
 import pytest
 from typer.testing import CliRunner
 
-from cairn.cli.commands import remote
+from cairn.cli.main import app
 
 
 def test_admin_names_its_packages_not_a_missing_extra(monkeypatch):
@@ -25,11 +25,11 @@ def test_admin_names_its_packages_not_a_missing_extra(monkeypatch):
     assert f"uv pip install --python {sys.executable} starlette-admin itsdangerous" in msg
 
 
-def test_remote_console_names_its_packages_not_a_missing_extra(monkeypatch, tmp_path):
+def test_admin_console_names_its_packages_not_a_missing_extra(monkeypatch, tmp_path):
     monkeypatch.setenv("OBS_CONFIG_HOME", str(tmp_path))
     monkeypatch.setitem(sys.modules, "textual", None)  # not installed
     monkeypatch.delitem(sys.modules, "cairn.cli.tui.app", raising=False)
-    res = CliRunner().invoke(remote.app, ["console", "--endpoint", "http://127.0.0.1:1"])
+    res = CliRunner().invoke(app, ["admin", "console", "--endpoint", "http://127.0.0.1:1"])
     assert res.exit_code == 1, res.output
     assert ".[tui]" not in res.output
     assert f"uv pip install --python {sys.executable} textual textual-autocomplete" in res.output

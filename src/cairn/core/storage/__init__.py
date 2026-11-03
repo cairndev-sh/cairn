@@ -123,9 +123,16 @@ def default_store() -> RunStore:
         # misconfiguration that presented as a bug in the runtime. Three
         # missing characters separated durable from volatile storage, with no
         # feedback. Unset stays in-memory (that is the documented default);
-        # SET-but-unrecognized is an error naming the accepted forms.
+        # SET-but-unrecognized is an error naming the accepted forms. It names at
+        # most the value's scheme: a DSN with a typo in its scheme, or none, still
+        # carries the user and password, and this message lands in terminals and CI
+        # logs (GHSA-gw2v-3922-g7gm).
+        from cairn.core import settings  # noqa: PLC0415 - cycle: settings ↔ storage
+        scheme = settings.url_scheme(url)
+        what = f"a {scheme}:// URL" if scheme else "a value with no <scheme>://"
         raise ValueError(
-            f"CAIRN_STORAGE={url!r} is not a storage URL. Accepted forms: "
+            f"CAIRN_STORAGE is not a storage URL (it is {what}; the value is not "
+            "shown, it may carry a password). Accepted forms: "
             "postgres://user:pass@host:5432/db, postgresql://…, "
             "sqlite:///abs/path.db, sqlite://rel/path.db, sqlite://:memory:. "
             "Unset CAIRN_STORAGE for the in-memory default. (#1855)"

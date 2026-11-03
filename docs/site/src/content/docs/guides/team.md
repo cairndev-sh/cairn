@@ -15,17 +15,17 @@ on the server and restart it:
 ```bash
 CAIRN_JWT_SECRET=<openssl rand -hex 32>
 CAIRN_API_USER=admin
-CAIRN_API_PASSWORD=<choose one>    # or CAIRN_API_PASSWORD_HASH from `cairn remote hash-password`
+CAIRN_API_PASSWORD=<choose one>    # or CAIRN_API_PASSWORD_HASH from `cairn admin hash-password`
 ```
 
 Every request now needs a token. Sign in from the CLI; the token is stored in
 your CLI profile:
 
 ```bash
-cairn remote login -e https://cairn.example.com -u admin
+cairn setup --server https://cairn.example.com -u admin
 ```
 
-Sign-up and `cairn remote hash-password` hash passwords with argon2, which the base install
+Sign-up and `cairn admin hash-password` hash passwords with argon2, which the base install
 carries (since 0.1.2; on 0.1.1 install the `auth` extra).
 
 A console sign-in lasts longer than its access token (30 minutes,
@@ -162,6 +162,37 @@ Someone `approvers:` names may decide; an owner or admin always may. A name
 that is neither a user nor a role matches nobody, so only an owner or admin can
 decide that gate. The decision is recorded under the identity of the person
 signed in. See [Gates and approvals](/concepts/gates/#who-decides).
+
+## What was recorded
+
+This guide launches no pipeline, so it leaves no pipeline record, run or
+artifact. What it changes is the deployment's own state, and none of that is audited:
+sign-up, sign-in, OAuth sign-ins and workspace changes write no audit row,
+whatever `audit.sink` is bound to.
+
+- **Accounts, users and workspaces** are rows in the store the server reads
+  (`CAIRN_STORAGE`). Step 2's sign-up creates the account, its `owner` and its
+  first workspace. `cairn setup --server …` stores only your sign-in token in the CLI profile.
+  `GET /workspaces` lists the workspaces your account owns, as in step 5.
+- **The settings** (`CAIRN_JWT_SECRET`, `CAIRN_SIGNUP`, the OAuth variables) are
+  environment variables, not records.
+
+What it puts on the records of later runs is who and where:
+
+- **Workspace.** Every pipeline record carries the `workspace_id` it was launched
+  in, and so does every run and, with a sink bound, every audit row.
+- **Who decided a gate.** With sign-in on, the step's `approver` on the pipeline
+  record is the signed-in user, never a name typed into the request:
+  `cairn status <pipeline_id> --json` shows it.
+- **Audit rows**, when the profile binds `audit.sink` (`local-dev` does not,
+  `secure` does). `pipeline.gate_approved` carries the person as `actor`. A
+  decision from someone `approvers:` does not name, and who is not an owner or admin, is
+  refused with `403`, the gate keeps waiting, and the log gets an
+  `operation.approval` row with outcome `deny`, the `actor`, their `role` and
+  the `required` approvers.
+
+`cairn admin audit verify` checks the chain. See
+[Runs and the record](/concepts/runs/#what-a-pipeline-run-writes) for every row.
 
 ## Next
 

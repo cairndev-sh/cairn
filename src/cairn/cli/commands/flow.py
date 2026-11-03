@@ -1,4 +1,4 @@
-"""``cairn flow`` — inspect flows, split them at in-flow approval gates (#1079),
+"""What ``cairn pack ls``, ``show --split`` and ``export --to metaflow`` run — inspect flows, split them at in-flow approval gates (#1079),
 and export them as native orchestrator files (ADR-0087 P4, #1256).
 
 The split is what makes in-flow HITL engine-independent: rather than asking each
@@ -30,33 +30,39 @@ from cairn.core.dataflow.gate_split import (
     split_at_gates,
 )
 
-app = typer.Typer(
-    help="Inspect flows; split them at in-flow approval gates (#1079).",
-    no_args_is_help=True,
-)
 console = Console()
 
 
-@app.command("ls")
-def ls_cmd() -> None:
-    """List every flow — ALL THREE KINDS (#1133, ADR-0084 D2).
+# #1133, ADR-0084 D2
+def flow_rows() -> list[dict]:
+    """Every flow, all three kinds, one row each.
 
     `flows/` holds data/ml as `.yaml` (stage body) and agentic as `.md`
     (frontmatter + prose). `templates/` is still searched as the transition
     alias, so a pack can migrate one file at a time.
     """
     defs = load_flow_defs()
-    for ref in sorted(defs):
-        d = defs[ref]
-        gated = " [magenta](in-flow gates)[/]" if has_in_flow_gates(d) else ""
-        console.print(f"  {ref}  [dim]kind={d.kind} stages={len(d.stages)}[/]{gated}")
+    rows: list[dict] = [{"ref": ref, "kind": defs[ref].kind, "stages": len(defs[ref].stages),
+                         "in_flow_gates": has_in_flow_gates(defs[ref])} for ref in sorted(defs)]
+    rows += [{"ref": f"{pack}/{name}", "kind": "agentic", "where": where}
+             for pack, name, where in agentic_flows()]
+    return rows
 
-    for pack, name, where in agentic_flows():
-        console.print(f"  {pack}/{name}  [dim]kind=agentic  ({where})[/]")
 
-    if not defs and not agentic_flows():
+def print_flow_rows(rows: list[dict]) -> None:
+    for row in rows:
+        if row["kind"] == "agentic":
+            console.print(f"  {row['ref']}  [dim]kind=agentic  ({row['where']})[/]")
+        else:
+            gated = " [magenta](in-flow gates)[/]" if row["in_flow_gates"] else ""
+            console.print(f"  {row['ref']}  [dim]kind={row['kind']} stages={row['stages']}[/]{gated}")
+    if not rows:
         console.print("[yellow]no flows installed[/]")
-        raise typer.Exit(0)
+
+
+def ls_cmd() -> None:
+    """List every flow — all three kinds."""
+    print_flow_rows(flow_rows())
 
 
 def agentic_flows() -> list[tuple[str, str, str]]:
@@ -80,9 +86,8 @@ def agentic_flows() -> list[tuple[str, str, str]]:
     return out
 
 
-@app.command("split")
 def split_cmd(
-    ref: str = typer.Argument(..., help="Flow ref, e.g. dataset-readiness/intake"),
+    ref: str = typer.Argument(..., help="Flow ref, e.g. hello-cairn/engine-check"),
     json_out: bool = typer.Option(False, "--json", help="Emit segments as JSON."),
 ) -> None:
     """Show how a flow splits at its in-flow approval gates.
@@ -148,7 +153,6 @@ def _parse_config(pairs: Optional[list[str]]) -> dict:
     return out
 
 
-@app.command("export")
 def export_cmd(
     ref: str = typer.Argument(..., help="Flow ref, e.g. training/readiness"),
     to: str = typer.Option(..., "--to", help=f"Target: {' | '.join(EXPORT_TARGETS)}"),

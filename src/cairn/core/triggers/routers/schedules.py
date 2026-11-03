@@ -3,11 +3,12 @@ schedules (#354), workspace-scoped visibility (#271).
 
 Extracted verbatim from server.py (#1191).
 """
-from typing import Any
+from typing import Annotated, Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from cairn.core.triggers import console_support as support
+from cairn.core.triggers.auth import _oauth2_scheme, require_auth
 from cairn.core.workspace import current_workspace
 
 
@@ -265,6 +266,57 @@ def build_schedules_router(runner, scheduler, rag_scheduler) -> APIRouter:
             scheduler.resync_stored()
         return {"id": row.id, "enabled": row.enabled, "misfire": row.misfire}
 
+    # ── ADR-0160 (#290): the switch for trigger-store rows (event, webhook) ──
+
+    @r.get("/triggers/stored")
+    async def list_stored_triggers() -> dict[str, Any]:
+        """This workspace's trigger-store rows: the ones a pipeline declares
+        (``declared_by``) and the ones made by hand, with their switch."""
+        from cairn.core.storage.trigger_store import default_trigger_store
+
+        store = default_trigger_store()
+        try:
+            rows = await store.list(current_workspace())
+        finally:
+            store.close()
+        return {"triggers": [_stored_view(t) for t in rows]}
+
+    @r.patch("/triggers/stored/{trigger_id}",
+             dependencies=[Depends(require_auth), Depends(support.writable_workspace)])
+    async def toggle_stored_trigger(
+        trigger_id: str, body: dict[str, Any],
+        token: Annotated[Optional[str], Depends(_oauth2_scheme)] = None,
+    ) -> dict[str, Any]:
+        """Enable or pause one trigger-store row of this workspace (ADR-0131 D4's
+        "paused / resumed per workspace"). Another workspace's row is a 404. An
+        event row takes effect on the next message; a webhook row is mounted when
+        the server starts, so it takes effect then."""
+        from cairn.core._time import utc_now_iso
+        from cairn.core.obs.audit import audit_emit
+        from cairn.core.storage.trigger_store import default_trigger_store
+        from cairn.core.triggers.routers.reviews import decision_actor
+
+        if not isinstance(body.get("enabled"), bool):
+            raise HTTPException(status_code=400, detail="body must carry 'enabled': true or false")
+        enabled = body["enabled"]
+        store = default_trigger_store()
+        try:
+            row = await store.get(trigger_id, current_workspace())
+            if row is None:
+                raise HTTPException(status_code=404, detail="trigger not found")
+            if row.enabled != enabled:
+                # the store's create is an upsert (the declared-trigger converge path
+                # updates rows the same way); only the switch and the clock change
+                row = await store.create(row.model_copy(update={"enabled": enabled,
+                                                                "updated_at": utc_now_iso()}))
+        finally:
+            store.close()
+        actor = await decision_actor(token, None, fallback="anonymous")
+        await audit_emit("trigger.enabled" if enabled else "trigger.paused", actor=actor,
+                         target=row.id, source=row.source, declared_by=row.declared_by or None)
+        return {**_stored_view(row),
+                "applies": "now" if row.source == "event" else "at the next server start"}
+
     @r.delete("/triggers/scheduled/{schedule_id}", dependencies=[Depends(support.writable_workspace)])
     async def delete_scheduled(schedule_id: str) -> dict[str, Any]:
         from cairn.core.storage.schedule_store import default_schedule_store
@@ -281,3 +333,9 @@ def build_schedules_router(runner, scheduler, rag_scheduler) -> APIRouter:
         return {"deleted": schedule_id}
 
     return r
+
+
+def _stored_view(t: Any) -> dict[str, Any]:
+    return {"id": t.id, "name": t.name, "source": t.source, "enabled": t.enabled,
+            "declared_by": t.declared_by, "description": t.description,
+            "updated_at": t.updated_at}

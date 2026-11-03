@@ -83,9 +83,12 @@ class PipelinePlanStep(BaseModel):
     #: feature was green in tests and inert in production (#1627).
     show: list[str] = Field(default_factory=list)
     approvers: Optional[str] = None
-    #: The gate's raw approval-EXPIRY string (`timeout: 7d`). Distinct from
+    #: The gate's raw ``timeout:`` string (`timeout: 7d`). Distinct from
     #: ``timeout_s`` above, which is an execution wall-clock limit for a leg;
-    #: a gate has no execution to bound.
+    #: a gate has no execution to bound. #259 — it is SHOWN to the approver
+    #: (``gate_context_for``) but nothing expires a pipeline gate yet: the
+    #: approval reaper sweeps runs, and a gate leg has none. Expiry is
+    #: ADR-0158 (proposed).
     timeout: Optional[str] = None
     #: #1252 (ADR-0087 P0b) — the POLICY that inserted this gate at plan time,
     #: or None for author-declared steps. Un-removable by the pipeline author
@@ -156,9 +159,9 @@ class ContractResolution(BaseModel, frozen=True):
     taken ONCE at the launch door from the installed contract distributions and
     never re-derived (ADR-0111 acceptance §4). ``None`` on a plan means the closure
     was not recorded at the launch door — rows older than the field, the backfill
-    (`storage/backfill_pipelines.py`) and the bundle-era `run_bundle` path — i.e.
-    not certified, not wrong. Frozen, tuples: immutable once built. Per-invocation
-    bindings (``invocations``) are #2241's additive delta under this same
+    (`storage/backfill_pipelines.py`) and rows the removed bundle-era
+    `PipelineBridge.run_bundle` path wrote — i.e. not certified, not wrong.
+    Frozen, tuples: immutable once built. Per-invocation bindings (``invocations``) are #2241's additive delta under this same
     ``format``; a different ``format`` is a different contract and refuses to
     hydrate rather than being relabelled legacy."""
     format: Literal["cairn.resolution/1"]
@@ -188,6 +191,11 @@ class PipelinePlan(BaseModel):
     #: property of the pipeline, and a snapshotted plan must carry the terms the
     #: run was admitted under even if the def is edited afterwards.
     governance: dict[str, Any] = Field(default_factory=dict)
+    #: ADR-0161 — the def's ``outputs:`` and pipeline-level ``emits:``, resolved and
+    #: published when the pipeline ends ``done``. In the record's JSON blob, so rows
+    #: written before this hydrate to empty.
+    outputs: dict[str, Any] = Field(default_factory=dict)
+    emits: Optional[str] = None
     #: #1155 — loop name → its authored definition (serialized `PipelineStep`).
     #: The plan holds only iteration 1; the bridge appends later iterations, so
     #: it needs the spec (bound, `until`, `on_exhausted`, body) to decide.

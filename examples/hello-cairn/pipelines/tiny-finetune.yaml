@@ -1,19 +1,23 @@
 # pipelines/tiny-finetune.yaml — the ml pipeline (hello-cairn WP6, ADR-0127 D1/D4).
 #
-#   profile → data gate → train (ml flow) → eval → loss (threshold) → loss gate
+#   profile → data gate → train (ml flow) → loss (threshold) → loss gate
 #     → promote ⏸ → review ⏸ → card
 #
 # A real LoRA fine-tune of a small causal LM on CPU, then the governance a model
-# needs before anyone uses it: a loss measured on rows the trainer held out, a gate
-# on that number, a governed tag, and a person.
+# needs before anyone uses it: the loss on rows the trainer held out (the last
+# row in every eight, never trained on), a gate on that number, a governed tag, and a person.
 #
 #   * `train` runs flows/lora.yaml on the builtin ml engine: one `train.lora` stage
 #     from the builtin train-local pack (cairn-operator-train-local, contract
-#     train.finetune/1.1.0). The stage reports `kind: model`, so the leg registers
-#     the adapter and exposes it as `candidate_artifact_id`.
-#   * `eval` scores the saved adapter with train/eval-loss (read-only).
-#   * `loss` compares it with `target_loss`; `loss-ok` stops the pipeline when the
-#     loss is above the target.
+#     train.finetune/1.1.0). The stage splits the rows itself (`split_holdout`: the
+#     last `len // 8` rows are held out, none below eight rows), trains on the rest
+#     and reports `eval_loss` over the held-out rows. It reports `kind: model`, so
+#     the leg registers the adapter and exposes it as `candidate_artifact_id`.
+#   * `eval` scores the saved adapter with train/eval-loss (read-only). It scores the
+#     first `max_samples` rows with no split, so on this data its figure includes
+#     rows the adapter trained on.
+#   * `loss` compares the `eval` figure with `target_loss`; `loss-ok` stops the
+#     pipeline when the loss is above the target.
 #   * `promote` points the `hello-adapter@candidate` tag at the adapter;
 #     artifact/promote declares `requires_approval`, so it waits for a person.
 #   * `review` is the person gate before the model card is written.
@@ -26,8 +30,8 @@ name: tiny-finetune
 kind: pipeline
 visibility: public
 description: >
-  Fine-tune a small model with LoRA on CPU, gate on its held-out loss, tag it,
-  and write its card only after a person approves.
+  Fine-tune a small model with LoRA on CPU, gate on the loss the trainer measures on
+  the rows it held out, tag it, and write its card only after a person approves.
 outcome: Train a small model and decide whether to keep it
 suite: model
 
@@ -35,7 +39,7 @@ inputs:
   dataset: {type: str, default: "examples/hello-cairn/data/train.jsonl", description: "JSONL of {\"text\": ...} rows, relative to the engine's working directory."}
   base_model: {type: str, default: "sshleifer/tiny-gpt2", description: "Hugging Face model id or local directory to adapt."}
   steps: {type: int, default: 8, description: "Optimizer steps."}
-  max_samples: {type: int, default: 48, description: "At most this many rows are read (train plus held-out)."}
+  max_samples: {type: int, default: 48, description: "At most this many rows are read; the last row in every eight is held out for the loss gate and the rest train the adapter."}
   lora_rank: {type: int, default: 8, description: "LoRA rank r."}
   target_loss: {type: float, default: 12.0, description: "The loss gate passes when the held-out loss is at or below this."}
   device: {type: str, default: "auto", description: "auto, cpu, cuda or mps. auto is CUDA when available, else the CPU."}
@@ -77,7 +81,8 @@ steps:
     timeout: 30m
     # A flow leg's stats are namespaced by stage (`train.lora.adapter_path`); the leg
     # declares its product so `$steps.train.adapter_path` is the adapter directory
-    # (the stage's `output`), which `eval` and the pipeline's outputs read.
+    # (the stage's `output`), which the pipeline's outputs read. The stage's other stats
+    # sit under `findings` as `train_lora_<name>`; `loss` reads `train_lora_eval_loss`.
     produces: {adapter_path: Model}
     with:
       dataset: $input.dataset
@@ -105,13 +110,16 @@ steps:
   # ── the loss gate ─────────────────────────────────────────────────────────
   # monitor/threshold says whether the loss crossed the target (gt: above it);
   # the data gate stops the pipeline when it did.
+  # With fewer than eight rows nothing is held out, `train.lora.eval_loss` is empty and
+  # this leg fails rather than gate on a number that was not measured.
   - id: loss
-    label: Compare the loss with the target
+    label: Compare the held-out loss with the target
     task: monitor/threshold
-    depends_on: [eval]
+    depends_on: [train]
     with:
       metric: held-out loss
-      value: $steps.eval.eval_loss
+      # the trainer's own figure, over the rows it held out and did not train on
+      value: $steps.train.train_lora_eval_loss
       threshold: $input.target_loss
       comparator: gt
 
@@ -135,7 +143,7 @@ steps:
     approvers: ml-owners
     show:
       - train.train_lora_train_loss   # the train.lora stage's train_loss (stats sit under findings)
-      - eval.eval_loss
+      - train.train_lora_eval_loss   # the held-out loss the gate read
       - loss.threshold
       - promote.tag
       - promote.uri
@@ -153,6 +161,6 @@ steps:
 
 outputs:
   adapter: train.adapter_path
-  eval_loss: eval.eval_loss
+  eval_loss: train.train_lora_eval_loss
   promoted: promote.artifact_id
   card: card.uri

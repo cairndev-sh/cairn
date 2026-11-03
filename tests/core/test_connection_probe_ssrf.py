@@ -137,3 +137,146 @@ def test_redirect_following_is_off():
     src = inspect.getsource(connection_probe._http_probe)
     assert "follow_redirects=False" in src, "the probe's own client must not follow redirects"
     assert "follow_redirects=True" not in src
+
+
+# ─── SSH / DSN: the guard sees the configured host, not a URL (#77) ────
+
+def _ssh(host):
+    import asyncio
+
+    from cairn.core.connection_probe import _ssh_probe
+    from cairn.core.connections import ResolvedConnection
+
+    resolved = ResolvedConnection(name="gpu-box", kind="compute.ssh",
+                                  config={"host": host, "user": "ubuntu"}, secrets={})
+    return asyncio.run(_ssh_probe(resolved))
+
+
+def _dsn(dsn, monkeypatch):
+    import asyncio
+    import sys
+    import types
+
+    from cairn.core.connection_probe import _dsn_probe
+    from cairn.core.connections import PROVIDER_CATALOG, ResolvedConnection
+
+    async def _refuse(*_a, **_kw):
+        raise OSError("connect refused in test")
+
+    # asyncpg is optional (storage-postgres); a stand-in keeps the probe off any socket
+    monkeypatch.setitem(sys.modules, "asyncpg", types.SimpleNamespace(connect=_refuse))
+    resolved = ResolvedConnection(name="pgvector", kind="http", config={"dsn": dsn}, secrets={})
+    return asyncio.run(_dsn_probe(resolved, PROVIDER_CATALOG["pgvector"]))
+
+
+@pytest.mark.parametrize("host", ["build-box.invalid", "10.0.0.5", "fd00::5"])
+def test_an_ssh_connection_with_a_host_is_probed(host):
+    r = _ssh(host)
+    assert "no host in URL" not in (r.detail or ""), r.detail
+    assert "blocked" not in (r.detail or ""), r.detail
+
+
+@pytest.mark.parametrize("host", ["", "   "])
+def test_an_ssh_connection_without_a_host_names_host(host):
+    r = _ssh(host)
+    assert r.ok is False
+    assert "host" in r.detail and "URL" not in r.detail
+
+
+@pytest.mark.parametrize("host", [
+    "169.254.169.254",
+    "fd00:ec2::254",
+    "[fd00:ec2::254]",
+    "metadata.google.internal",
+    "metadata.google.internal.",
+    "METADATA.GOOG",
+    "169.254.169.254.",
+    "169.254.170.2",                # ECS task metadata
+    "::ffff:169.254.169.254",       # IPv4-mapped
+    "fd00:ec2::254%eth0",           # zone id
+    "64:ff9b::a9fe:a9fe",           # NAT64 well-known prefix
+    "2002:a9fe:a9fe::1",            # 6to4
+])
+def test_an_ssh_connection_to_a_metadata_endpoint_is_refused(host):
+    r = _ssh(host)
+    assert r.ok is False
+    assert "metadata" in (r.detail or ""), r.detail
+
+
+@pytest.mark.parametrize("dsn", [
+    "postgresql://u:pw@db.invalid:5432/vec",
+    "postgresql://u:pw@10.0.0.5:5432/vec",
+    "postgresql://u:pw@a.invalid,b.invalid:5433/vec",
+])
+def test_a_dsn_with_a_host_is_probed(dsn, monkeypatch):
+    r = _dsn(dsn, monkeypatch)
+    assert "no host in URL" not in (r.detail or ""), r.detail
+    assert "connect refused in test" in (r.detail or ""), r.detail
+
+
+@pytest.mark.parametrize("dsn", [
+    "postgresql://u:pw@169.254.169.254:5432/vec",
+    "postgresql://u:pw@[fd00:ec2::254]:5432/vec",
+    "postgresql://u:pw@metadata.google.internal/vec",
+    "postgresql://u:pw@169.254.169.254.:5432/vec",
+    "postgresql://u:pw@169.254.170.2/vec",
+    "postgresql://u:pw@[::ffff:169.254.169.254]:5432/vec",
+    "postgresql://u:pw@[fd00:ec2::254%25eth0]:5432/vec",
+    "postgresql://u:pw@[64:ff9b::a9fe:a9fe]/vec",
+    "postgresql://u:pw@[2002:a9fe:a9fe::1]/vec",
+    "postgresql://u:pw@169%2E254%2E169%2E254/vec",
+    "postgresql://u:pw@a.invalid,169.254.169.254/vec",
+    "postgresql://u:pw@169.254.169.254:5432,b.invalid:5433/vec",
+    "postgresql://u:pw@b.invalid:5433,169.254.169.254:5432/vec",
+    "postgresql://u:pw@[::1]:5432,[fd00:ec2::254]:5433/vec",
+])
+def test_a_dsn_aimed_at_a_metadata_endpoint_is_refused(dsn, monkeypatch):
+    r = _dsn(dsn, monkeypatch)
+    assert r.ok is False
+    assert "metadata" in (r.detail or ""), r.detail
+
+
+@pytest.mark.parametrize("host", ["box..example.com", "a" * 64 + ".example.com"])
+def test_an_ssh_host_that_cannot_be_encoded_is_a_result_not_a_raise(host):
+    r = _ssh(host)
+    assert "blocked" not in (r.detail or ""), r.detail
+
+
+def test_a_dsn_host_that_cannot_be_encoded_is_a_result_not_a_raise(monkeypatch):
+    r = _dsn("postgresql://u:pw@%FF/vec", monkeypatch)
+    assert "connect refused in test" in (r.detail or ""), r.detail
+
+
+_EMBEDDED_METADATA = [
+    "::169.254.169.254",                    # IPv4-compatible
+    "::a9fe:a9fe",                          # IPv4-compatible, hex
+    "64:ff9b:1::a9fe:a9fe",                 # local-use NAT64
+    "2001:0:4136:e378:8000:63bf:5601:5601",  # Teredo, client 169.254.169.254
+]
+
+
+@pytest.mark.parametrize("host", _EMBEDDED_METADATA)
+def test_an_ssh_host_embedding_a_metadata_address_is_refused(host):
+    r = _ssh(host)
+    assert r.ok is False
+    assert "metadata" in (r.detail or ""), r.detail
+
+
+@pytest.mark.parametrize("host", _EMBEDDED_METADATA)
+def test_a_dsn_host_embedding_a_metadata_address_is_refused(host, monkeypatch):
+    r = _dsn(f"postgresql://u:pw@[{host}]:5432/vec", monkeypatch)
+    assert r.ok is False
+    assert "metadata" in (r.detail or ""), r.detail
+
+
+@pytest.mark.parametrize("addr", ["::ffff:169.254.169.254", "::ffff:a9fe:a9fe", "fd00:ec2:0::254"])
+def test_a_name_resolving_to_a_metadata_address_in_another_spelling_is_refused(addr, monkeypatch):
+    import socket
+
+    def _resolve(host, port, *_a, **_kw):
+        return [(socket.AF_INET6, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (addr, port or 0, 0, 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", _resolve)
+    r = _ssh("gpu-box.invalid")
+    assert r.ok is False
+    assert "resolves to a cloud instance-metadata endpoint" in (r.detail or ""), r.detail

@@ -109,7 +109,7 @@ def test_the_dev_launcher_passes_local_dev_and_keeps_a_callers_profile(monkeypat
 
     monkeypatch.delenv("OBS_PROFILE", raising=False)
     monkeypatch.delenv("CAIRN_PROFILE", raising=False)
-    assert pathlib.Path(dev_env(port=8000)["CAIRN_PROFILE"]) == LOCAL_DEV and LOCAL_DEV.exists()
+    assert pathlib.Path(dev_env(port=8000, example_pack=False)["CAIRN_PROFILE"]) == LOCAL_DEV and LOCAL_DEV.exists()
     monkeypatch.setenv("CAIRN_PROFILE", "/srv/mine.toml")
     assert dev_env(port=8000)["CAIRN_PROFILE"] == "/srv/mine.toml"
     monkeypatch.delenv("CAIRN_PROFILE")

@@ -143,6 +143,14 @@ def policy_applies(spec: PolicySpec, request: ActionRequest) -> bool:
     """
     applies = spec.applies_to
 
+    # `pipeline_legs` is matched against a pipeline's legs when it is PLANNED
+    # (policy/pipeline_gates.py); a per-operation request carries no leg ref. A
+    # policy that sets nothing else is therefore a plan-time policy only and
+    # does not apply to individual operator calls.
+    if applies.pipeline_legs and not (
+        applies.action_types or applies.environments or applies.risks or applies.capabilities
+    ):
+        return False
     if applies.action_types and request.candidate.type not in applies.action_types:
         return False
     # #1766 — match the environment NAME or its TIER. A deployment runs names

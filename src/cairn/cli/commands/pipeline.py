@@ -1,4 +1,4 @@
-"""``cairn pipeline`` — inspect a pack's runnable surface (#1126, ADR-0084 D9).
+"""What ``cairn pack ls`` and ``cairn pack show`` run — inspect a pack's runnable surface (#1126, ADR-0084 D9).
 
 A pipeline composes a pack's own flows into one entity; each step is a leg that
 becomes its own governed run. ``show`` answers "what will this do, and on which
@@ -18,8 +18,16 @@ block that lists every effective value beside the document that owns it —
 ``inherited:<leg>``. ADR-0106 D4 keeps those four owners separate on purpose
 (different people, different change cadence); this is the one view that merges
 them for reading without merging them for editing.
+
+``explain`` and ``show --plan`` take ``--preset`` (#231): resolved by the launch
+door's own step (:func:`~cairn.core.pipeline_presets.expand_preset` — the same
+lookup, the same stale-key refusal) and layered under ``-i`` as the launch layers
+it, so each input shows the layer it came from (``← preset 'name'``). Offline like
+the rest: a saved preset is read from this CLI's store, a pack's from the pack.
 """
 from __future__ import annotations
+
+import json
 
 import typer
 from rich.console import Console
@@ -27,10 +35,6 @@ from rich.console import Console
 from cairn.core.engine.pipeline import PipelineDef, plan_pipeline
 from cairn.core.engine.pipeline_resolve import PIPELINE_PREFIX, all_pipeline_defs, resolve_pipeline_ref
 
-app = typer.Typer(
-    help="Inspect pack pipelines — the composed, runnable surface (ADR-0084 D4).",
-    no_args_is_help=True,
-)
 console = Console()
 
 #: Which runtime executes each leg kind — the point of the whole design, so the
@@ -44,18 +48,24 @@ _RUNTIME = {
 }
 
 
-@app.command("ls")
+def pipeline_rows() -> list[dict]:
+    """Every pipeline across installed packs, one row each."""
+    return [{"ref": f"{d.pack}/{d.name}", "legs": len(d.steps),
+             "kinds": sorted({s.leg_kind for s in d.steps}), "content_hash": d.content_hash}
+            for d in sorted(all_pipeline_defs(), key=lambda p: (p.pack, p.name))]
+
+
+def print_pipeline_rows(rows: list[dict]) -> None:
+    for row in rows:
+        console.print(f"  [cyan]{row['ref']}[/]  [dim]{row['legs']} legs "
+                      f"({','.join(row['kinds'])})  {row['content_hash']}[/]")
+    if not rows:
+        console.print("[yellow]no pipelines installed[/] — a domain pack ships at least one")
+
+
 def ls_cmd() -> None:
     """List every pipeline across installed packs."""
-    defs = all_pipeline_defs()
-    if not defs:
-        console.print("[yellow]no pipelines installed[/] — a domain pack ships "
-                      "at least one (ADR-0084 D4)")
-        raise typer.Exit(0)
-    for d in sorted(defs, key=lambda p: (p.pack, p.name)):
-        kinds = ",".join(sorted({s.leg_kind for s in d.steps}))
-        console.print(f"  [cyan]{d.pack}/{d.name}[/]  [dim]{len(d.steps)} legs "
-                      f"({kinds})  {d.content_hash}[/]")
+    print_pipeline_rows(pipeline_rows())
 
 
 def render_pipeline(d: PipelineDef) -> str:
@@ -96,6 +106,53 @@ def render_pipeline(d: PipelineDef) -> str:
     return "\n".join(lines)
 
 
+def _parse_inputs(pairs: list[str] | None) -> dict:
+    """``-i key=value`` pairs, JSON-parsed when possible (as ``launch`` takes them)."""
+    import json  # noqa: PLC0415 — keep `cairn --help` light
+
+    inputs: dict = {}
+    for pair in pairs or []:
+        key, sep, raw = pair.partition("=")
+        if not key or not sep:
+            console.print(f"[red]--input must be key=value, got {pair!r}[/red]")
+            raise typer.Exit(2)
+        try:
+            inputs[key] = json.loads(raw)
+        except ValueError:
+            inputs[key] = raw
+    return inputs
+
+
+def _preset_inputs(d: PipelineDef, preset: str, workspace: str) -> dict:
+    """#231 — the preset's inputs, by the launch door's own preset step; its two
+    refusals (no such preset, a key the pipeline no longer declares) exit 2."""
+    if not preset:
+        return {}
+    import asyncio  # noqa: PLC0415
+
+    from cairn.core.pipeline_presets import (  # noqa: PLC0415 — the store stays off `--help`
+        PresetNotFoundError, UnknownPresetInputsError, expand_preset,
+    )
+
+    try:
+        rec, _source = asyncio.run(expand_preset(workspace, d, preset))
+    except (PresetNotFoundError, UnknownPresetInputsError) as e:
+        from rich.markup import escape  # noqa: PLC0415
+
+        console.print(f"[red]{escape(str(e))}[/red]", highlight=False, soft_wrap=True)
+        raise typer.Exit(2) from e
+    return dict(rec.inputs or {})
+
+
+_PRESET = typer.Option(
+    "", "--preset", "-p", help="layer a saved or pack-shipped input set under --input, "
+    "as `cairn run --preset` does")
+# the `workspace` layer of the resolved view: ADR-0101 D2
+_WORKSPACE = typer.Option(
+    "default", "--workspace", "-w", help="whose variables answer the "
+    "`workspace` layer of the resolved view, and whose saved presets --preset reads")
+
+
 def _inspection_pipeline(ref: str) -> PipelineDef | None:
     """Inspect only declared pipelines, as the run door does (ADR-0106 D1)."""
     raw = ref.strip()
@@ -103,26 +160,57 @@ def _inspection_pipeline(ref: str) -> PipelineDef | None:
     return resolve_pipeline_ref(explicit)
 
 
-@app.command("show")
 def show_cmd(
     ref: str = typer.Argument(..., help="<pack>/<name> or pipeline:<pack>/<name>"),
     plan: bool = typer.Option(False, "--plan", help="Show the execution plan instead."),
+    input_: list[str] = typer.Option(
+        None, "--input", "-i", help="with --plan: `key=value` you would launch with; repeatable"),
+    preset: str = _PRESET,
+    workspace: str = _WORKSPACE,
+    json_out: bool = typer.Option(False, "--json", help="Emit the definition, or with --plan the plan, as JSON."),
 ) -> None:
-    """Show a pipeline's legs, gates, wires — and which runtime runs each leg."""
+    """Show a pipeline's legs, gates, wires — and which runtime runs each leg.
+
+    With ``--plan --preset NAME`` (and ``-i``), the plan is preceded by each declared
+    input's value and the layer it comes from, as the launch would resolve them."""
+    if (preset or input_) and not plan:
+        console.print("[red]--preset and --input apply to --plan[/] — add --plan, or use "
+                      "`cairn run <ref> --dry-run` for the full dry run.")
+        raise typer.Exit(2)
     d = _inspection_pipeline(ref)
     if d is None:
         known = [f"{p.pack}/{p.name}" for p in all_pipeline_defs()]
         console.print(f"[red]unknown pipeline {ref!r}[/] — installed: {known or '(none)'}")
         raise typer.Exit(2)
     if plan:
-        for s in plan_pipeline(d).steps:
+        layers: dict = {}
+        if preset or input_:
+            from cairn.core.engine.pipeline_explain import input_layers  # noqa: PLC0415
+
+            layers = input_layers(d, supplied=_parse_inputs(input_), preset_name=preset,
+                                  preset_inputs=_preset_inputs(d, preset, workspace))
+        steps = plan_pipeline(d).steps
+        if json_out:
+            typer.echo(json.dumps({"inputs": layers, "steps": [
+                {"id": s.id, "ref": s.ref, "depends_on": list(s.depends_on), "approval": s.approval}
+                for s in steps]}, indent=2, default=str))
+            raise typer.Exit(0)
+        if layers:
+            console.print("  inputs (value ← layer)", markup=False)
+            for key, layer in layers.items():
+                console.print(f"    {key:24s} {layer['value']!s:32s} ← {layer['source']}",
+                              markup=False, highlight=False, soft_wrap=True)
+        for s in steps:
             console.print(f"  {s.id:16s} ref={s.ref:32s} deps={s.depends_on} "
                           f"approval={s.approval}")
+        raise typer.Exit(0)
+    if json_out:
+        typer.echo(d.model_dump_json(indent=2))
         raise typer.Exit(0)
     console.print(render_pipeline(d), markup=False)
 
 
-@app.command("explain")
+# #1792; the RESOLVED block: #2134 S4; --preset refusals: #231
 def explain_cmd(
     ref: str = typer.Argument(..., help="<pack>/<name> or pipeline:<pack>/<name>"),
     input_: list[str] = typer.Option(
@@ -130,12 +218,11 @@ def explain_cmd(
         "when possible) — shows which config values it changes; repeatable"),
     environment: str = typer.Option(
         "", "--environment", "-e", help="resolve gates/engine for THIS environment"),
-    workspace: str = typer.Option(
-        "default", "--workspace", "-w", help="whose variables answer the "
-        "`workspace` layer of the resolved view (ADR-0101 D2)"),
+    preset: str = _PRESET,
+    workspace: str = _WORKSPACE,
     json_out: bool = typer.Option(False, "--json", help="the raw projection"),
 ) -> None:
-    """Dry-run how every step will be TRIGGERED — before anything spends (#1792).
+    """Dry-run how every step will be TRIGGERED — before anything spends.
 
     Per leg: the resolved target file, the engine and compute target that will
     run it, every gate on its path with the authority demanding it, each config
@@ -145,10 +232,14 @@ def explain_cmd(
     not happen — including the unpleasant truths (a `retry:` that is not a map
     renders as `IGNORED (not a map)`).
 
-    Then the RESOLVED block (#2134 S4): each declared input, the governance
+    Then the RESOLVED block: each declared input, the governance
     numbers, the engine/target backends and the gates, each beside the document
     that owns it — so "which file do I edit to change this" is answered without
     opening four of them.
+
+    ``--preset NAME`` layers a saved or pack-shipped input set under ``-i`` exactly
+    as ``cairn run --preset`` does, and refuses what that launch refuses
+    (an unknown name, a key the pipeline no longer declares).
 
     Offline: installed packs + the environment's selection plane + the
     deployment's policies + this workspace's variables. No run, no engine, no
@@ -173,17 +264,10 @@ def explain_cmd(
         console.print(f"[red]unknown pipeline {ref!r}[/] — installed: {known or '(none)'}")
         raise typer.Exit(2)
 
-    inputs: dict = {}
-    for pair in input_ or []:
-        key, sep, raw = pair.partition("=")
-        if not key or not sep:
-            console.print(f"[red]--input must be key=value, got {pair!r}[/red]")
-            raise typer.Exit(2)
-        try:
-            inputs[key] = json.loads(raw)
-        except ValueError:
-            inputs[key] = raw
+    inputs = _parse_inputs(input_)
     doc = asyncio.run(explain_pipeline(d, environment=environment, inputs=inputs,
+                                       preset_name=preset,
+                                       preset_inputs=_preset_inputs(d, preset, workspace),
                                        workspace_id=workspace))
     if json_out:
         console.print_json(json.dumps(doc, default=str))
@@ -192,177 +276,24 @@ def explain_cmd(
     # terminal width folds every row in half.
     console.print(render_explain(doc), markup=False, highlight=False, soft_wrap=True)
     # next-command discipline (#1792): the verb that acts on what was just read.
-    console.print(f"\n  launch: cairn remote launch {d.pack}/{d.name} -i key=value"
+    if preset:
+        flags = "".join(f" -i {p}" for p in input_ or [])
+        console.print(f"\n  launch: cairn run {d.pack}/{d.name} --preset {preset}{flags}",
+                      markup=False, soft_wrap=True)
+        return
+    console.print(f"\n  launch: cairn run {d.pack}/{d.name} -i key=value"
                   f"   (add --preset <name> to launch from a saved set)",
                   markup=False, soft_wrap=True)
 
 
-#: Pipeline states that mean the CLI's job is over (#1702).
-_TERMINAL = ("done", "failed", "cancelled")
 
 
-async def _drive_until_terminal(bridge, pipeline_id: str, *, poll_s: float = 2.0):
-    """#1702 — keep the launching bridge ALIVE and report leg transitions until
-    the pipeline terminates. Returns the final record.
 
-    Under the in-process runtime the launching process's bridge is the ONLY
-    thing driving the pipeline: `launch_pipeline` returns as soon as the first
-    leg is submitted, so stopping the bridge there abandons the record at
-    `status=running` with no executor behind it — exit 0, looks like success,
-    and manufactures exactly the orphan class the reconciler never reaps
-    (#1670). Observed live 2026-08-26 (`pl_61ac889bd661477a`, 13 minutes of
-    nothing); the identical launch under a kept-alive bridge worked first try.
-    """
-    import asyncio
-
-    last: dict[str, str] = {}
-    while True:
-        rec = await bridge.store.get(pipeline_id)
-        if rec is None:
-            return None
-        for sid, st in rec.step_state.items():
-            if last.get(sid) != st.status:
-                last[sid] = st.status
-                console.print(f"  [dim]leg[/dim] {sid:24s} → {st.status}"
-                              + (f"  [dim]{st.run_id}[/dim]" if st.run_id else ""))
-        if rec.status in _TERMINAL:
-            return rec
-        await asyncio.sleep(poll_s)
+# ref resolution: ADR-0106 D1 (#2134); the dev loop needs no pipeline: ADR-0106 D6;
+# the CLI owns the pipeline it launched: #1702
 
 
-@app.command("run")
-def run_pipeline(
-    ref: str = typer.Argument(
-        ..., help="`<pack>/<name>` or `pipeline:<pack>/<name>` — a declared pipeline; "
-                  "bare flow refs are refused. A pipeline wins at a shared ref (ADR-0106 D1)"),
-    input_: list[str] = typer.Option(
-        None, "--input", "-i", help="`key=value` (JSON parsed when possible); repeatable"),
-    environment: str = typer.Option("", "--environment", "-e", help="environment to run in"),
-    detach: bool = typer.Option(
-        False, "--detach", help="Launch and exit without waiting. Under the in-process "
-        "runtime this leaves the pipeline UNOWNED (nothing drives its legs) — exit 2."),
-) -> None:
-    """Launch a pipeline and drive it.
-
-    The same door the console uses, so a run started here and one started from
-    the UI are the same governed object. ``ref`` is resolved the way ``POST
-    /start`` resolves it (:func:`resolve_start_ref`), which since ADR-0106 D1
-    (#2134) means: a declared pipeline runs, a bare FLOW ref is refused with
-    the one-leg wrapper to add, and a pipeline WINS over a flow at the same
-    ref. ``cairn run`` keeps the flow-shaped surface — its inputs and the
-    dev-loop flags, which need no pipeline at all (ADR-0106 D6).
-
-    The difference from the console is ownership (#1702): its caller is a
-    long-lived server; this process is the pipeline's owner only for as long as
-    it lives. So by default the CLI STAYS: bridge up, leg transitions printed,
-    exit code from the pipeline's own terminal state. ``--detach`` restores
-    fire-and-forget — a fine thing under the Temporal runtime (the workflow
-    owns the pipeline), and an explicit, loudly-flagged abandonment under the
-    in-process one.
-    """
-    from cairn.profiles import default_dev_profile  # noqa: PLC0415 — #2241 D: local compiles get local-dev
-
-    default_dev_profile()
-    import asyncio
-    import json
-
-    from cairn.core import liveness, settings
-    from cairn.core.dispatch.dispatcher import RunDispatcher
-    from cairn.core.dispatch.pipeline_bridge import PipelineBridge
-    from cairn.core.engine.runner import Runner
-    from cairn.core.storage import build_storage
-    from cairn.core.dispatch.pipeline_launch import (
-        MissingInputsError, PipelineNotFoundError, launch_pipeline,
-    )
-    from cairn.core.dispatch.start import (
-        FlowNotRunnableError, UnknownStartRefError, resolve_start_ref,
-    )
-    from cairn.core.engine.pipeline_resolve import AmbiguousRefError
-
-    inputs: dict = {}
-    for pair in input_ or []:
-        key, _, raw = pair.partition("=")
-        if not key or not _:
-            console.print(f"[red]--input must be key=value, got {pair!r}[/red]")
-            raise typer.Exit(2)
-        try:
-            inputs[key] = json.loads(raw)
-        except ValueError:
-            inputs[key] = raw            # a bare string is the common case
-
-    async def _go():
-        # Resolved INSIDE, so an unknown ref or a bare flow ref lands in the
-        # same except-block that renders every other launch refusal.
-        _kind, bare = resolve_start_ref(ref)
-        dispatcher = RunDispatcher(Runner(), backend=build_storage())
-        bridge = PipelineBridge(dispatcher)
-        # ADR-0125 D2 — this process runs in-process legs, so it holds an owner
-        # lock for its life, as the server does: a server next to it can tell
-        # its legs are alive, and it can tell the server's are.
-        await liveness.start_process_owner(dispatcher.store)
-        await bridge.start()
-        try:
-            rec = await launch_pipeline(
-                f"pipeline:{bare}", inputs=inputs, bridge=bridge,
-                environment=environment or None, trigger={"source": "cli"},
-            )
-            console.print(f"[green]launched[/green] {ref}  →  [bold]{rec.pipeline_id}[/bold]")
-            console.print(f"  status: {rec.status}   legs: {len(rec.step_state)}")
-            if detach or rec.status in _TERMINAL:
-                return rec
-            # #1702 — the whole fix: the bridge stays up until the pipeline no
-            # longer needs an owner, instead of dying in a `finally` millis
-            # after the first leg submits.
-            return await _drive_until_terminal(bridge, rec.pipeline_id)
-        finally:
-            bridge.stop()
-            await liveness.stop_process_owner()
-
-    from cairn.core.policy.pipeline_gates import PolicyDeniedError  # noqa: PLC0415 - cycle: policy → engine
-    from cairn.core.admission_door import AdmissionRefusedError  # noqa: PLC0415 — same
-
-    try:
-        rec = asyncio.run(_go())
-    except FlowNotRunnableError as e:
-        # ADR-0106 D1 — the ref names a component. Exit 2 (a refusal of the
-        # request, not a failure of the launch), with the remedy in the message.
-        console.print(f"[red]{e}[/red]")
-        raise typer.Exit(2) from e
-    except (PipelineNotFoundError, AmbiguousRefError, MissingInputsError,
-            UnknownStartRefError, NotImplementedError) as e:
-        console.print(f"[red]{e}[/red]")
-        raise typer.Exit(1) from e
-    except PolicyDeniedError as e:  # #1252 — the environment refused the launch
-        console.print(f"[red]{e}[/red]")
-        raise typer.Exit(3) from e
-    except AdmissionRefusedError as e:  # #2190 — the admission door refused
-        console.print(f"[red]{e}[/red]")
-        raise typer.Exit(3) from e
-    except KeyboardInterrupt:
-        # The bridge died with this process; say so instead of pretending.
-        console.print("[yellow]interrupted — the pipeline record survives, but under the "
-                      "in-process runtime nothing is driving it now. A server restart "
-                      "re-adopts ownership (not execution) of in-flight records.[/yellow]")
-        raise typer.Exit(130) from None
-
-    if detach and rec.status not in _TERMINAL and settings.runtime() != "temporal":
-        # #1702 fix-direction 3: never exit 0 after abandoning a pipeline.
-        console.print(f"[yellow]detached — {rec.pipeline_id} is UNOWNED under the "
-                      f"in-process runtime: its legs will not advance. Drive it from a "
-                      f"server, or rerun without --detach.[/yellow]")
-        raise typer.Exit(2)
-
-    console.print(f"  final: [bold]{rec.status}[/bold]"
-                  + (f"   [red]{rec.trigger.get('failure_reason', '')}[/red]"
-                     if rec.status == "failed" else ""))
-    console.print(f"  inspect: [dim]cairn pipeline show {ref}[/dim]")
-    if rec.status == "failed":
-        raise typer.Exit(1)
-    if rec.status == "cancelled":
-        raise typer.Exit(1)
-
-
-@app.command("respell-packs")
+# #2527
 def respell_packs_cmd(
     apply: bool = typer.Option(False, "--apply", help="Write the rewrite. Without it nothing is written."),
     server_stopped: bool = typer.Option(
@@ -370,7 +301,7 @@ def respell_packs_cmd(
         help="Required with --apply: the server and workers are stopped, so nothing writes these rows meanwhile."),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Print sample before/after pairs per table."),
 ) -> None:
-    """Rewrite recorded refs of the three hyphenated packs to their manifest spelling (#2527).
+    """Rewrite recorded refs of the three hyphenated packs to their manifest spelling.
 
     `dataset_readiness/…`, `security_triage/…` and `security_kb/…` (the directory
     spelling a source checkout recorded) become `dataset-readiness/…`,
@@ -423,7 +354,8 @@ def respell_packs_cmd(
         console.print("  [dim]take a backup, then re-run with --apply[/]")
 
 
-@app.command("backfill")
+# #2128 item C; every run is a leg of a pipeline: ADR-0105 D1, made true at the
+# chokepoint by #2133
 def backfill_cmd(
     apply: bool = typer.Option(
         False, "--apply", help="WRITE. Without it this only reports what it would do."),
@@ -443,10 +375,10 @@ def backfill_cmd(
         "Second-hand, so opt-in; such records are marked trigger.ref_inferred."),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="List every run."),
 ) -> None:
-    """Give every pipeline-less run its one-leg pipeline (#2128 item C).
+    """Give every pipeline-less run its one-leg pipeline.
 
-    ADR-0105 D1: every run is a leg of a pipeline. #2133 made that true at the
-    chokepoint, for every run created from now on; this makes it true of the
+    Every run is a leg of a pipeline. The launch door makes that true for
+    every run created from now on; this makes it true of the
     HISTORY, so the count of runs with no bundle_pipeline_id reaches 0 — the
     invariant is total, with no permanent "legacy" label.
 

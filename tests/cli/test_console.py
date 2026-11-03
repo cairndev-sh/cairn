@@ -1,4 +1,4 @@
-"""#56 — the Textual console (`cairn remote console`).
+"""#56 — the Textual console (`cairn admin console`).
 
 Headless smoke + autocomplete contracts via Textual's run_test pilot. Skipped
 where the optional `tui` extra (textual + textual-autocomplete) isn't installed,
@@ -218,14 +218,14 @@ async def test_entity_rows_route_to_the_right_command(ask_provided):
 
 
 async def test_profile_doctor_targets_selected_profile_via_env():
-    """Profiles→Doctor runs `cairn doctor` with OBS_PROFILE pointed at the
+    """Profiles→Doctor runs `cairn setup --check` with OBS_PROFILE pointed at the
     selected profile file (doctor reads the profile from that env path)."""
     app = CairnConsole(endpoint=_EP, token=None)
     async with app.run_test():
         captured: dict = {}
         app._shell = lambda toks, **k: captured.update(toks=toks, **k)
         app._prof_action("doctor", "/x/secure.toml")
-        assert captured["toks"] == ["doctor"]
+        assert captured["toks"] == ["doctor"]  # `setup --check` by test_cli_calls_itself.py
         assert captured["env"] == {"CAIRN_PROFILE": "/x/secure.toml"}
 
 

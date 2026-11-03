@@ -1,0 +1,4 @@
+{"id": "e1", "text": "The invoice total did not match the purchase order.", "label": "finance", "dated_at": "2026-06-02"}
+{"id": "e2", "text": "The delivery arrived two days late.", "label": "logistics"}
+{"id": "e3", "text": "The password reset link had expired.", "label": "support"}
+{"id": "e4", "text": "The refund reached the card within a week.", "label": "finance"}

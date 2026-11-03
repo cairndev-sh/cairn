@@ -14,17 +14,17 @@ wheel alone carries the builtin operator packs and the core contracts.
 3. In that venv, from a directory outside the checkout:
    ``scripts/check_public_set.py --extras hello``; ``cairn pack check``; the 13 core contract
    packages resolve, all hosted by ``cairndev``, with the names, versions and digests of the
-   pre-fold snapshot (``tests/core/fixtures/contract_resolution_prefold.json``); the 22
+   pre-fold snapshot (``tests/core/fixtures/contract_resolution_prefold.json``); the 24
    builtin ``cairn.operators`` entry points all come from ``cairndev``; ``cairn-dataflow-run``
-   starts (with no spec it refuses by name); ``cairn pipeline explain
+   starts (with no spec it refuses by name); ``cairn run --dry-run
    hello-cairn/profile-and-publish``.
 4. D7.4's run: ``hello-cairn/profile-and-publish`` runs IN PROCESS through the one launch
-   door, the way ``cairn pipeline run`` drives it (a ``RunDispatcher`` over the engine's own
+   door, the way ``cairn run`` drives it (a ``RunDispatcher`` over the engine's own
    ``Runner``, a ``PipelineBridge``, ``launch_pipeline``), on the sample file the
    ``cairn-pack-hello`` wheel installed: no server, no Docker, no network, no provider key,
    ``CAIRN_BACKEND=mock`` and a SQLite store in the work directory. Its two gates that wait
    for a person (``review`` and ``promote``'s own) are approved through
-   ``PipelineBridge.advance_step``, the call ``cairn remote advance`` reaches. It must end
+   ``PipelineBridge.advance_step``, the call ``cairn decide`` reaches. It must end
    ``done``; every task leg's ``Run`` names ``task:<operator>`` for an operator whose entry
    point is ``cairndev``'s and whose class loads from the venv; every leg's admitted
    invocation names a capability defined by a contract package ``cairndev`` hosts; and the
@@ -59,7 +59,7 @@ BASE = ("cairndev", "cairn-client", "cairn-pack-hello")
 ENGINE = "cairndev"
 SNAPSHOT = ROOT / "tests" / "core" / "fixtures" / "contract_resolution_prefold.json"
 CORE_CONTRACTS = 13
-BUILTIN_OPERATORS = 22
+BUILTIN_OPERATORS = 24  # 22, plus compute/acquire and compute/release (ADR-0151 D6)
 #: The pipeline D7.4 runs in process, and the gates in it that wait for a person.
 PIPELINE = "hello-cairn/profile-and-publish"
 PERSON_GATES = ("review", "promote")
@@ -241,8 +241,8 @@ def _probe_contracts(want: dict) -> None:
 
 
 async def _run_hello(sample: str) -> dict:
-    """What ``cairn pipeline run`` does (``cli/commands/pipeline.py``), plus the approvals
-    ``cairn remote advance`` gives, in this one process."""
+    """What ``cairn run`` does (``cli/commands/pipeline.py``), plus the approvals
+    ``cairn decide`` gives, in this one process."""
     import asyncio
     import importlib.metadata as md
     import inspect
@@ -311,7 +311,7 @@ def _probe_run(want: dict) -> None:
     from cairn.core.pack import loader
     from cairn.profiles import default_dev_profile
 
-    default_dev_profile()  # as ``cairn pipeline run`` does: local compiles get local-dev
+    default_dev_profile()  # as ``cairn run`` does: local compiles get local-dev
     loader.load_all_packs()
     pack = pack_api.get_pack("hello-cairn")
     if pack is None:
@@ -413,8 +413,8 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout.write(ran.stdout)
             sys.stderr.write(ran.stderr)
             raise SystemExit("[check_folded_wheels] FAILED: cairn-dataflow-run did not start")
-        _run(f"cairn pipeline explain {PIPELINE}",
-             [str(bin_ / "cairn"), "pipeline", "explain", PIPELINE], cwd=here, env=env, quiet=True)
+        _run(f"cairn run --dry-run {PIPELINE}",
+             [str(bin_ / "cairn"), "run", "--dry-run", PIPELINE], cwd=here, env=env, quiet=True)
         # D7.4: the run. Its state lives in the work directory; no key reaches it.
         state = work / "run"
         state.mkdir()

@@ -1,6 +1,6 @@
-# examples/ — kitchen-sink reference bundle
+# examples/
 
-## Start here: the `hello-cairn` example pack
+## `hello-cairn/`: the example pack, start here
 
 [`hello-cairn/`](hello-cairn/README.md) is a small domain pack that runs on the engine
 and its builtin operator packs alone (no other pack, no ML dependency, no API key). Its
@@ -10,74 +10,45 @@ summary, pauses at a **person gate**, and publishes only after approval, under a
 `cairn-pack-hello` wheel. Its README is the quickstart walkthrough. Tests:
 `tests/examples/test_hello_cairn.py`.
 
-The rest of this file describes the older template reference bundle.
+For how a template is written, read its
+[`flows/assistant.md`](hello-cairn/flows/assistant.md) (a model and tools) and
+[`flows/nightly-job.md`](hello-cairn/flows/nightly-job.md) (operations, no model).
 
-A single, **verified** reference set showing the full surface area of every
-artifact type in templates_v2. These files are **not loaded by the default
-engine** (the loaders read `templates/builtin`, `skills/builtin`,
-`policies/builtin`). They live here as a copy-paste reference and as the
-fixture for `tests/templates_v2/test_examples_bundle.py`, which proves they
-parse and compile against the real engine.
+## `holdout/`: see the holdout door refuse
 
-## Why a bundle, not "one template"?
+[`holdout/`](holdout/README.md) registers an eval set and two training sets, then launches a
+run on each: the one that shares a row with the eval set is refused before it has a record.
+No key, no spend. Its test is `tests/e2e/hello/test_holdout_example.py`.
 
-The schema deliberately splits the surface area across **three artifact types +
-runtime config**. You cannot put everything in one template:
+## `ci/`: a gate in CI
 
-| Capability | Lives in | Field |
-|---|---|---|
-| tools | template | `tools.required / dynamic / tool_k` |
-| graph (all 6 BT nodes) | template | `flow: state_machine` |
-| multi-model params | template | `models.router/fast/strong` (+ extras) |
-| compose other templates | template | `subgraph_node` |
-| structured output | template | `output.schema` |
-| evals | template | `evals` |
-| **budget** | template | `budget` (added for this bundle) |
-| memory | skill | `memory_enabled` |
-| triggers / scheduled | skill | `triggers.{patterns,metrics,alerts,schedule,manual}` |
-| skill chaining (cascade) | skill | `chain_skills` |
-| python escape hatch | skill | `custom_logic` |
-| action proposals | skill | `action_candidates` |
-| approval / deny rules | **policy** | `PolicySpec.rules` (4 effects) |
-| background lane | **runtime** | chosen at dispatch — not a YAML field |
+[`ci/`](ci/README.md) has GitHub Actions and GitLab CI jobs that block a merge when a
+dataset fails a read-only check, and the check itself. They need only
+`pip install cairndev`.
 
-## Files
+## `python/sweep/`: a hyperparameter sweep around cairn
 
-| File | Demonstrates |
+[`python/sweep/`](python/sweep/) shows the shape of a sweep where Optuna or W&B Sweeps does
+the search and calls cairn once per trial. These scripts are out of date and don't run as
+they are: each trial calls `cairn run training/finetune --input <file>`. `cairn run` takes a
+file as `--input @file` and starts a pipeline rather than a bare flow, and no pack here
+provides that flow. To use the idea, have each trial start a declared pipeline.
+
+## `sample-alert.json`
+
+A sample alert payload, the shape of a file you'd pass as `cairn run --input @file`. No
+pack in this repository reads it.
+
+## Budgets in a template
+
+A template can declare a `budget:` block. A template without one sets no limit of its own, though the deployment's `MAX_COST_USD` ($1 by default) still applies:
+
+| Field | Status |
 |---|---|
+| `max_wall_seconds` | Enforced. The run is cancelled at the limit and recorded as `budget_exceeded`. |
+| `max_cost_usd` | Enforced after each LLM call. The call's token spend is added to the running total, and `BudgetExceeded` is raised when the total crosses the cap, so a run can overshoot by the call that crossed it. The run then fails, and its pipeline stops. |
+| `max_iterations` | Enforced for the critique loop. |
+| `max_tokens` | Declared only. Nothing stops a run on it. |
 
-## Two honest caveats
-
-1. **`subgraph_node` resolution is hardwired** to `templates/builtin` /
-   `templates` (see `compiler._compile_bt` → `resolve_template_path`). So the
-   example composes the real builtin **`generic-investigation`**. The YAML is
-   identical for any target — this is a genuine demonstration of composition.
-
-2. **`budget` enforcement is partial, by design.** Only `max_wall_seconds` is
-   enforced today (the Runner wraps the run in `asyncio.wait_for`). `max_cost_usd`
-   and `max_tokens` are **declared intent, not enforced** — there is no
-   cost/token accounting subsystem yet (`InvestigationResult.llm_cost_usd` is
-   still a dead default). Nothing fakes enforcement; the fields exist so the
-   accounting layer can honor them later.
-
-## What a registry would include (beyond template + skills + python + evals)
-
-The full inventory the registry must resolve:
-
-- **Artifacts:** templates, skills, **policies**, **output schemas**
-- **Code (3 separate registries):** `condition_registry` (guards),
-  `python_function_registry` (python_node), `custom_logic` modules (skill hooks)
-- **Evals:** datasets + metrics + thresholds
-- **Integration bindings** (referenced by name, must resolve): **executors**
-  (`action_candidate.type` → write-saga handler), **approval channels /
-  notifiers** (e.g. `slack:#prod-oncall`), **backend adapters + capability→tool
-  bindings**
-- **Provenance:** version, content hash (`TemplateRef.hash/tag`), trust tier,
-  and a **dependency manifest** so `validate` can fail fast on a missing
-  capability/executor/schema before runtime.
-
-## Verify
-
-```bash
-OPENAI_API_KEY=sk-test-dummy uv run pytest tests/templates_v2/test_examples_bundle.py -q
-```
+A pipeline's own budget is a different mechanism: `governance.budget`, reserved before each
+flow leg starts. See [Cost and budgets](../docs/site/src/content/docs/concepts/cost.md).

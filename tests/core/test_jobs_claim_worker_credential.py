@@ -1,4 +1,4 @@
-"""Only a worker credential claims pull-lane work (cairn-platform#224).
+"""Only a worker credential claims pull-lane work (an internal issue).
 
 ``POST /jobs/claim`` hands out ANY queued job with its input, plus a run-scoped
 token for the job's run. It refused only per-run worker tokens, so every other
@@ -7,7 +7,7 @@ could take another account's job, read its input and report into its run.
 
 Now a claim (and a heartbeat that is not a run-scoped token's own job) needs a
 worker credential: the deployment's admin (``CAIRN_API_USER``) or a worker-pool
-token (``scope=worker-pool``) minted with ``cairn remote worker-token``. A user's
+token (``scope=worker-pool``) minted with ``cairn admin worker-token``. A user's
 token gets 403 whatever its role. A worker-pool token reaches the pull lane and
 nothing else. Driven through the real app with auth on and real stores.
 """
@@ -111,7 +111,7 @@ def _env_admin() -> dict[str, str]:
 
 
 def _pool(name: str = "gpu-a") -> dict[str, str]:
-    """The token ``cairn remote worker-token`` prints — the real minting path."""
+    """The token ``cairn admin worker-token`` prints — the real minting path."""
     return _bearer(auth.mint_worker_pool_token(name))
 
 
@@ -208,11 +208,11 @@ def test_a_worker_pool_token_carrying_a_run_scope_is_run_scoped(env):
     assert _unclaimed(env)
 
 
-# ─── minting: `cairn remote worker-token` ────────────────────────────────
+# ─── minting: `cairn admin worker-token` ─────────────────────────────────
 
 
 def test_the_cli_mints_a_worker_pool_token(env):
-    from cairn.cli.commands.remote import app
+    from cairn.cli.commands.admin import app
     out = CliRunner().invoke(app, ["worker-token", "--name", "gpu-a", "--days", "2"])
     assert out.exit_code == 0, out.output
     claims = jwt.decode(out.output.strip(), SECRET, algorithms=["HS256"])
@@ -226,7 +226,7 @@ def test_the_cli_mints_a_worker_pool_token(env):
 def test_the_cli_refuses_without_a_signing_secret(monkeypatch):
     for k in ("CAIRN_JWT_SECRET", "OBS_JWT_SECRET"):
         monkeypatch.delenv(k, raising=False)
-    from cairn.cli.commands.remote import app
+    from cairn.cli.commands.admin import app
     out = CliRunner().invoke(app, ["worker-token", "--name", "gpu-a"])
     assert out.exit_code != 0
     assert "CAIRN_JWT_SECRET" in out.output

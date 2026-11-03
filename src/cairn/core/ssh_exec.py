@@ -127,7 +127,7 @@ async def ssh_params_for(connection_name: str, *, operator: str) -> dict:
         raise SshExecError(
             f"{operator}: compute connection {connection_name!r} did not resolve "
             f"to an enabled connection — add it with "
-            f"`cairn connect ssh --name {connection_name}`")
+            f"`cairn admin connect add ssh --name {connection_name}`")
     if conn.kind != "compute.ssh":
         raise SshExecError(
             f"{operator}: connection {connection_name!r} is kind {conn.kind!r}; "

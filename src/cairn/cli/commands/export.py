@@ -174,7 +174,7 @@ def _render(contract: Any, graph: Any, demo_tier: str, demo: dict[str, Any]) -> 
     if desc:
         head += _wrap(desc) + [""]
     head += [
-        f"Exported from the installed workflow `{ref}` by `cairn export` (#1092).",
+        f"Exported from the installed workflow `{ref}` by `cairn pack export` (#1092).",
         "",
         "This file REFERENCES that workflow: the pack still owns the graph, the",
         "operator risk classes, and the gates, so what runs here is governed the",

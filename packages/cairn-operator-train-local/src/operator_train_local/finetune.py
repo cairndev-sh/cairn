@@ -21,6 +21,7 @@ import hashlib
 import json
 import logging
 import math
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -37,6 +38,15 @@ HOLDOUT_EVERY = 8
 
 class TrainStackMissing(RuntimeError):
     """The ``[train]`` extra is not installed; the message names it."""
+
+
+class TrainingCancelled(Exception):
+    """The fine-tune was stopped before it returned a completed adapter."""
+
+
+def _check_cancelled(cancel_event: threading.Event | None) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise TrainingCancelled("fine-tuning cancelled")
 
 
 def require_train_stack() -> None:
@@ -235,6 +245,7 @@ def finetune(*, dataset: str, base_model: str, lora_rank: int, steps: int, max_s
     """Run the LoRA fine-tune and save the adapter to ``output_dir``; the contract's output.
     ``written``, when given, receives the paths (relative to ``output_dir``) the save wrote."""
     require_train_stack()
+    _check_cancelled(cancel_event)
     import torch  # noqa: PLC0415 - optional dependency: the [train] extra
     from peft import LoraConfig, get_peft_model  # noqa: PLC0415 - [train] extra
 
@@ -265,15 +276,18 @@ def finetune(*, dataset: str, base_model: str, lora_rank: int, steps: int, max_s
         scaler.step(optimizer)
         scaler.update()
         optimizer.zero_grad()
+        _check_cancelled(cancel_event)
         losses.append(value)
         tokens += int(enc["attention_mask"].sum())
         if on_step is not None:
             on_step(step, value)
     eval_loss = _mean_loss(model, tokenizer, held, max_seq_len, dev, dtype)[0] if held else None
     out = Path(output_dir)
+    _check_cancelled(cancel_event)
     out.mkdir(parents=True, exist_ok=True)
     before = _snapshot(out)
     model.save_pretrained(output_dir)
+    _check_cancelled(cancel_event)
     if written is not None:
         written.extend(sorted(rel for rel, stat in _snapshot(out).items() if before.get(rel) != stat))
     _log.info("train-local: %d steps on %s, adapter at %s", steps, base_model, output_dir)

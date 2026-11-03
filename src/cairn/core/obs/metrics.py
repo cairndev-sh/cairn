@@ -70,7 +70,7 @@ def init_metrics(service_name: str | None = None) -> None:
                 OTLPMetricExporter(endpoint=f"{otlp_endpoint}/v1/metrics")
             ))
         except ImportError:
-            logger.warning("OTLP metric exporter not installed (`cairn[telemetry]`) — metrics disabled")
+            logger.warning("OTLP metric exporter not installed (`pip install 'cairndev[telemetry]'`) — metrics disabled")
             return
     if settings.otel_console:
         readers.append(PeriodicExportingMetricReader(ConsoleMetricExporter()))

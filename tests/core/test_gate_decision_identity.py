@@ -171,3 +171,41 @@ def test_advance_under_auth_without_a_token_is_refused(monkeypatch, parked):
     with TestClient(build_app(FakeRunner(), enable_scheduler=False)) as c:
         assert c.post("/pipelines/pl_park/steps/release/advance").status_code == 401
     assert parked == []
+
+
+# ─── POST /approvals/dismiss records the token's identity, like a gate decision ───
+
+
+@pytest.fixture
+def dismissed(monkeypatch):
+    seen: dict = {}
+
+    async def fake_dismiss(store, run_ids, *, actor="console", workspace_id=None, now=None):
+        seen["actor"] = actor
+        return {"expired": list(run_ids), "skipped": []}
+
+    monkeypatch.setattr("cairn.core.approval.reaper.dismiss_runs", fake_dismiss)
+    return seen
+
+
+def test_dismiss_under_auth_records_the_token_identity(monkeypatch, dismissed, caplog):
+    monkeypatch.setenv("OBS_JWT_SECRET", "test-secret-for-the-gate-decision-identity-2310")
+    monkeypatch.setenv("OBS_API_USER", "maya")
+    monkeypatch.setenv("OBS_API_PASSWORD", "maya-pw")
+    monkeypatch.delenv("OBS_API_PASSWORD_HASH", raising=False)
+    tok = create_access_token({"sub": "maya"})
+    with caplog.at_level("WARNING"), TestClient(build_app(FakeRunner(), enable_scheduler=False)) as c:
+        r = c.post("/approvals/dismiss", json={"run_ids": ["run-1"], "actor": "someone-else"},
+                   headers={"Authorization": f"Bearer {tok}"})
+        assert r.status_code == 200, r.text
+        assert c.post("/approvals/dismiss", json={"run_ids": ["run-1"]}).status_code == 401
+    assert dismissed == {"actor": "maya"}
+    assert any("someone-else" in x.getMessage() for x in caplog.records)
+
+
+def test_dismiss_auth_off_keeps_the_claimed_actor(monkeypatch, dismissed):
+    monkeypatch.delenv("OBS_JWT_SECRET", raising=False)
+    with TestClient(build_app(FakeRunner(), enable_scheduler=False)) as c:
+        assert c.post("/approvals/dismiss", json={"run_ids": ["r"], "actor": "ops"}).status_code == 200
+        assert c.post("/approvals/dismiss", json={"run_ids": ["r"]}).status_code == 200
+    assert dismissed == {"actor": "console"}

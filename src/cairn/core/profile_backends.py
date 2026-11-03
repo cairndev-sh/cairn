@@ -20,9 +20,10 @@ and the docs all follow. Every capability keeps a zero-config safe default
 (sqlite / inprocess / off), so a fresh checkout runs with an empty profile.
 """
 from __future__ import annotations
-from cairn.core.settings import getenv
+from cairn.core.settings import getenv, url_scheme
 
 import os
+import re
 from typing import Any, Literal, Mapping, Optional
 
 from pydantic import BaseModel, Field
@@ -60,7 +61,7 @@ class BackendField(BaseModel):
     description: str = ""
     options: list[BackendOption] = Field(default_factory=list)
     env: Optional[str] = None               # env var this falls back to (None = profile-only)
-    env_is_url_kind: bool = False           # env holds a URL; derive the backend *kind* (storage)
+    env_is_url_kind: bool = False           # env holds a URL; derive the backend *kind* (storage, bus)
     needs_connection: bool = False          # non-default choice binds a stored connection (§3 / #305)
     optional_on: Optional[str] = None       # only meaningful when this toggle key is on (UI reveal)
 
@@ -270,7 +271,7 @@ BACKENDS: list[BackendField] = [
         key="event_bus", label="Notification bus", group="Eventing", control="select",
         # ADR-0127 D5 — the redis option is gone: CAIRN_BUS=redis://… is refused.
         options=_opts(("inprocess", "In-process"), ("postgres", "Postgres (needs a DSN in CAIRN_BUS)")),
-        default="inprocess", env="CAIRN_BUS",
+        default="inprocess", env="CAIRN_BUS", env_is_url_kind=True,
         description="Outbound notification/replay bus. In-process is the default. The Postgres bus (LISTEN/NOTIFY + replay, #477) is selected by a postgres:// DSN in CAIRN_BUS; this field carries no DSN, so choosing Postgres here without one runs in-process.",
     ),
     BackendField(
@@ -328,15 +329,22 @@ def backends_schema_grouped() -> list[dict[str, Any]]:
 def _kind_from_url(raw: str) -> str:
     """Derive a backend *kind* from a URL-style env value (e.g. CAIRN_STORAGE).
     ``postgres://…`` / ``postgresql://…`` → ``postgres``; ``sqlite…`` → ``sqlite``;
-    ``nats://…`` → ``nats``; otherwise the scheme, else the raw value."""
+    ``nats://…`` → ``nats``; otherwise the scheme, else a bare kind word (``memory``,
+    ``http``) as it is. Any other value (a DSN missing its scheme, ``user:pass@host``)
+    is ``unrecognized``, never the value: it can carry a password, and the kind is
+    what ``cairn doctor`` and ``pipeline explain`` print (GHSA-gw2v-3922-g7gm)."""
     low = raw.strip().lower()
     if low.startswith(("postgres://", "postgresql://")):
         return "postgres"
     if low.startswith("sqlite"):
         return "sqlite"
-    if "://" in low:
-        return low.split("://", 1)[0]
-    return low
+    scheme = url_scheme(low)
+    if scheme:
+        return scheme
+    return low if _KIND_WORD.fullmatch(low) else "unrecognized"
+
+
+_KIND_WORD = re.compile(r"[a-z0-9_-]+")
 
 
 def effective_backends(

@@ -2,7 +2,7 @@
 
 storage × runtime × bus (all eight cells, ``tests/e2e/conftest.py``) × the example pack's four
 pipelines, each cell a real ``cairn-server`` driven as a user would: ``POST /start``, every
-gate decided through ``cairn remote advance`` (the first cell) or the approve door (the
+gate decided through ``cairn decide`` (the first cell) or the approve door (the
 others) — both record the approver (#2613) — the terminal state read back, then the
 records: one Run per leg, the gate verdicts and approvers, each leg's own output, and the
 feature receipts (``_receipts.py``) the report is built from.
@@ -18,12 +18,14 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
 import pytest
 
+from cairn.core.obs.audit import verify_chain
 from tests.e2e.conftest import (
     HELLO,
     SSH,
@@ -197,6 +199,11 @@ def check_profile_and_publish(ctx: Ctx) -> None:
     rows = _audit_rows(ctx.srv)
     assert audit.get("ok") and audit.get("hash") and any(audit["hash"] in json.dumps(r) for r in rows), (audit, rows[-1:])
     ctx.receipt("audit", f"{len(rows)} row(s) at CAIRN_AUDIT_LOG; the audit leg's hash {audit['hash'][:12]}… among them")
+    # the profile's audit.sink wrote the governed trail into the same chain as the leg's row
+    actions = {r.get("action") for r in rows}
+    assert {"pipeline.admitted", "pipeline.gate_approved", "leg.finished"} <= actions, actions
+    report = verify_chain(ctx.srv.audit_log.read_text(encoding="utf-8").splitlines())
+    assert report.ok, report.broken
     # the budget is on the record
     budget = (ctx.rec.get("governance") or {}).get("budget") or {}
     assert float(budget.get("usd", 0)) == 1.0, ctx.rec.get("governance")
@@ -262,15 +269,23 @@ def check_ask_the_docs(ctx: Ctx) -> None:   # assistant (template) → length �
     _cell_receipts(ctx)
 
 
-def check_tiny_finetune(ctx: Ctx) -> None:  # profile → train (ml flow) → eval → loss → promote ⏸ → review ⏸ → card
-    ids = _one_run_per_leg(ctx, ("profile", "train", "eval", "loss", "promote", "card"), operator_gated=("promote",))
+def check_tiny_finetune(ctx: Ctx) -> None:  # profile → train (ml flow) → loss → promote ⏸ → review ⏸ → card
+    ids = _one_run_per_leg(ctx, ("profile", "train", "loss", "promote", "card"), operator_gated=("promote",))
     ctx.receipt("pipeline.ml", f"pipeline {ctx.pid} done")
     ctx.receipt("gate.person", _decided(ctx, "promote", "review"))
     _operator_gate_receipt(ctx, ("promote",))
+    # the figure `loss-ok` gated on is the trainer's own, measured over the rows it held out
+    held_out = (ctx.out("train").get("findings") or {}).get("train_lora_eval_loss")
+    gated = ctx.out("loss").get("value")
+    assert held_out is not None and gated == held_out, (held_out, gated)
+    # the promoted tag and the card name the adapter where the run was told to keep it (#253)
+    kept = ctx.rec["inputs"]["output_dir"]
+    assert ctx.out("promote").get("uri", "").removeprefix("file://") == kept, ctx.out("promote")
+    assert (Path(kept) / "adapter_config.json").is_file(), kept
     ctx.receipt("train", f"train.lora flow leg done (run {ids['train']}, model {ctx.rec['inputs'].get('base_model')}, "
-                f"held-out eval_loss={ctx.out('eval').get('eval_loss')})")
+                f"held-out eval_loss={held_out}, from rows the adapter was not trained on; loss-ok gated on it)")
     ctx.receipt("worker.pull", "no hello-cairn leg is routed to the pull lane (an ML target `worker:<pool>` "
-                "on a remote-job leg) and no cell starts `cairn worker --pull`; only the worker's claim, "
+                "on a remote-job leg) and no cell starts `cairn admin worker --pull`; only the worker's claim, "
                 "its token check and an empty queue are tested", proved=False)
     _cell_receipts(ctx)
 
@@ -317,14 +332,14 @@ def _nightly_env() -> dict:
 
 
 def _nightly_prepare(srv: Server) -> None:
-    """Register the proof sshd as ``hello-ssh`` the way the README does: ``cairn connect add
+    """Register the proof sshd as ``hello-ssh`` the way the README does: ``cairn admin connect add
     ssh`` against the engine's store, the host key pinned in a known_hosts file."""
     host, _, port = SSH.rpartition(":")
     scan = subprocess.run(["ssh-keyscan", "-p", port, host], capture_output=True, text=True, timeout=30)
     assert scan.stdout.strip(), f"ssh-keyscan found no host key at {SSH}: {scan.stderr}"
     known = srv.home / "known_hosts"
     known.write_text(scan.stdout)
-    out = cli(srv, "connect", "add", "ssh", "--name", "hello-ssh", "--set", f"host={host}", "--set", f"port={port}",
+    out = cli(srv, "admin", "connect", "add", "ssh", "--name", "hello-ssh", "--set", f"host={host}", "--set", f"port={port}",
               "--set", f"user={SSH_USER}", "--set", f"known_hosts={known}", "--secret", "PRIVATE_KEY=HELLO_SSH_KEY")
     assert out.returncode == 0, out.stdout + out.stderr
 
@@ -334,7 +349,8 @@ ROWS: tuple[Row, ...] = (
     Row("ask-the-docs", gates=("review",), check=check_ask_the_docs),
     Row("tiny-finetune", gates=("promote", "review"), check=check_tiny_finetune,
         needs=train_available, marks=(pytest.mark.train,),
-        inputs={"base_model": os.environ.get("HELLO_TRAIN_MODEL", "sshleifer/tiny-gpt2")}),
+        inputs={"base_model": os.environ.get("HELLO_TRAIN_MODEL", "sshleifer/tiny-gpt2"),
+                "output_dir": str(Path(tempfile.mkdtemp(prefix="cairn-adapter-")) / "adapter")}),
     Row("nightly-ops", gates=("propose",), check=check_nightly_ops, needs=_nightly_needs,
         marks=(pytest.mark.services,), server_env=_nightly_env, prepare=_nightly_prepare),
 )
@@ -360,7 +376,7 @@ def test_pipeline(cell: Cell, row: Row, server_factory, model_stub) -> None:
         api.wait_step(pid, gate, "awaiting_approval", timeout=180)
         if decided_by == "cli":
             # the first cell decides every gate the way a terminal user does
-            out = cli(srv, "remote", "advance", pid, gate, "--approver", "proof")
+            out = cli(srv, "decide", pid, "approve", "--step", gate, "--approver", "proof")
             assert out.returncode == 0, out.stdout + out.stderr
         else:
             api.approve(pid, gate, approver="proof", rationale="feature proof")
@@ -373,8 +389,8 @@ def test_pipeline(cell: Cell, row: Row, server_factory, model_stub) -> None:
 def test_the_cli_lists_and_explains_the_example(server_factory) -> None:
     """The CLI surface a new user meets first, against the running server's packs."""
     srv = server_factory(FIRST_CELL, "cli")
-    ls = cli(srv, "pipeline", "ls")
+    ls = cli(srv, "pack", "ls", "--pipelines")
     assert ls.returncode == 0 and "hello-cairn" in ls.stdout, ls.stdout + ls.stderr
     for row in ROWS:
-        out = cli(srv, "pipeline", "explain", row.ref)
+        out = cli(srv, "run", "--dry-run", row.ref)
         assert out.returncode == 0, out.stdout + out.stderr

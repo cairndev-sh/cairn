@@ -40,7 +40,7 @@ docstring; `README.md` "Architecture — engine + packs"; ADR-0020, ADR-0026, AD
 | `loader.py` | `load_all_packs`/`ensure_loaded`: entry-point group `cairn.packs` + dev dirs from `CAIRN_PACK_PATH` (installed wins collisions), engine-compat check (`[compat].cairn_engine`), legacy-layout warnings, load-failure list |
 | `registry.py` | process-global registry + aggregators `all_tools()`, `all_capability_bindings()`, `all_backends()`, `all_flow_dirs()`, `all_pipeline_dirs()`, `all_policy_dirs()`, … — the **only** way core reads pack content |
 | `composition.py` | load-time validation: who provides which capability, required capabilities satisfied, unique providers unless a profile overrides, trigger providers, profile bindings |
-| `profile.py` | `Profile` TOML loader (`extends`, `[profile.bindings]`, `[profile.backends]`, `[profile.config]`, `[profile.mcp_servers]`, `[profile.approval]`, notify) |
+| `profile.py` | `Profile` TOML loader (`extends`, `[profile.bindings]`, `[profile.backends]`, `[profile.config]`, `[profile.mcp_servers]`, `[profile.approval]`, notify, `[profile.budget]`: the deployment's budget default, ceiling and local rate, ADR-0155) |
 | `discovery.py`, `curation.py`, `visibility.py`, `drift.py`, `provisioning.py` | template listing for `GET /packs`; curation tiers; `[provides]` encapsulation; manifest drift; required-services provisioning check |
 
 ## Does not own
@@ -50,7 +50,7 @@ Executing anything. Operator code. Persisting runs. The console's notion of "ins
 ## Public interface
 - Authoring: `pack.toml` (schema = `manifest.py`), the asset directory conventions, `Pack.from_manifest`.
 - Engine-side: `ensure_loaded()`, `get_packs()`, `get_pack(name)`, the `all_*()` aggregators, `load_profile_from_env()`.
-- CLI: `cairn init pack`, `cairn pack add [--dev]`, `cairn pack check`, `cairn ls`, `cairn doctor`, `cairn lock`.
+- CLI: `cairn pack new pack`, `cairn pack add [--dev]`, `cairn pack check`, `cairn pack ls`, `cairn setup --check`, `cairn pack lock`.
 
 ## Dependencies
 `core/pack` → `core/<top>` (4), `core/triggers` (3 lazy: trigger specs in composition/registry), `core/operator` (3), `core/schema` (1). Domain packs → `cairn.core.pack.Pack` only (11 edges) — except `packs/incident/__init__.py:16` → `cairn_platform.integrations.observability.mock.backend` (lazy).
@@ -95,4 +95,4 @@ entry-point group, so a normal install does not load them (they would load only 
 | Packs are self-sufficient; no cross-pack executable refs (ADR-0084 D5) | PARTIALLY: `packs/training/flows/finetune.md` still composes `dataset-readiness/check` as a `subgraph_node` (the ADR said this one ref would be internalised); `compiler.py:1115 _warn_cross_pack` warns | |
 | `pack.toml` uses `kind` (ADR-0083 D4) | OBSERVED: manifests carry `kind = "domain"`; ADR-0020 (locked) still specifies `type = "domain"` → **CONFLICT between a locked ADR and shipped manifests** (operator packs carry both `type` and `kind`) | |
 | `[provides]` encapsulation | permissive default (no `[provides]` → everything visible) — DOCUMENTED `docs/architecture.md` §Pack composition; enforced in `pack/visibility.py` | |
-| Shipped pack closure is hash-pinned | CONFIRMED: `cairn.lock` + CI `cairn lock --check` | |
+| Shipped pack closure is hash-pinned | CONFIRMED: `cairn.lock` + CI `cairn pack lock --check` | |

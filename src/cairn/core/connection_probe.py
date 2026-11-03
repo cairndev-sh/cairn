@@ -30,7 +30,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import httpx
 
@@ -201,6 +201,38 @@ _METADATA_HOSTS = frozenset({
     "metadata.goog",
 })
 
+
+def _ip_literal(value: str) -> Optional[ipaddress._BaseAddress]:
+    try:
+        return ipaddress.ip_address(value)
+    except ValueError:
+        return None
+
+
+#: The metadata addresses as networks: all of IPv4 link-local (IMDS, and ECS task
+#: metadata at 169.254.170.2) plus every address literal in ``_METADATA_HOSTS``.
+_METADATA_NETS = (
+    ipaddress.ip_network("169.254.0.0/16"),
+    *(ipaddress.ip_network(ip) for ip in map(_ip_literal, sorted(_METADATA_HOSTS)) if ip),
+)
+_NAT64 = (ipaddress.ip_network("64:ff9b::/96"), ipaddress.ip_network("64:ff9b:1::/48"))
+
+
+def _is_metadata_ip(ip: ipaddress._BaseAddress) -> bool:
+    """``ip``, or the IPv4 address it embeds (IPv4-mapped, 6to4, Teredo client, NAT64,
+    IPv4-compatible), is a metadata address."""
+    if ip.version == 6:
+        if ip.ipv4_mapped:
+            ip = ip.ipv4_mapped
+        elif ip.sixtofour:
+            ip = ip.sixtofour
+        elif ip.teredo:
+            ip = ip.teredo[1]
+        elif any(ip in net for net in _NAT64) or (int(ip) >> 32 == 0 and int(ip) > 1):
+            ip = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+    return any(ip in net for net in _METADATA_NETS)
+
+
 _ALLOW_PRIVATE_ENV = "CAIRN_PROBE_ALLOW_PRIVATE"
 
 
@@ -234,7 +266,7 @@ def _resolved_ips(host: str, port: int) -> tuple[list, Optional[str]]:
     clearer error. This also keeps the guard usable offline."""
     try:
         infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
-    except OSError:
+    except (OSError, UnicodeError):  # UnicodeError: a name IDNA cannot encode (`a..b`)
         return [], "unresolvable"
     out = []
     for info in infos:
@@ -274,13 +306,32 @@ def probe_target_block_reason(
     if host.lower() in _METADATA_HOSTS:
         return "cloud instance-metadata endpoint"
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    return _addr_block_reason(host, port, allow_private=allow_private, metadata_only=metadata_only)
 
+
+def host_block_reason(host: str) -> Optional[str]:
+    """Why this bare host must not be probed, or None: the SSH/DSN rule
+    (``metadata_only``) of :func:`probe_target_block_reason`, for the kinds whose
+    target is a host, not a URL (#77). It is not routed through URL parsing, where
+    ``//host`` lost its hostname and an unbracketed IPv6 literal does not parse."""
+    host = host.strip().rstrip(".").strip("[]").partition("%")[0]  # no IPv6 zone id
+    if not host:
+        return "no host"
+    if host.lower() in _METADATA_HOSTS:
+        return "cloud instance-metadata endpoint"
+    return _addr_block_reason(host, None, allow_private=True, metadata_only=True)
+
+
+def _addr_block_reason(
+    host: str, port: Optional[int], *, allow_private: bool, metadata_only: bool
+) -> Optional[str]:
+    """The address rules shared by both guards, for a host that is not a metadata name."""
     try:  # an IP literal needs no resolution
         literal = ipaddress.ip_address(host)
     except ValueError:
         literal = None
     if literal is not None:
-        if str(literal) in _METADATA_HOSTS:
+        if _is_metadata_ip(literal):
             return "cloud instance-metadata endpoint"
         if metadata_only:
             return None
@@ -290,7 +341,7 @@ def probe_target_block_reason(
     if unresolvable:
         return None  # nothing to connect to — let the request fail naturally
     for ip in ips:
-        if str(ip) in _METADATA_HOSTS:
+        if _is_metadata_ip(ip):
             return "resolves to a cloud instance-metadata endpoint"
         if metadata_only:
             continue
@@ -364,7 +415,7 @@ async def _ssh_probe(resolved: ResolvedConnection) -> ProbeResult:
     # Reaching a PRIVATE host over SSH is the point (#1506) — that is the GPU
     # box. Only the metadata endpoints are off-limits; nothing legitimate
     # speaks SSH to them.
-    blocked = probe_target_block_reason(f"//{host}", metadata_only=True)
+    blocked = host_block_reason(host)
     if blocked:
         return ProbeResult(ok=False, status=0, detail=f"blocked: {blocked}")
     try:
@@ -389,6 +440,18 @@ async def _ssh_probe(resolved: ResolvedConnection) -> ProbeResult:
         return ProbeResult(ok=False, status=0, detail=f"ssh: {type(exc).__name__}: {exc}")
 
 
+def _dsn_hosts(dsn: str) -> list[str]:
+    """Every host asyncpg dials from ``dsn``'s netloc, parsed as asyncpg parses it:
+    after the first ``@``, comma-separated, ``[v6]:port`` or ``host:port``, unquoted."""
+    netloc = urlparse(dsn).netloc
+    spec = netloc.partition("@")[2] if "@" in netloc else netloc
+    hosts = []
+    for part in spec.split(",") if spec else ():
+        part = part[1:].partition("]")[0] if part.startswith("[") else part.partition(":")[0]
+        hosts.append(unquote(part))
+    return [h for h in hosts if h]
+
+
 async def _dsn_probe(resolved: ResolvedConnection, provider: ProviderSpec) -> ProbeResult:
     """Postgres/pgvector DSN probe — connect + ``SELECT 1``. Optional asyncpg;
     degrade cleanly when it's missing rather than a false OK."""
@@ -404,9 +467,8 @@ async def _dsn_probe(resolved: ResolvedConnection, provider: ProviderSpec) -> Pr
     if not dsn:
         return ProbeResult(ok=False, status=0, detail="no DSN configured")
     # A private Postgres IS the normal case (#1506) — metadata endpoints only.
-    _dsn_host = urlparse(dsn).hostname or ""
-    if _dsn_host:
-        blocked = probe_target_block_reason(f"//{_dsn_host}", metadata_only=True)
+    for _dsn_host in _dsn_hosts(dsn):
+        blocked = host_block_reason(_dsn_host)
         if blocked:
             return ProbeResult(ok=False, status=0, detail=f"blocked: {blocked}")
     try:

@@ -315,8 +315,9 @@ class Run(BaseModel):
     #: overlaps, warnings}``, where every ``eval_versions`` entry carries the
     #: eval set's ``ref`` AND its ``content_hash``. This is how a finished model
     #: can be asked which holdouts it was held out FROM, at which bytes — the
-    #: pin research C found no platform records. Empty for a run that carries no
-    #: ``dataset:`` ref. Rides the JSON ``data`` blob free (no column/migration),
+    #: pin research C found no platform records. ``checked`` is False with the
+    #: reason in ``warnings`` when the door could not check; empty only when it
+    #: had nothing to say. Rides the JSON ``data`` blob free (no column/migration),
     #: like ``cost``/``trace_id``/``config_preset``.
     holdout: dict[str, Any] = Field(default_factory=dict)
 

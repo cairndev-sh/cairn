@@ -1,4 +1,4 @@
-"""``cairn remote console`` — a Toad-style Textual control-center over cairn (#56).
+"""``cairn admin console`` — a Toad-style Textual control-center over cairn (#56).
 
 A tabbed browser (Runs · Workflows · Connections · Profiles) + a command bar at
 the bottom that runs *any* cairn command: server verbs (`submit`/`approve`/`ps`)
@@ -11,7 +11,7 @@ tab and ``run``'s template completion — are offered only when a ``cairn.cli`` 
 mounted ``ask`` (:func:`_ask_provided`), and ``ask`` runs through that mounted command.
 
 Needs ``textual`` and ``textual-autocomplete``, which ``cairndev`` does not install
-(there is no ``tui`` extra); ``cairn remote console`` names the command that adds them.
+(there is no ``tui`` extra); ``cairn admin console`` names the command that adds them.
 """
 from __future__ import annotations
 
@@ -37,10 +37,10 @@ from textual.widgets import (
 )
 from textual_autocomplete import AutoComplete, DropdownItem, TargetState
 
+from cairn.cli.console_argv import LOCAL_CMDS, cli_argv
+
 # server verbs (HTTP+SSE) vs local verbs (shell out) vs ask (②) ──────
 _SERVER_CMDS = {"submit", "ps", "watch", "status", "logs", "approve", "reject"}
-_LOCAL_CMDS = {"ls", "doctor", "validate", "run", "replay", "connect", "eval",
-               "init", "lock", "visualize"}
 COMMANDS: dict[str, str] = {
     "ask": 'ask "<natural-language intent>" — resolve to a governed plan (②)',
     "submit": "<skill> [--service S] [-i k=v ...]  — fire a skill (auto-watches)",
@@ -488,7 +488,7 @@ class CairnConsole(App):
             self._submit(args)
         elif cmd in _TAKES_RUN and args and cmd != "replay":
             self.current = args[0]; self._open_run(args[0])
-        elif cmd in _LOCAL_CMDS:
+        elif cmd in LOCAL_CMDS:
             self._shell(toks)
         else:
             self.notify(f"unknown or incomplete: {line!r}", severity="warning")
@@ -768,6 +768,7 @@ class CairnConsole(App):
     async def _shell(self, toks: list[str], *, env: Optional[dict] = None,
                      after: Optional[Callable[[], None]] = None) -> None:
         log = self._log()
+        toks = cli_argv(toks)
         log.write(Text.assemble(("$ cairn ", "bold green"), (" ".join(toks), "green")))
         try:
             proc = await asyncio.create_subprocess_exec(

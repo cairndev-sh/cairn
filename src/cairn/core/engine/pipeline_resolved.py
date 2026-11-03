@@ -274,9 +274,12 @@ def backend_rows(keys: list[str], *, profile_name: str) -> list[dict[str, Any]]:
     return rows
 
 
-#: The two governance numbers a workspace can answer, and the variable that
-#: answers each (:data:`cairn.core.workspace_variables.RESERVED_KEYS`).
-_WORKSPACE_GOVERNANCE = {"budget_usd": "cost_cap_usd", "series": "series"}
+#: The governance number a workspace can answer, and the variable that answers it
+#: (:data:`cairn.core.workspace_variables.RESERVED_KEYS`). The budget is not one:
+#: the launch door never reads ``cost_cap_usd`` for a pipeline (ADR-0155 D7), so the
+#: budget row shows the cap the door enforces — the pipeline's, bounded by the
+#: deployment profile's ``[profile.budget]``.
+_WORKSPACE_GOVERNANCE = {"series": "series"}
 
 
 def governance_rows(
@@ -284,16 +287,23 @@ def governance_rows(
     *,
     workspace: Mapping[str, Any],
     profile_name: str,
+    deployment_budget: Optional[Mapping[str, Any]] = None,
 ) -> list[dict[str, Any]]:
     """Budget · series · approvers, with the file that states each.
 
     ``governance:`` is the pipeline's alone — ``plan_pipeline`` copies it
     verbatim into the plan and ``start_pipeline`` into the record (#1688), and
     the bridge reads ``series`` / ``budget.usd`` straight off it. What a
-    pipeline omits, the workspace's run-dialog defaults can supply
-    (``cost_cap_usd`` / ``series``, ADR-0101 D2); what neither supplies is
-    unbounded, and says so.
+    pipeline omits, the workspace's run-dialog default can supply (``series``,
+    ADR-0101 D2); what neither supplies is unbounded, and says so.
+
+    The budget row is the cap the launch door enforces (ADR-0155): the pipeline's
+    figure, or the deployment's default or ceiling from ``deployment_budget`` (the
+    profile's ``[profile.budget]``), whichever :func:`~cairn.core.dispatch
+    .pipeline_launch.effective_budget` returns.
     """
+    from cairn.core.dispatch.pipeline_launch import effective_budget  # noqa: PLC0415 - cycle: dispatch → engine
+
     budget = governance.get("budget") if isinstance(governance.get("budget"), dict) else {}
     stated: dict[str, Any] = {}
     if isinstance(budget, dict) and budget.get("usd") is not None:
@@ -314,10 +324,32 @@ def governance_rows(
     ):
         row = resolve_layer(key, layers)
         row["label"] = label
+        if key == "budget_usd":
+            eff = effective_budget(governance, deployment_budget or {})
+            if eff.get("source", PIPELINE) != PIPELINE:
+                row = _deployment_budget_row(eff, profile_name)
+                row["label"] = label
+                rows.append(row)
+                continue
         if row["source"] == UNKNOWN:
             row["detail"] = unset
         rows.append(row)
     return rows
+
+
+def _deployment_budget_row(eff: Mapping[str, Any], profile_name: str) -> dict[str, Any]:
+    """The budget row when the deployment's profile decides the cap (ADR-0155 D2)."""
+    if eff["source"] == "deployment_default":
+        detail = (f"the pipeline declares no budget; the deployment's default "
+                  f"(${eff['default_usd']:g}) applies")
+    else:
+        declared = eff.get("declared_usd")
+        detail = (f"the pipeline declares ${declared:g}, above the deployment's ceiling; "
+                  f"the launch runs under the ceiling (${eff['ceiling_usd']:g})" if declared
+                  else f"the pipeline declares no budget; the deployment's ceiling "
+                       f"(${eff['ceiling_usd']:g}) applies")
+    return {"key": "budget_usd", "value": eff["usd"], "source": profile_source(profile_name),
+            "detail": detail, "declared_by": PROFILE}
 
 
 def input_rows(

@@ -35,6 +35,8 @@ _PIPELINES = _PACK / "pipelines"
 _FLOWS = _PACK / "flows"
 _PROFILE = _PACK / "profiles" / "hello.toml"
 PIPELINES = ("profile-and-publish", "ask-the-docs", "nightly-ops", "tiny-finetune")
+# Stops at its budget before any gate, on its own series; test_hello_cairn.py proves the refusal.
+OVER_BUDGET = "over-budget"
 
 
 def _pipeline(name: str = "profile-and-publish"):
@@ -71,8 +73,13 @@ def example_loaded(monkeypatch):
 
 # ── every pipeline ──────────────────────────────────────────────────────────
 
-def test_the_example_ships_the_four_pipelines():
-    assert sorted(p.stem for p in _PIPELINES.glob("*.yaml")) == sorted(PIPELINES)
+def test_the_example_ships_its_pipelines():
+    assert sorted(p.stem for p in _PIPELINES.glob("*.yaml")) == sorted((*PIPELINES, OVER_BUDGET))
+
+
+def test_the_over_budget_pipeline_declares_an_estimate_above_its_cap():
+    gov = _pipeline(OVER_BUDGET).governance
+    assert gov["estimated_usd"] > gov["budget"]["usd"] and gov["series"]
 
 
 @pytest.mark.parametrize("name", PIPELINES)
@@ -107,8 +114,8 @@ def test_each_pipeline_is_runnable_on_the_public_core(name, example_loaded):
 
 
 def test_tiny_finetune_is_runnable_on_the_public_core(example_loaded):
-    """`train.lora` and `train/eval-loss` come from the builtin train-local pack (WP3), a base
-    dependency of the public core."""
+    """`train.lora` and `monitor/threshold` come from builtin packs (train-local since WP3), base
+    dependencies of the public core."""
     from cairn.core.engine.pipeline_resolve import assert_runnable
 
     assert_runnable(_pipeline("tiny-finetune"))
@@ -227,6 +234,17 @@ def test_the_pack_policy_gates_storage_writes_in_hello_prod_only(env, gated):
     assert _applies("storage/put") is gated
     assert not _applies("data/profile") and not _applies("artifact/promote")
     assert spec.rules[0].effect == "require_hitl"
+
+
+def test_the_quickstart_profile_turns_the_audit_trail_on_and_the_default_stays_off():
+    """The Quickstart runs under hello.toml so a first run's log shows its gate decisions;
+    local-dev leaves `audit.sink` unbound (ADR-0028)."""
+    import cairn.profiles
+
+    hello = tomllib.loads((_PACK / "profiles" / "hello.toml").read_text())
+    assert hello["profile"]["bindings"]["audit.sink"] == "audit/store"
+    local_dev = tomllib.loads(cairn.profiles.local_dev_path().read_text())
+    assert "audit.sink" not in local_dev["profile"]["bindings"]
 
 
 @pytest.mark.parametrize("profile", ("hello.toml", "hello-infisical.toml"))
@@ -356,8 +374,10 @@ def test_the_finetune_trains_after_the_data_gate_and_tags_after_the_loss_gate():
     assert _step("data-ok", "tiny-finetune").depends_on == ["profile"]
     assert _step("train", "tiny-finetune").flow == "hello-cairn/lora"
     assert _step("train", "tiny-finetune").depends_on == ["data-ok"]
-    assert _step("eval", "tiny-finetune").task == "train/eval-loss"
+    assert [s for s in _pipeline("tiny-finetune").steps if s.id == "eval"] == []   # #252: no leg scores training rows
     assert _step("loss", "tiny-finetune").task == "monitor/threshold"
+    assert _step("loss", "tiny-finetune").depends_on == ["train"]
+    assert _step("loss", "tiny-finetune").inputs["value"] == "$steps.train.train_lora_eval_loss"
     assert "steps.loss.crossed" in _step("loss-ok", "tiny-finetune").predicate
     assert _step("promote", "tiny-finetune").depends_on == ["loss-ok"]
     review = _step("review", "tiny-finetune")
@@ -384,9 +404,9 @@ def test_ask_the_docs_starts_on_dataset_ready_paused():
 
 
 def test_the_finetune_legs_read_the_adapter_and_loss_the_train_flow_reports():
-    """The proof (all eight cells) found `eval` failing on `$steps.train.adapter_path` —
+    """The proof (all eight cells) found a leg failing on `$steps.train.adapter_path` —
     the ml flow leg's stats are namespaced by stage, and nothing mapped them. The leg's
-    declared product and the review gate's `show:` now resolve against exactly the stats
+    declared product, the loss gate's wire and the review gate's `show:` now resolve against exactly the stats
     the runner reports for `train.lora` (`runner.py`: `stats[f"{stage}.{k}"]`)."""
     from types import SimpleNamespace
 
@@ -399,7 +419,7 @@ def test_the_finetune_legs_read_the_adapter_and_loss_the_train_flow_reports():
              "train.lora.train_loss": 3.2, "train.lora.eval_loss": 3.4,
              "candidate_artifact_id": "sha256:abc"}
     out = _flow_leg_output(plan["train"], SimpleNamespace(ok=True, stats=stats))
-    assert step_field(out, "adapter_path") == "/w/adapter"              # eval's wire, outputs.adapter
+    assert step_field(out, "adapter_path") == "/w/adapter"              # outputs.adapter
     assert step_field(out, "candidate_artifact_id") == "sha256:abc"     # promote's wire
-    shown = resolve_show(["train.train_lora_train_loss"], {"train": out})
-    assert shown == {"train.train_lora_train_loss": 3.2}
+    shown = resolve_show(["train.train_lora_train_loss", "train.train_lora_eval_loss"], {"train": out})
+    assert shown == {"train.train_lora_train_loss": 3.2, "train.train_lora_eval_loss": 3.4}   # the gate's figure

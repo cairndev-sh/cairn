@@ -6,7 +6,9 @@ export says, the dev engine must come up on sqlite/inprocess with dev/dev auth.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
+from cairn.cli.commands import dev as dev_cli
 from cairn.cli.commands.dev import _PINNED_EMPTY, dev_env
 
 
@@ -94,3 +96,34 @@ def test_dev_env_puts_the_checkouts_example_pack_on_the_dev_pack_path(monkeypatc
     assert env["CAIRN_PACK_PATH"].split(os.pathsep) == ["/tmp/my-packs", example]
     monkeypatch.setenv("CAIRN_PACK_PATH", example)
     assert dev_env(port=8000)["CAIRN_PACK_PATH"] == example
+
+
+def _example() -> Path:
+    return Path(__file__).resolve().parents[2] / "examples" / "hello-cairn"
+
+
+def test_the_example_pack_runs_under_its_own_profile(monkeypatch) -> None:
+    """The example requires an MCP server local-dev doesn't name: `cairn setup --seed` failed its checks."""
+    from cairn.core.pack.profile import load_profile
+
+    monkeypatch.delenv("CAIRN_PROFILE", raising=False)
+    monkeypatch.delenv("OBS_PROFILE", raising=False)
+    monkeypatch.setattr(dev_cli, "_example_pack_dir", _example)
+    env = dev_cli.dev_env(8000, example_pack=True)
+    assert Path(env["CAIRN_PROFILE"]) == _example() / "profiles" / "hello.toml"
+    assert "hello-calc" in load_profile(Path(env["CAIRN_PROFILE"])).mcp_servers
+
+
+def test_without_the_example_pack_the_profile_is_local_dev(monkeypatch) -> None:
+    monkeypatch.delenv("CAIRN_PROFILE", raising=False)
+    monkeypatch.delenv("OBS_PROFILE", raising=False)
+    monkeypatch.setattr(dev_cli, "_example_pack_dir", _example)
+    assert Path(dev_cli.dev_env(8000, example_pack=False)["CAIRN_PROFILE"]).name == "local-dev.toml"
+    monkeypatch.setattr(dev_cli, "_example_pack_dir", lambda: None)  # installed: no checkout to take it from
+    assert Path(dev_cli.dev_env(8000, example_pack=True)["CAIRN_PROFILE"]).name == "local-dev.toml"
+
+
+def test_a_profile_you_set_is_kept_with_the_example_pack(monkeypatch) -> None:
+    monkeypatch.setenv("CAIRN_PROFILE", "/mine.toml")
+    monkeypatch.setattr(dev_cli, "_example_pack_dir", _example)
+    assert dev_cli.dev_env(8000, example_pack=True)["CAIRN_PROFILE"] == "/mine.toml"

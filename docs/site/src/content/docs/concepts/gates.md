@@ -75,10 +75,26 @@ with the gate `awaiting_approval`. From the same pipeline:
   pipeline's `governance.approvers`.
 - **The pause is durable.** The gate's state lives in the pipeline's record, so
   a restart of the server resumes the pipeline at the same pause.
+- **The evidence is on the record.** The step's `gate_context` holds the `show:`
+  fields, the approvers, the spend against the budget cap, the cost estimate and
+  the admission decision. `cairn run` and `cairn decide`
+  print them at each pause, and `cairn status <id> --json` includes them. They
+  stay on the step after the decision, so the record says what was shown. Under
+  the Temporal owner, a gate carries no evidence yet.
 - **Approving** releases the gate and records who approved, when, and any
-  rationale: `cairn remote advance <pipeline_id> <gate>`, or
-  `POST /pipelines/<pipeline_id>/steps/<gate>/approve`. To refuse, cancel the
-  pipeline: `cairn remote cancel-pipeline <pipeline_id>`.
+  rationale: `cairn decide <pipeline_id> approve --step <gate>`, or
+  `POST /pipelines/<pipeline_id>/steps/<gate>/approve`.
+- **Rejecting** refuses the gate, with the person and the reason on the record:
+  `cairn decide <pipeline_id> reject --step <gate> --reason "…"`, or
+  `POST /pipelines/<pipeline_id>/steps/<gate>/reject` with `{"reason": "…"}`.
+  The same people may reject who may approve, and the reason is required. The
+  gate's step ends `skipped` with the verdict `rejected` and the person as its
+  approver; the pipeline ends `failed` with the reason `step '<gate>' rejected by
+  <person>: <reason>`, after any `finally:` steps have run; the gate's review is
+  closed as rejected; and a `pipeline.rejected` event is published. Only a gate
+  waiting for approval can be rejected; any other wait answers 409. A cancel is
+  different: `cairn decide <pipeline_id> cancel` is the operator's abort,
+  not a decision on a gate.
 
 A gate can't have both `predicate:` and `approvers:`: the pipeline is refused
 at load with "a gate is answered by data OR a human, never both". If you need
@@ -109,12 +125,25 @@ applies_to:
   pipeline_legs: ["*/lora"]     # globs over leg refs: the flow hello-cairn/lora, the task train/lora
 rules:
   - effect: require_hitl
+    approval_role: ml-leads     # optional: who may decide the inserted gate
     reason: a person approves every fine-tune before it starts
 ```
 
 The inserted gate carries the name of the policy that added it, so the approver
-and the audit trail see why it exists. A leg that already sits behind a person
-gate isn't gated twice.
+and the audit trail see why it exists. If the rule sets `approval_role`, that is
+the gate's `approvers`, and the approve door applies it like any other
+`approvers:` value (see above). Without one, the gate takes the pipeline's
+`governance.approvers`.
+
+The policy's gate is satisfied only by its own decision. A leg that already sits
+behind a person gate isn't gated twice, but only when that gate always asks (it
+has no `when:`) and, if the rule sets `approval_role`, is staffed by that role.
+A gate with a `when:` can be skipped, so the policy's gate is inserted as well.
+
+`pipeline_legs` is matched when the pipeline is planned, and only then. A policy
+that sets nothing but `pipeline_legs` does not apply to individual operator
+calls; add `action_types`, `risks`, `environments` or `capabilities` to match
+those too.
 
 ## Approvals an operator asks for
 
@@ -138,9 +167,23 @@ rules:
     reason: "a write in hello-prod needs a person's approval (hello-cairn policy)"
 ```
 
+An environment can also ask for every operator of a risk class at once, in its
+`profile.toml`. Each operator's manifest declares its `risk`: `read_only`,
+`external_write`, `production_mutation` or `paid_compute`.
+
+```toml
+[profile.approval]
+mode            = "enforce"            # or "off"
+default_on_risk = ["paid_compute", "production_mutation"]
+```
+
+A typo in this table (an unknown key, mode or risk class) stops the profile
+from loading, so a misspelling never leaves the gate off.
+
 A task leg paused this way is approved with the same
-`cairn remote advance`. An approval inside an agentic flow pauses its run;
-decide it with `cairn remote approve <run_id>` or `cairn remote reject <run_id>`.
+`cairn decide`. An approval inside an agentic flow pauses its run;
+decide it with `cairn decide <run_id> approve` or `cairn decide <run_id> reject`
+(a single run id: the run-level form, not the pipeline gate form above).
 
 ## Next
 

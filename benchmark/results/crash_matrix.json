@@ -1,0 +1,285 @@
+{
+  "measurement": "crash_matrix",
+  "title": "What happens when the server is killed",
+  "script": "benchmark/crash_matrix.py",
+  "provenance": {
+    "cairndev_version": "0.5.0",
+    "uv_lock_sha256": "b71bfd534f0d8180fe71a967d6079853e7c110d27abd6c7c4ca0ce8e10333cd2",
+    "git_sha": "5f6769f4a07933a642b7f79a2db16b24a3d613e3",
+    "code_clean": true,
+    "machine": {
+      "os": "Linux",
+      "arch": "x86_64",
+      "cpus": 4,
+      "python": "3.13.13"
+    },
+    "measured_at": "2026-11-03",
+    "ci_run": "https://github.com/cairndev-sh/cairn/actions/runs/41642348580"
+  },
+  "inputs": {
+    "cells": "tests/e2e/hello/test_crash.py",
+    "cells_sha256": "9bf5ae090e4bab640dd844a84d5cea3f9ed2237783917cbfd22ceb91844fc762",
+    "installed_packs": [
+      "hello-cairn"
+    ]
+  },
+  "results": [
+    {
+      "storage": "SQLite",
+      "runtime": "in-process",
+      "bus": "in-process",
+      "crash.gate": "still waiting, then finishes",
+      "crash.mid-leg": "fails closed, not resumed",
+      "crash.dbos-resume": "n/a"
+    },
+    {
+      "storage": "SQLite",
+      "runtime": "in-process",
+      "bus": "Postgres",
+      "crash.gate": "still waiting, then finishes",
+      "crash.mid-leg": "fails closed, not resumed",
+      "crash.dbos-resume": "n/a"
+    },
+    {
+      "storage": "SQLite",
+      "runtime": "DBOS",
+      "bus": "in-process",
+      "crash.gate": "still waiting, then finishes",
+      "crash.mid-leg": "fails closed, not resumed",
+      "crash.dbos-resume": "resumes, then finishes"
+    },
+    {
+      "storage": "SQLite",
+      "runtime": "DBOS",
+      "bus": "Postgres",
+      "crash.gate": "still waiting, then finishes",
+      "crash.mid-leg": "fails closed, not resumed",
+      "crash.dbos-resume": "resumes, then finishes"
+    },
+    {
+      "storage": "Postgres",
+      "runtime": "in-process",
+      "bus": "in-process",
+      "crash.gate": "still waiting, then finishes",
+      "crash.mid-leg": "fails closed, not resumed",
+      "crash.dbos-resume": "n/a"
+    },
+    {
+      "storage": "Postgres",
+      "runtime": "in-process",
+      "bus": "Postgres",
+      "crash.gate": "still waiting, then finishes",
+      "crash.mid-leg": "fails closed, not resumed",
+      "crash.dbos-resume": "n/a"
+    },
+    {
+      "storage": "Postgres",
+      "runtime": "DBOS",
+      "bus": "in-process",
+      "crash.gate": "still waiting, then finishes",
+      "crash.mid-leg": "fails closed, not resumed",
+      "crash.dbos-resume": "resumes, then finishes"
+    },
+    {
+      "storage": "Postgres",
+      "runtime": "DBOS",
+      "bus": "Postgres",
+      "crash.gate": "still waiting, then finishes",
+      "crash.mid-leg": "fails closed, not resumed",
+      "crash.dbos-resume": "resumes, then finishes"
+    }
+  ],
+  "columns": {
+    "storage": "Storage",
+    "runtime": "Runtime",
+    "bus": "Bus",
+    "crash.gate": "Killed at a person gate",
+    "crash.mid-leg": "Killed inside a flow leg",
+    "crash.dbos-resume": "Killed inside a template leg on DBOS"
+  },
+  "notes": [
+    "Each entry is what that cell's test required and saw in this run. Of these cells, only the template leg on DBOS resumes; a flow leg killed on the builtin engine fails, and so does its pipeline. What each cell checks, where this holds, and what no cell tests: [What happens when the server is killed](./benchmark/README.md#what-happens-when-the-server-is-killed)."
+  ],
+  "scenarios": {
+    "crash.gate": {
+      "column": "Killed at a person gate",
+      "outcome": "still waiting, then finishes",
+      "crashed": "The server process, with SIGKILL, running the `hello-crash/slow-publish` pipeline.",
+      "when": "While the `review` person gate waits for a decision, after the three legs before it have finished.",
+      "required": "The gate is still waiting after the restart and no finished leg has a new run. Approving it finishes the pipeline with one run per leg and one published artifact.",
+      "how": "A person gate has no Run: it is a step waiting in the pipeline's stored record, with no process behind it. ADR-0125's liveness check judges leg Runs, so it has nothing to judge here."
+    },
+    "crash.mid-leg": {
+      "column": "Killed inside a flow leg",
+      "outcome": "fails closed, not resumed",
+      "crashed": "The server process, with SIGKILL, running the `hello-crash/slow-publish` pipeline.",
+      "when": "About a second into the `slow` flow leg on the builtin engine, after the leg's engine handle is saved.",
+      "required": "Right after the restart the leg is still `running` on the same run. Within 90 s it settles `failed` on that run, with an engine error saying the job was lost and a new owner recorded. The pipeline fails, the leg gets no new run, the `stage` and `publish` legs after it never start, and no artifact is staged or published. The work isn't resumed.",
+      "how": "ADR-0125 D3 calls a dead owner's lock found free once undetermined, and a second check more than one re-acquire interval later says the owner is dead; D4 then re-attaches the leg. Settling `failed` comes from the builtin engine, whose job table died with the old process, and isn't an ADR-0125 outcome. The harness signals only the server process, so the leg's engine subprocess isn't killed with it."
+    },
+    "crash.dbos-resume": {
+      "column": "Killed inside a template leg on DBOS",
+      "outcome": "resumes, then finishes",
+      "crashed": "The server process, with SIGKILL, running the `hello-cairn/ask-the-docs` pipeline.",
+      "when": "While the `assistant` template leg, a DBOS workflow, waits on its model call.",
+      "required": "Before the kill the run names no in-process owner and its workflow is `PENDING`. After the restart the model is called again, the same run finishes `done`, its workflow reads `SUCCESS`, and the pipeline reaches its person gate. Approving it finishes the pipeline with one run per leg.",
+      "how": "ADR-0125 D1 leaves a durable runtime's liveness to that runtime, so this recovery isn't an ADR-0125 outcome. DBOS runs a `PENDING` workflow again at boot, and the LangGraph checkpointer decides where the graph picks up."
+    }
+  },
+  "not_covered": [
+    "The Temporal runtime. No cell runs it: the cells run on the in-process runtime and on DBOS.",
+    "Whether a node's side effects repeat. A node running at the kill runs again, which the DBOS integration leaves to operator idempotency. No cell shows that side effects aren't repeated or that earlier nodes are skipped.",
+    "A kill inside a task leg, or inside a template leg on the in-process runtime.",
+    "A kill while a template run is parked on its own approval (on DBOS, at `recv`).",
+    "A kill inside a flow leg before its engine handle is saved.",
+    "A flow leg on an engine whose jobs outlive the server, such as Metaflow or SkyPilot. Every cell uses the builtin engine, so no cell shows a re-attached leg finishing.",
+    "What the leg's engine subprocess goes on to do after its leg is marked `failed`.",
+    "A kill while a scheduled or event step fires, while a finalizer runs, after a cancel, or while a pipeline starts. A cell tests only the moment its column names.",
+    "A second kill during recovery.",
+    "More than one server: a second replica, or a server on another host.",
+    "Anything other than the server process dying. Postgres and the disk stay up in every cell, so a Postgres restart, a failover or a power loss is not tested.",
+    "How fast recovery is. A cell only has a time limit."
+  ],
+  "cells": [
+    {
+      "cell": "sqlite-inprocess-inprocess",
+      "feature": "crash.gate",
+      "test": "test_killed_at_the_person_gate[sqlite-inprocess-inprocess]",
+      "state": "passed",
+      "evidence": "killed at review, restarted, approved; runs {'profile': 'run-task-data--profile-a08739', 'slow': 'run-flow-hello-crash--slow-05c629', 'stage': 'run-task-storage--put-c8723c', 'publish': 'run-task-storage--put-8b6ef3'}; artifact written once"
+    },
+    {
+      "cell": "sqlite-inprocess-inprocess",
+      "feature": "crash.mid-leg",
+      "test": "test_killed_mid_flow_leg[sqlite-inprocess-inprocess]",
+      "state": "passed",
+      "evidence": "killed mid-leg; re-mapped (running) right after restart, then DEAD \u2192 re-attached \u2192 failed (\"EngineError: unknown builtin job 'builtin-3788' (process tab\"), same run, owner rewritten, pipeline=failed, stage/publish never fired"
+    },
+    {
+      "cell": "sqlite-inprocess-postgres",
+      "feature": "crash.gate",
+      "test": "test_killed_at_the_person_gate[sqlite-inprocess-postgres]",
+      "state": "passed",
+      "evidence": "killed at review, restarted, approved; runs {'profile': 'run-task-data--profile-255763', 'slow': 'run-flow-hello-crash--slow-ad796f', 'stage': 'run-task-storage--put-6a662a', 'publish': 'run-task-storage--put-56ce7f'}; artifact written once"
+    },
+    {
+      "cell": "sqlite-inprocess-postgres",
+      "feature": "crash.mid-leg",
+      "test": "test_killed_mid_flow_leg[sqlite-inprocess-postgres]",
+      "state": "passed",
+      "evidence": "killed mid-leg; re-mapped (running) right after restart, then DEAD \u2192 re-attached \u2192 failed (\"EngineError: unknown builtin job 'builtin-4176' (process tab\"), same run, owner rewritten, pipeline=failed, stage/publish never fired"
+    },
+    {
+      "cell": "sqlite-dbos-inprocess",
+      "feature": "crash.gate",
+      "test": "test_killed_at_the_person_gate[sqlite-dbos-inprocess]",
+      "state": "passed",
+      "evidence": "killed at review, restarted, approved; runs {'profile': 'run-task-data--profile-bf62eb', 'slow': 'run-flow-hello-crash--slow-aa63ec', 'stage': 'run-task-storage--put-15d6c0', 'publish': 'run-task-storage--put-85c67a'}; artifact written once"
+    },
+    {
+      "cell": "sqlite-dbos-inprocess",
+      "feature": "crash.mid-leg",
+      "test": "test_killed_mid_flow_leg[sqlite-dbos-inprocess]",
+      "state": "passed",
+      "evidence": "killed mid-leg; re-mapped (running) right after restart, then DEAD \u2192 re-attached \u2192 failed (\"EngineError: unknown builtin job 'builtin-4567' (process tab\"), same run, owner rewritten, pipeline=failed, stage/publish never fired"
+    },
+    {
+      "cell": "sqlite-dbos-inprocess",
+      "feature": "crash.dbos-resume",
+      "test": "test_dbos_resumes_a_template_run_after_a_crash[sqlite-dbos-inprocess]",
+      "state": "passed",
+      "evidence": "killed while assistant run run-hello-cairn--assistant-98fc7b (DBOS workflow PENDING) waited on its model call; DBOS recovered it at boot, model called again (2 calls), same run done, review approved, pipeline done, one run per leg"
+    },
+    {
+      "cell": "sqlite-dbos-postgres",
+      "feature": "crash.gate",
+      "test": "test_killed_at_the_person_gate[sqlite-dbos-postgres]",
+      "state": "passed",
+      "evidence": "killed at review, restarted, approved; runs {'profile': 'run-task-data--profile-fd5ab7', 'slow': 'run-flow-hello-crash--slow-b416bf', 'stage': 'run-task-storage--put-44d749', 'publish': 'run-task-storage--put-592821'}; artifact written once"
+    },
+    {
+      "cell": "sqlite-dbos-postgres",
+      "feature": "crash.mid-leg",
+      "test": "test_killed_mid_flow_leg[sqlite-dbos-postgres]",
+      "state": "passed",
+      "evidence": "killed mid-leg; re-mapped (running) right after restart, then DEAD \u2192 re-attached \u2192 failed (\"EngineError: unknown builtin job 'builtin-5067' (process tab\"), same run, owner rewritten, pipeline=failed, stage/publish never fired"
+    },
+    {
+      "cell": "sqlite-dbos-postgres",
+      "feature": "crash.dbos-resume",
+      "test": "test_dbos_resumes_a_template_run_after_a_crash[sqlite-dbos-postgres]",
+      "state": "passed",
+      "evidence": "killed while assistant run run-hello-cairn--assistant-73dac2 (DBOS workflow PENDING) waited on its model call; DBOS recovered it at boot, model called again (2 calls), same run done, review approved, pipeline done, one run per leg"
+    },
+    {
+      "cell": "postgres-inprocess-inprocess",
+      "feature": "crash.gate",
+      "test": "test_killed_at_the_person_gate[postgres-inprocess-inprocess]",
+      "state": "passed",
+      "evidence": "killed at review, restarted, approved; runs {'slow': 'run-flow-hello-crash--slow-bb4787', 'stage': 'run-task-storage--put-c8b75d', 'profile': 'run-task-data--profile-a21e45', 'publish': 'run-task-storage--put-3f746d'}; artifact written once"
+    },
+    {
+      "cell": "postgres-inprocess-inprocess",
+      "feature": "crash.mid-leg",
+      "test": "test_killed_mid_flow_leg[postgres-inprocess-inprocess]",
+      "state": "passed",
+      "evidence": "killed mid-leg; re-mapped (running) right after restart, then DEAD \u2192 re-attached \u2192 failed (\"EngineError: unknown builtin job 'builtin-5626' (process tab\"), same run, owner rewritten, pipeline=failed, stage/publish never fired"
+    },
+    {
+      "cell": "postgres-inprocess-postgres",
+      "feature": "crash.gate",
+      "test": "test_killed_at_the_person_gate[postgres-inprocess-postgres]",
+      "state": "passed",
+      "evidence": "killed at review, restarted, approved; runs {'slow': 'run-flow-hello-crash--slow-04c55b', 'stage': 'run-task-storage--put-b9835f', 'profile': 'run-task-data--profile-13cfb5', 'publish': 'run-task-storage--put-543078'}; artifact written once"
+    },
+    {
+      "cell": "postgres-inprocess-postgres",
+      "feature": "crash.mid-leg",
+      "test": "test_killed_mid_flow_leg[postgres-inprocess-postgres]",
+      "state": "passed",
+      "evidence": "killed mid-leg; re-mapped (running) right after restart, then DEAD \u2192 re-attached \u2192 failed (\"EngineError: unknown builtin job 'builtin-3824' (process tab\"), same run, owner rewritten, pipeline=failed, stage/publish never fired"
+    },
+    {
+      "cell": "postgres-dbos-inprocess",
+      "feature": "crash.gate",
+      "test": "test_killed_at_the_person_gate[postgres-dbos-inprocess]",
+      "state": "passed",
+      "evidence": "killed at review, restarted, approved; runs {'slow': 'run-flow-hello-crash--slow-4d49e4', 'stage': 'run-task-storage--put-08ba6f', 'profile': 'run-task-data--profile-0d0eb3', 'publish': 'run-task-storage--put-c1b66f'}; artifact written once"
+    },
+    {
+      "cell": "postgres-dbos-inprocess",
+      "feature": "crash.mid-leg",
+      "test": "test_killed_mid_flow_leg[postgres-dbos-inprocess]",
+      "state": "passed",
+      "evidence": "killed mid-leg; re-mapped (running) right after restart, then DEAD \u2192 re-attached \u2192 failed (\"EngineError: unknown builtin job 'builtin-4200' (process tab\"), same run, owner rewritten, pipeline=failed, stage/publish never fired"
+    },
+    {
+      "cell": "postgres-dbos-inprocess",
+      "feature": "crash.dbos-resume",
+      "test": "test_dbos_resumes_a_template_run_after_a_crash[postgres-dbos-inprocess]",
+      "state": "passed",
+      "evidence": "killed while assistant run run-hello-cairn--assistant-7f49b9 (DBOS workflow PENDING) waited on its model call; DBOS recovered it at boot, model called again (2 calls), same run done, review approved, pipeline done, one run per leg"
+    },
+    {
+      "cell": "postgres-dbos-postgres",
+      "feature": "crash.gate",
+      "test": "test_killed_at_the_person_gate[postgres-dbos-postgres]",
+      "state": "passed",
+      "evidence": "killed at review, restarted, approved; runs {'slow': 'run-flow-hello-crash--slow-cf47a0', 'stage': 'run-task-storage--put-07404b', 'profile': 'run-task-data--profile-2fe21d', 'publish': 'run-task-storage--put-275448'}; artifact written once"
+    },
+    {
+      "cell": "postgres-dbos-postgres",
+      "feature": "crash.mid-leg",
+      "test": "test_killed_mid_flow_leg[postgres-dbos-postgres]",
+      "state": "passed",
+      "evidence": "killed mid-leg; re-mapped (running) right after restart, then DEAD \u2192 re-attached \u2192 failed (\"EngineError: unknown builtin job 'builtin-4668' (process tab\"), same run, owner rewritten, pipeline=failed, stage/publish never fired"
+    },
+    {
+      "cell": "postgres-dbos-postgres",
+      "feature": "crash.dbos-resume",
+      "test": "test_dbos_resumes_a_template_run_after_a_crash[postgres-dbos-postgres]",
+      "state": "passed",
+      "evidence": "killed while assistant run run-hello-cairn--assistant-6d1a05 (DBOS workflow PENDING) waited on its model call; DBOS recovered it at boot, model called again (2 calls), same run done, review approved, pipeline done, one run per leg"
+    }
+  ]
+}

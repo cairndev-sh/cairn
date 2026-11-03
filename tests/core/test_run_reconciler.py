@@ -92,3 +92,160 @@ async def test_terminal_runs_are_never_touched():
     done = await reconcile_stale_runs(store, _fixed_status({"run-done": "failed"}), grace_seconds=120)
     assert done == []
     assert (await store.get("run-done")).status == "done"
+
+
+# ── a run that reached its own terminal while the sweep was looking at it ──
+
+
+def _listing_only(run):
+    async def fn(*, status=None, **_kw):
+        return [run] if status == run.status else []
+    return fn
+
+
+def _finishes_during(store, *, result_fn=False, **terminal):
+    """A status_fn or result_fn where the run's own task records its end first, as a workflow
+    that has just ended and the dispatcher that was waiting on it do."""
+    async def fn(run_id: str):
+        await store.update(run_id, **terminal)
+        return {"output": "recovered"} if result_fn else terminal["status"]
+    return fn
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_ended_during_the_probe_keeps_its_own_reason():
+    store = _store()
+    reason = "session run-x over budget: $0.000084 > $0.000070"
+    await store.create(_run("run-x", "running", OLD))
+    await store.append_event("run-x", "running", {})
+
+    done = await reconcile_stale_runs(
+        store, _finishes_during(store, status="failed", error=reason), grace_seconds=120)
+
+    assert done == []
+    got = await store.get("run-x")
+    assert got.status == "failed" and got.error == reason
+    assert [e.type for e in await store.get_events("run-x")] == ["running"]
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_ended_during_the_probe_publishes_no_second_terminal():
+    store = _store()
+    emitted = []
+
+    async def emit(run_id, event_type, data):
+        emitted.append(event_type)
+
+    await store.create(_run("run-y", "running", OLD))
+    await reconcile_stale_runs(store, _finishes_during(store, status="failed", error="its own"),
+                               grace_seconds=120, emit_fn=emit)
+    assert emitted == []
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_finished_while_its_result_was_fetched_is_left_alone():
+    store = _store()
+    await store.create(_run("run-z", "running", OLD))
+    payloads = [{"output": {"answer": "its own"}}]
+
+    done = await reconcile_stale_runs(
+        store, _fixed_status({"run-z": "done"}), grace_seconds=120,
+        result_fn=_finishes_during(store, result_fn=True, status="done", result_payloads=payloads))
+
+    assert done == []
+    assert (await store.get("run-z")).result_payloads == payloads
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_only_moved_between_active_states_is_still_reconciled():
+    """A resume can flip awaiting_approval to running: the runtime's terminal verdict still stands."""
+    store = _store()
+    await store.create(_run("run-w", "awaiting_approval", OLD))
+
+    async def status_fn(run_id):
+        await store.update(run_id, status="running")
+        return "failed"
+
+    assert await reconcile_stale_runs(store, status_fn, grace_seconds=120) == ["run-w"]
+    assert (await store.get("run-w")).status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_a_run_the_store_no_longer_has_is_skipped(monkeypatch):
+    store = _store()
+    await store.create(_run("run-v", "running", OLD))
+    with monkeypatch.context() as patch:
+        async def gone(run_id):
+            return None
+
+        patch.setattr(store, "get", gone)
+        assert await reconcile_stale_runs(store, _fixed_status({"run-v": "failed"}), grace_seconds=120) == []
+    assert (await store.get("run-v")).status == "running"
+
+
+@pytest.mark.asyncio
+async def test_a_verdict_the_store_refuses_publishes_nothing(monkeypatch):
+    """The run ends done between the re-read and the write: the guard refuses `failed`."""
+    store = _store()
+    emitted = []
+
+    async def emit(run_id, event_type, data):
+        emitted.append(event_type)
+
+    await store.create(_run("run-u", "running", OLD))
+    stale = await store.get("run-u")
+    await store.update("run-u", status="done")
+
+    async def stale_get(run_id):
+        return stale
+
+    monkeypatch.setattr(store, "get", stale_get)
+    monkeypatch.setattr(store, "list", _listing_only(stale))
+    done = await reconcile_stale_runs(store, _fixed_status({"run-u": "failed"}), grace_seconds=120, emit_fn=emit)
+    monkeypatch.undo()
+
+    assert done == [] and emitted == []
+    assert (await store.get("run-u")).status == "done"
+    assert not [e for e in await store.get_events("run-u") if e.type == "failed"]
+
+
+@pytest.mark.asyncio
+async def test_a_run_with_a_live_task_here_is_left_to_it():
+    """The workflow has ended, and the task waiting on it is about to record why."""
+    store = _store()
+    await store.create(_run("run-live", "running", OLD))
+    await store.create(_run("run-orphan", "running", OLD))
+    asked = []
+
+    async def status_fn(run_id):
+        asked.append(run_id)
+        return "failed"
+
+    done = await reconcile_stale_runs(store, status_fn, grace_seconds=120, live_fn=lambda rid: rid == "run-live")
+
+    assert done == ["run-orphan"] and asked == ["run-orphan"]
+    assert (await store.get("run-live")).status == "running"
+    assert (await store.get("run-orphan")).status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_the_dispatcher_says_which_runs_it_is_still_running():
+    import asyncio
+
+    from cairn.core.dispatch.dispatcher import RunDispatcher
+
+    d = RunDispatcher(runner=object(), store=_store())
+    release = asyncio.Event()
+    task = asyncio.create_task(release.wait())
+    d._tasks["r1"] = task
+    assert d.has_live_task("r1") is True and d.has_live_task("nope") is False
+    release.set()
+    await task
+    assert d.has_live_task("r1") is False
+
+
+def test_the_server_tells_the_reconciler_about_live_tasks():
+    from tests import _layout
+
+    text = (_layout.REPO / "src" / "cairn" / "core" / "triggers" / "server.py").read_text(encoding="utf-8")
+    assert "live_fn=dispatcher.has_live_task" in text

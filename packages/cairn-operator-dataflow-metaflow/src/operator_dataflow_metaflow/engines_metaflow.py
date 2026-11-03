@@ -308,6 +308,10 @@ class MetaflowEngine:
             k: v for k, v in progress.items()
             if k in ("stages_done", "stages_total") and isinstance(v, (int, float))
         }
+        cost_usd = progress.get("cost_usd")
+        if (isinstance(cost_usd, (int, float)) and not isinstance(cost_usd, bool)
+                and 0 < cost_usd < float("inf")):
+            metrics["cost_usd"] = round(float(cost_usd), 6)
         stage = progress.get("stage")
 
         if proc is not None and proc.returncode is None:

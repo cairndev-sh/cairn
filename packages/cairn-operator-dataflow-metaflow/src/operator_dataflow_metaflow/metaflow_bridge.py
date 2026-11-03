@@ -49,6 +49,13 @@ def _write(path: Path, payload: dict) -> None:
     os.replace(tmp, path)
 
 
+def _known_cost(metrics: dict) -> float | None:
+    value = metrics.get("cost_usd")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return round(float(value), 6) if 0 < value < float("inf") else None
+
+
 class CairnFlow(FlowSpec):
     """Straight-line stage interpreter. One step, N kernels, sequential —
     executed via :func:`run_dataflow`, never re-implemented here.
@@ -87,12 +94,16 @@ class CairnFlow(FlowSpec):
             # stages_done/stages_total — on_progress supplies the mid-run
             # signal `run_dataflow` doesn't otherwise expose until a Metaflow
             # artifact is readable (i.e. after the whole step completes).
-            _write(wd / "progress.json", {
+            payload = {
                 "state": "running",
                 "stage": progress.get("stage"),
                 "stages_done": progress.get("stages_done", 0),
                 "stages_total": progress.get("stages_total", len(parsed.stages)),
-            })
+            }
+            cost_usd = _known_cost(progress)
+            if cost_usd is not None:
+                payload["cost_usd"] = cost_usd
+            _write(wd / "progress.json", payload)
 
         try:
             result = run_dataflow(parsed, wd, on_progress=on_progress)
@@ -114,10 +125,14 @@ class CairnFlow(FlowSpec):
             payload["lineage_parent_run"] = parsed.parent_run
         _write(wd / "result.json", payload)
         stages_total = len(parsed.stages)
-        _write(wd / "progress.json", {
+        progress = {
             "state": "succeeded", "stage": None,
             "stages_done": stages_total, "stages_total": stages_total,
-        })
+        }
+        cost_usd = _known_cost(payload)
+        if cost_usd is not None:
+            progress["cost_usd"] = cost_usd
+        _write(wd / "progress.json", progress)
 
 
 if __name__ == "__main__":

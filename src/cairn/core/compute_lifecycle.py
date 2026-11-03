@@ -12,9 +12,11 @@ is composition over machinery that already shipped: the gate is an ordinary
 ``finalizer:``.
 
 **One module, three callers.** ``compute/acquire`` and ``compute/release`` (the
-operator pack; moving into the public ``cairn-operator-remote`` pack per ADR-0151 D6, until
-then shipped by cairn-platform) and ``cairn compute sweep`` (the CLI) all call the functions here.
-That is deliberate — #1376's rule: a chokepoint is a FUNCTION others call, not a
+builtin ``cairn-operator-remote`` pack, ``operator_remote.operators``, since
+ADR-0151 D6; they reach these functions through the operator contract's
+re-exports in :mod:`cairn.core.operator`, ADR-0120 D7) and ``cairn compute sweep``
+(the CLI) all call the functions here. That is deliberate — #1376's rule: a
+chokepoint is a FUNCTION others call, not a
 convention. If the CLI carried its own copy of the stop logic, the sweep and the
 release could disagree about what "stopped" means, and the disagreement would
 only surface as a bill.
@@ -164,7 +166,7 @@ class ComputeBox:
                 f"compute connection {self.name!r} has no `instance_id` — the "
                 f"lifecycle operators start and stop an instance that already "
                 f"exists, so they need its id. Set it with: "
-                f"`cairn connect ssh --name {self.name} --set instance_id=i-…"
+                f"`cairn admin connect add ssh --name {self.name} --set instance_id=i-…"
                 f" --set region=<aws-region>`"
             )
         return self.instance_id
@@ -186,7 +188,7 @@ async def load_box(name: str, *, account_id: Optional[str] = None) -> ComputeBox
     if conn is None:
         raise ComputeLifecycleError(
             f"compute connection {name!r} did not resolve to an enabled "
-            f"connection — add it with `cairn connect ssh --name {name}`")
+            f"connection — add it with `cairn admin connect add ssh --name {name}`")
     if conn.kind != "compute.ssh":
         raise ComputeLifecycleError(
             f"connection {name!r} is kind {conn.kind!r}; the lifecycle "

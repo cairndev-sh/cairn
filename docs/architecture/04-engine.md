@@ -82,14 +82,13 @@ completeness gate — is not memoised. There is no switch to disable the memo.
 `plan_pipeline`; Temporal worker `build_registry` compiles every template at boot.
 
 ## Tests
-`tests/core/test_template_*`, `test_subgraph_*`, `test_engine*`, `test_pipeline_*` (34
-files), `test_flatten_finetune.py`, `test_wire_finetune_remote_compile.py`,
-`test_examples_bundle.py`, `tests/core/test_template_content_hash.py`.
+`tests/core/test_template_*`, `test_subgraph_*`, `test_engine*`, `test_pipeline_*`,
+`test_flatten*.py`, `tests/core/test_template_content_hash.py`.
 
 ## Invariants touching the engine
 - D8 "the compiler is amended, never replaced" (ADR-0084) — DOCUMENTED; `compile_template` is the only template compile entry (CONFIRMED by grep: no second compiler).
 - `agent_loop` retired — CONFIRMED: `compiler.py:163` raises on `flow.type: agent_loop`. The compiler docstring still says "three flow types" and lists two.
-- LangGraph is confined to agentic legs — CONFIRMED (`test_leg_executor.py`).
+- LangGraph is confined to agentic legs: no graph holds a data or ml leg, and `execute_leg` and the job process load no LangGraph — CONFIRMED (`test_leg_executor.py`). **CONFLICT** with ADR-0084's "a pure data/ml pipeline loads neither LangGraph nor Temporal": the module is still loaded around the leg. `engine/compiler.py` imports it at module level; `dispatch/dispatcher.py` reaches that through `engine/runner.py`, `pipeline_bridge.py:_submit_flow_leg` imports the dispatcher, and the CLI reaches it through `core/validate.py`. It's also a required dependency in `pyproject.toml`.
 
 ## Known hotspots (see 15-architecture-risks.md)
 `_compile_bt` (703 lines), `compiler.py` (1947).

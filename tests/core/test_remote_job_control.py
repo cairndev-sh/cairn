@@ -37,7 +37,8 @@ async def test_succeeded_marks_done_and_resumes():
         resumed.append((rec.run_id, status.output))
 
     tally = await drive_once(store, poll, resume)
-    assert tally == {"done": 1, "failed": 0, "aborted": 0, "relaunched": 0, "running": 0, "claimed": 1}
+    assert tally == {"done": 1, "failed": 0, "cancelled": 0, "aborted": 0, "relaunched": 0,
+                     "running": 0, "claimed": 1}
     assert resumed == [("r1", {"adapter_uri": "s3://b/a"})]
     rec = await store.get("r1:train")
     assert rec.status == DONE and rec.result == {"adapter_uri": "s3://b/a"}
@@ -417,3 +418,47 @@ async def test_log_tail_persisted_from_poll():
     await drive_once(store, poll, resume)
     rec = await store.get("r1:train")
     assert rec.last_log_tail == "step 5 loss 1.2"
+
+
+# ── ADR-0151 D9: `cancelled` is a terminal JobStatus state ────────────────────
+async def test_cancelled_closes_the_record_and_resumes_as_cancelled():
+    """A job stopped by a cancel (remote/exec's marker) is closed cancelled and
+    resumed as such — never counted running, never fed to the learning gate."""
+    from cairn.core.operator.job_store import CANCELLED
+
+    store = InMemoryRemoteJobStore()
+    await _seed(store, "r1")
+    resumed, cancels = [], []
+
+    async def poll(rec):
+        return JobStatus(state="cancelled", error="remote job cancelled",
+                         metrics={"eval_losses": [3.0, 3.1, 3.2]})
+
+    async def resume(rec, status):
+        resumed.append((rec.run_id, status.state))
+
+    async def cancel(rec):
+        cancels.append(rec.run_id)
+
+    from cairn.core.operator.learning import LearningConfig
+
+    tally = await drive_once(store, poll, resume, cancel=cancel,
+                             learning=LearningConfig(patience=1, warmup=0))
+    assert tally["running"] == 0 and tally["aborted"] == 0, tally
+    assert cancels == [], "the learning gate must not run on a cancelled job"
+    assert tally["cancelled"] == 1
+    assert resumed == [("r1", "cancelled")]
+    assert (await store.get("r1:train")).status == CANCELLED
+    assert await store.claim_active() == []
+
+
+async def test_default_resume_keeps_cancelled_distinct_from_failed():
+    seen: list[tuple[str, dict]] = []
+
+    class _D:
+        async def resume_run(self, run_id, decision):
+            seen.append((run_id, decision))
+
+    resume = build_default_resume(_D())
+    await resume(_rec("r1"), JobStatus(state="cancelled", error="remote job cancelled"))
+    assert seen == [("r1", {"status": "cancelled", "error": "remote job cancelled"})]

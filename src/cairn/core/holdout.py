@@ -52,10 +52,13 @@ from cairn.core.dataset_roles import (
     row_id,
 )
 from cairn.core.eval_cutoff import (
+    ACCEPTED_FORM,
+    CutoffError,
+    after_cutoff,
     cutoff_in,
     describe_exclusion,
-    filter_rows,
     normalize_cutoff,
+    row_dated_at,
     version_after_cutoff,
 )
 
@@ -210,9 +213,12 @@ class HoldoutVerdict:
     eval_cutoff: str = ""
     rows_excluded_by_cutoff: int = 0
     versions_excluded_by_cutoff: list[str] = field(default_factory=list)
+    #: #396 — why the door refused input it can't use, when that is why ``ok`` is
+    #: False: nothing was compared, so there is no overlap to name.
+    refusal: str = ""
 
     def reasons(self) -> list[str]:
-        return [o.reason() for o in self.overlaps]
+        return ([self.refusal] if self.refusal else []) + [o.reason() for o in self.overlaps]
 
     def cutoff_note(self) -> str:
         """What the cutoff removed from this check, in words, or ``""``."""
@@ -240,6 +246,7 @@ class HoldoutVerdict:
             "eval_cutoff": self.eval_cutoff,
             "rows_excluded_by_cutoff": self.rows_excluded_by_cutoff,
             "versions_excluded_by_cutoff": self.versions_excluded_by_cutoff,
+            **({"refusal": self.refusal} if self.refusal else {}),
         }
 
 
@@ -277,6 +284,28 @@ def dataset_refs_in(values: Any) -> list[str]:
 def _rows_and_hashes(version: VersionRef) -> tuple[list[dict], list[str]]:
     rows = read_rows(version.uri, limit=MAX_ROWS)
     return rows, [canonical_row_hash(r) for r in rows]
+
+
+def _apply_cutoff(rows: list[dict], hashes: list[str], cutoff: str) -> tuple[list[dict], list[str], int, int]:
+    """``(rows, hashes, excluded, undatable)`` for a holdout version under ``cutoff``.
+
+    A row whose ``dated_at`` can't be read can't be shown to be after the cutoff,
+    so it stays in the comparison and is counted: one bad date must not cost the
+    door the rest of its check (#396).
+    """
+    kept_rows: list[dict] = []
+    kept_hashes: list[str] = []
+    excluded = undatable = 0
+    for row, row_hash in zip(rows, hashes):
+        try:
+            if after_cutoff(row_dated_at(row), cutoff):
+                excluded += 1
+                continue
+        except CutoffError:
+            undatable += 1
+        kept_rows.append(row)
+        kept_hashes.append(row_hash)
+    return kept_rows, kept_hashes, excluded, undatable
 
 
 def _near_dup_matches(train_rows: list[dict], holdout_rows: list[dict],
@@ -323,10 +352,11 @@ async def check_holdout(
     """Judge ``refs`` (``dataset:<name>[@<v>]`` strings) against every ``golden``
     and ``test`` version registered in ``workspace_id``.
 
-    Never raises: a registry that cannot answer produces a verdict with
-    ``checked=False`` and a warning, so the door degrades to "not checked"
-    rather than to a 500 on the launch path — the same posture the config-scope
-    preflight uses. Refusal is only ever on a PROVEN intersection.
+    A registry that cannot answer produces a verdict with ``checked=False`` and a
+    warning, so the door degrades to "not checked" rather than to a 500 on the
+    launch path — the same posture the config-scope preflight uses. Refusal here
+    is only ever on a PROVEN intersection. A malformed ``cutoff`` raises
+    :class:`CutoffError`; :func:`check_holdout_for_inputs` turns that into a refusal.
 
     ``cutoff`` (#2033) is the run's declared eval cutoff. Holdout material dated
     after it is not this run's holdout — a version stamped later is dropped
@@ -415,14 +445,14 @@ async def check_holdout(
             # Row-level cutoff on the HOLDOUT side only. Filtering the training
             # side would change what the run trains on, which is not a door's
             # job — the door decides what it is COMPARED against.
-            paired = [(row, h) for row, h in zip(rows, hashes)]
-            kept, excluded, _ = filter_rows(
-                [{"__row": row, "__hash": h, "dated_at": row.get("dated_at")}
-                 for row, h in paired], verdict.eval_cutoff)
-            rows = [k["__row"] for k in kept]
-            hashes = [k["__hash"] for k in kept]
+            rows, hashes, excluded, undatable = _apply_cutoff(rows, hashes, verdict.eval_cutoff)
             version.rows_excluded_by_cutoff = excluded
             verdict.rows_excluded_by_cutoff += excluded
+            if undatable:
+                verdict.warnings.append(
+                    f"{version.ref} ({version.role}): {undatable} row(s) have a dated_at that "
+                    f"is not a date, so they can't be shown to be after the eval cutoff "
+                    f"{verdict.eval_cutoff} and were kept in the comparison")
         version.rows = len(rows)
         loaded_rows[version.ref] = rows
         loaded_hashes[version.ref] = hashes
@@ -484,7 +514,10 @@ async def check_holdout_for_inputs(
     The eval cutoff comes from the inputs too (#2033,
     :func:`cairn.core.eval_cutoff.cutoff_in`) unless the caller passes one, so a
     pipeline declares ``eval_cutoff`` wherever its schema puts it and the door
-    finds it — the same treatment ``dataset:`` refs already get.
+    finds it — the same treatment ``dataset:`` refs already get. A malformed cutoff
+    is invalid input: it is refused (``ok=False``, :attr:`HoldoutVerdict.refusal`)
+    whatever the data, since reading it as "no cutoff" or skipping the comparison
+    would both pass a typo off as a check.
 
     Builds the artifact store from ``CAIRN_STORAGE`` when one isn't supplied.
     Returns a ``checked=False`` verdict — never an exception — when the registry
@@ -494,10 +527,12 @@ async def check_holdout_for_inputs(
     refs = dataset_refs_in(inputs)
     try:
         cutoff = normalize_cutoff(cutoff) if cutoff is not None else cutoff_in(inputs)
-    except ValueError as exc:
-        # A malformed cutoff must not read as "no cutoff" — that would silently
-        # measure against everything, which is the failure the field prevents.
-        return HoldoutVerdict(warnings=[f"eval_cutoff is unusable ({exc}) — holdout NOT checked"])
+    except ValueError:
+        # The reason goes to the audit row, which never carries inputs, so it
+        # doesn't quote the value.
+        return HoldoutVerdict(ok=False, refusal=(
+            f"eval_cutoff is not {ACCEPTED_FORM}, so nothing was compared against the "
+            "held-out sets. Correct it, or remove it to compare against all of them."))
     if not refs:
         return HoldoutVerdict(eval_cutoff=cutoff or "")
     if store is None:

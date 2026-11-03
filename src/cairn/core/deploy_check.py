@@ -29,13 +29,18 @@ from cairn.core.pack import CheckResult
 #: "not verifiable here" instead of failing a hash it was never given.
 EXTERNAL_SECRET = "<supplied by existingSecret>"
 
+#: What ``env_from_values`` writes for ``CADDY_DOMAIN`` when ``ingress.enabled`` is
+#: false and no host is set: the chart renders without a host then (it only requires
+#: one with the ingress on), so the compose-derived REQUIRED check must not fail it.
+INGRESS_DISABLED = "<ingress disabled>"
+
 # Vars the unified compose declares with `${VAR:?...}` — the stack refuses to
 # start without them, so surface them as hard failures here first.
 REQUIRED: dict[str, str] = {
     "CADDY_DOMAIN": "TLS domain for Caddy (app.example.com or <ip-dashes>.sslip.io)",
     "POSTGRES_PASSWORD": "app Postgres password (openssl rand -hex 16)",
     "CAIRN_JWT_SECRET": "control-plane JWT secret — auth is ON in prod (#2)",
-    "CAIRN_API_PASSWORD_HASH": "argon2 hash for the API user (cairn remote hash-password)",
+    "CAIRN_API_PASSWORD_HASH": "argon2 hash for the API user (cairn admin hash-password)",
     "CAIRN_PROFILE": "the deployment profile — the engine refuses to start without one "
                    "(docs/runbooks/deployment-profile.md)",
 }
@@ -110,7 +115,8 @@ def check_deploy(env: dict[str, str], profiles: set[str]) -> list[CheckResult]:
         val = _env(env, var).strip()
         out.append(
             CheckResult(var, "ok" if val else "fail",
-                        "set" if val else f"REQUIRED — {desc}", category="required")
+                        ("not needed: the ingress is disabled" if val == INGRESS_DISABLED else "set") if val
+                        else f"REQUIRED — {desc}", category="required")
         )
 
     # ── password hash must PARSE, not just be set (#1853) ────────────────
@@ -518,7 +524,9 @@ def env_from_values(values: dict) -> dict[str, str]:
     Mirrors ``templates/configmap.yaml`` + ``templates/secret.yaml``. The one
     translation that is not a rename: the chart has no Caddy, so the INGRESS
     HOST plays ``CADDY_DOMAIN``'s role — it is the public name TLS is issued
-    for, which is exactly what that check is about.
+    for, which is exactly what that check is about. With ``ingress.enabled=false``
+    the chart needs no host (port-forward, or an ingress managed outside it), so an
+    empty host maps to ``INGRESS_DISABLED`` instead of failing the REQUIRED check.
 
     The chart also renders the DSN family's ``OBS_*`` twin until 1.0 (#2429) so an
     ``existingSecret`` in either spelling wins; this env carries the ``CAIRN_*`` name
@@ -536,8 +544,12 @@ def env_from_values(values: dict) -> dict[str, str]:
             return str(val)
         return EXTERNAL_SECRET if existing else ""
 
+    host = str(_get(values, "ingress", "host", default=""))
+    if not host and not _get(values, "ingress", "enabled", default=True):
+        host = INGRESS_DISABLED
+
     env: dict[str, str] = {
-        "CADDY_DOMAIN": str(_get(values, "ingress", "host", default="")),
+        "CADDY_DOMAIN": host,
         "CAIRN_TRIGGER_PORT": str(_get(values, "server", "port", default=9090)),
         "CAIRN_BACKEND": str(_get(values, "env", "backend", default="mock")),
         "CAIRN_RUNTIME": runtime,
@@ -675,7 +687,7 @@ def _pull_worker_token_checks(values: dict) -> list[CheckResult]:
     if not token and not existing:
         return [fail("pullWorker.enabled=true but neither pullWorker.token nor "
                      "pullWorker.existingSecret is set (a whitespace-only token counts as "
-                     "unset) — the pull worker reads a worker-pool token (`cairn remote "
+                     "unset) — the pull worker reads a worker-pool token (`cairn admin "
                      "worker-token --name <pool>`) from a Secret of its own.")]
     jwt = str(_get(values, "secrets", "obsJwtSecret", default="") or "").strip()
     if token and jwt and token == jwt:
@@ -969,8 +981,8 @@ def check_compute_ssh(
         return [CheckResult(
             name, "fail",
             f"{key} names connection {target!r}, which does not resolve — create "
-            f"it with `cairn connect add` (`cairn connect ls` shows what exists, "
-            f"`cairn connect test {target}` probes it). Every dispatch to this "
+            f"it with `cairn admin connect add` (`cairn admin connect ls` shows what exists, "
+            f"`cairn admin connect test {target}` probes it). Every dispatch to this "
             f"environment fails at submit.",
             category="runtime")]
 
@@ -1057,7 +1069,7 @@ def format_deploy_report(results: list[CheckResult]) -> str:
     for r in results:
         by_cat.setdefault(r.category, []).append(r)
     extra = [c for c in by_cat if c not in _CATEGORY_ORDER]
-    lines: list[str] = ["cairn deploy doctor", ""]
+    lines: list[str] = ["cairn admin deploy doctor", ""]
     for cat in (*_CATEGORY_ORDER, *sorted(extra)):
         rows = by_cat.get(cat)
         if not rows:

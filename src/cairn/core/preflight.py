@@ -109,6 +109,7 @@ async def _holdout_verdict(typed: dict[str, Any], raw: dict[str, Any]):
     stayed silent about the overlap because a different field was blank would be
     the least useful possible answer.
     """
+    from cairn.core.eval_cutoff import EVAL_CUTOFF_KEY  # noqa: PLC0415 — off the hot import path
     from cairn.core.holdout import check_holdout_for_inputs  # noqa: PLC0415 — off the hot import path
     from cairn.core.workspace import current_workspace  # noqa: PLC0415 — off the hot import path
 
@@ -117,6 +118,11 @@ async def _holdout_verdict(typed: dict[str, Any], raw: dict[str, Any]):
     # coerced default shadow the ref the user actually typed.
     merged: dict[str, Any] = {f"typed.{k}": v for k, v in (typed or {}).items()}
     merged.update({f"raw.{k}": v for k, v in (raw or {}).items()})
+    # The cutoff is the one input whose KEY the door reads, so it goes back under its
+    # own name. Typed wins, raw fills in, so the verdict matches the coerced inputs.
+    cutoff = {**(raw or {}), **(typed or {})}.get(EVAL_CUTOFF_KEY)
+    if cutoff is not None:
+        merged[EVAL_CUTOFF_KEY] = cutoff
     return await check_holdout_for_inputs(merged, workspace_id=current_workspace())
 
 
@@ -212,12 +218,17 @@ async def build_preflight(
     #     instead of the user finding out at launch. Reads the registry and the
     #     dataset files; writes nothing.
     holdout = await _holdout_verdict(typed, values or {})
-    for reason in holdout.reasons():
+    if holdout.refusal:
         blockers.append(Blocker(
-            kind="holdout-overlap", what=reason,
-            fix="remove the overlapping rows (the clean flow's decontamination step "
-                "against that eval set) and register a new version, or re-check the "
-                "roles on these versions"))
+            kind="holdout-invalid-cutoff", what=holdout.refusal,
+            fix="write eval_cutoff as an ISO-8601 date or timestamp, or remove it"))
+    else:
+        for reason in holdout.reasons():
+            blockers.append(Blocker(
+                kind="holdout-overlap", what=reason,
+                fix="remove the overlapping rows (the clean flow's decontamination step "
+                    "against that eval set) and register a new version, or re-check the "
+                    "roles on these versions"))
     warnings.extend(holdout.warnings)
 
     # 3c. intake verdict (#2021, ADR-0102 D1) — the SAME door the dispatcher
@@ -283,7 +294,7 @@ async def build_preflight(
     for reason in (await check_pull_worker(op_names)).reasons:
         blockers.append(Blocker(kind="service-unreachable", what=reason,
                                 fix="start a worker on the machine that should run it: "
-                                    "cairn worker --pull --engine-url <url> --token <token>"))
+                                    "cairn admin worker --pull --engine-url <url> --token <token>"))
 
     # 4. gates — approvals that will pause the run (heads-up, not a blocker).
     gates = [GateInfo(step=str(a)) for a in (plan.get("approvals_required", []) or [])]

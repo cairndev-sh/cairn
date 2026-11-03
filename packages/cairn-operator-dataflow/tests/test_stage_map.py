@@ -15,7 +15,11 @@ from pathlib import Path
 
 import pytest
 
+from cairn.core import obs
 from cairn.core.dataflow import DataflowSpec, StageMap, StageRef
+from cairn.core.dataflow import stage_loader
+from cairn.core.operator import batch
+from cairn.core.dataflow import runner
 
 from cairn.core.dataflow.runner import (
     BudgetExceeded,
@@ -160,3 +164,51 @@ def test_progress_carries_item_counts(tmp_path):
     with_items = [p for p in seen if "items_total" in p]
     assert with_items, "D8a additive keys must surface item progress"
     assert with_items[-1]["items_done"] == 3
+
+
+def test_failed_mapped_item_keeps_cost_from_completed_and_failing_items(tmp_path, monkeypatch):
+    calls = 0
+
+    def paid_item(wd, config, inputs):
+        nonlocal calls
+        calls += 1
+        obs.record_llm("gpt-4o-mini", 10, 5, 0.2, usd=0.2)
+        if calls == 2:
+            raise RuntimeError("mapped item failed after its paid call")
+        return {}
+
+    monkeypatch.setattr(stage_loader, "load_stages", lambda: {"paid": paid_item})
+    monkeypatch.setattr(runner, "load_stages", lambda: {"paid": paid_item})
+
+    def run_inline(fn, tasks, *, requested_workers):
+        return [fn(task) for task in tasks]
+
+    monkeypatch.setattr(batch, "map_shards_local", run_inline)
+    spec = DataflowSpec(stages=[
+        StageRef(stage="paid", config={"items": [1, 2]},
+                 map=StageMap(over="$config.items")),
+    ])
+
+    with pytest.raises(RuntimeError, match="paid call"):
+        runner.run_dataflow(spec, tmp_path)
+
+    metrics = json.loads((tmp_path / "metrics.json").read_text(encoding="utf-8"))
+    assert metrics["cost_usd"] == pytest.approx(0.4)
+    assert metrics["items_done"] == 0
+    assert metrics["items_total"] == 2
+
+    calls = 0
+
+    original_write_metrics = runner._write_metrics
+    writes = 0
+
+    def fail_metrics_write(workdir, payload):
+        nonlocal writes
+        writes += 1
+        if writes > 1:
+            raise OSError("progress disk unavailable")
+        original_write_metrics(workdir, payload)
+
+    monkeypatch.setattr(runner, "_write_metrics", fail_metrics_write)
+    with pytest.raises(RuntimeError, match="mapped item failed after its paid call"):
+        runner.run_dataflow(spec, tmp_path / "progress-write-fails")

@@ -12,7 +12,8 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
-from cairn.cli.commands import pipeline, validate
+from cairn.cli.commands import validate
+from cairn.cli.main import app
 from cairn.core.dispatch.start import resolve_start_ref
 
 runner = CliRunner()
@@ -37,6 +38,18 @@ def shared_pack(scratch_pack, dev_packs):
     return pack
 
 
+# `cairn pipeline show/explain` are `cairn pack show` and `cairn run --dry-run` now
+_SHOW = ['pack', 'show']
+_EXPLAIN = ['run', '--dry-run', '--no-connections']
+# What each says of a ref that is no installed pipeline. `run --dry-run` also takes a template, so
+# it looks the ref up as one and says so; `pack show` only ever means a pipeline.
+_REFUSED = {'show': (2, 'unknown pipeline'), 'explain': (1, 'no such template')}
+
+
+def _inspect(command, *args):
+    return runner.invoke(app, [*(_SHOW if command == 'show' else _EXPLAIN), *args])
+
+
 @pytest.mark.parametrize('command', [('show',), ('show', '--plan'), ('explain',), ('explain', '--json')])
 @pytest.mark.parametrize('ref', [
     'inspection-pack/echo', 'inspection_pack/echo',
@@ -46,10 +59,10 @@ def shared_pack(scratch_pack, dev_packs):
 def test_shared_ref_inspects_the_pipeline_that_run_resolves(shared_pack, command, ref):
     kind, canonical = resolve_start_ref(ref)
     assert kind == 'pipeline'
-    result = runner.invoke(pipeline.app, [command[0], ref, *command[1:]])
+    result = _inspect(command[0], ref, *command[1:])
     assert result.exit_code == 0, result.output or repr(result.exception)
     if command == ('explain', '--json'):
-        document = json.loads(result.output)
+        document = json.loads(result.stdout)
         assert document['ref'] == f'pipeline:{canonical}'
         assert document['steps'][0]['id'] == 'inspect'
     elif command == ('show',):
@@ -62,25 +75,32 @@ def test_shared_ref_inspects_the_pipeline_that_run_resolves(shared_pack, command
 
 @pytest.mark.parametrize('command', ['show', 'explain'])
 @pytest.mark.parametrize('ref', ['inspection-pack/missing', 'pipeline:inspection-pack/missing'])
-def test_unknown_ref_remains_an_exit_two(shared_pack, command, ref):
-    result = runner.invoke(pipeline.app, [command, ref])
-    assert result.exit_code == 2
-    assert 'unknown pipeline' in result.output
+def test_unknown_ref_is_refused(shared_pack, command, ref):
+    result = _inspect(command, ref)
+    code, said = _REFUSED[command]
+    assert result.exit_code == code
+    assert said in result.output
 
 
 @pytest.mark.parametrize('command', ['show', 'explain'])
 def test_a_file_path_is_not_treated_as_an_installed_pipeline(shared_pack, command):
-    result = runner.invoke(pipeline.app, [command, str(shared_pack / 'pipelines' / 'echo.yaml')])
-    assert result.exit_code == 2
-    assert 'unknown pipeline' in result.output
+    result = _inspect(command, str(shared_pack / 'pipelines' / 'echo.yaml'))
+    code, said = _REFUSED[command]
+    assert result.exit_code == code
+    assert said in result.output
 
 
 @pytest.mark.parametrize('command', ['show', 'explain'])
 def test_a_flow_without_a_declared_wrapper_is_not_synthesized(scratch_pack, dev_packs, command):
     dev_packs(scratch_pack('unwrapped', 'unwrapped'))
-    result = runner.invoke(pipeline.app, [command, 'unwrapped/echo'])
-    assert result.exit_code == 2
-    assert 'unknown pipeline' in result.output
+    result = _inspect(command, 'unwrapped/echo')
+    if command == 'show':
+        assert result.exit_code == 2
+        assert 'unknown pipeline' in result.output
+    else:  # the dry run previews the flow as the template it is: there is no wrapper pipeline to plan
+        assert result.exit_code == 0, result.output
+        assert 'template : echo' in result.output and 'DRY RUN' in result.output
+        assert 'pipeline' not in result.output.lower()
 
 
 @pytest.mark.parametrize('command', ['show', 'explain'])
@@ -91,18 +111,19 @@ def test_two_pipeline_definitions_at_a_canonical_address_are_still_refused(
     _wrapper(first)
     _wrapper(second)
     dev_packs(first, second)
-    result = runner.invoke(pipeline.app, [command, 'clash-a-b/echo'])
+    result = _inspect(command, 'clash-a-b/echo')
     assert result.exit_code != 0
     assert 'names 2 installed pipelines' in result.output + str(result.exception)
 
 
 def test_run_argument_help_describes_only_declared_pipelines():
-    result = runner.invoke(pipeline.app, ['run', '--help'], env={'COLUMNS': '240'})
+    result = runner.invoke(app, ['run', '--help'], env={'COLUMNS': '240'})
     assert result.exit_code == 0
     plain = re.sub(r'[│╭╮╰╯─]', '', result.output)
     plain = ' '.join(plain.split()).lower()
     assert 'which runs as its one-leg pipeline' not in plain
-    assert 'bare flow refs are refused' in plain
+    assert 'a pipeline ref (<pack>/<name>)' in plain
+    assert 'a flow or template with the dev-loop flags' in plain
 
 
 @pytest.mark.parametrize('kind', ['data', 'ml'])

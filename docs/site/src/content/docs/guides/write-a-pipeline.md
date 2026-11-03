@@ -11,10 +11,10 @@ legs are wired, and how to check a pipeline before it runs.
 ## 1. Create a pack
 
 Pipelines and flows live in a **pack**: a directory with a `pack.toml`, a
-`pipelines/` directory and a `flows/` directory. `cairn init pack` creates one:
+`pipelines/` directory and a `flows/` directory. `cairn pack new pack` creates one:
 
 ```bash
-cairn init pack acme
+cairn pack new pack acme
 ```
 
 The pack name must be a valid Python identifier (`snake_case`). The scaffold
@@ -49,10 +49,10 @@ to register one:
 - Or install it as a package (`pip install -e acme`), which registers it
   through its `cairn.packs` entry point.
 
-Start (or restart) `cairn dev` or the server with the variable set, and check:
+Start the engine with the variable set (if one is running, `cairn setup --stop` first; a second `cairn setup` starts nothing), or restart the server, and check:
 
 ```text
-$ cairn pipeline ls
+$ cairn pack ls --pipelines
   acme/hello  1 legs (template)  sha256:a7040e93b0b05eba
   …
 ```
@@ -133,7 +133,7 @@ Piece by piece:
   trimmed and empty items dropped). A list of numbers or maps, and an empty
   list (`[]`), still need JSON; `-i report_to=` with no items is refused.
   The launch door does this typing for the CLI, the console and schedules, and
-  `cairn pipeline explain -i` shows the typed value.
+  `cairn run --dry-run -i` shows the typed value.
 - **`governance`** sets the pipeline's budget and names who may decide its
   person gates.
 - **`profile`** is a task leg: it calls one operator, `data/profile`, which
@@ -146,10 +146,10 @@ Piece by piece:
   as `<leg>.<field>`; for a flow leg, cairn looks in the leg's findings for you.
 
 To find a leg's field names, run the pipeline once and read
-`cairn remote findings <pipeline-id>`.
+`cairn status <pipeline-id> --results`.
 
 :::caution[Name pipelines and agentic flows differently]
-`POST /start` and `cairn remote launch` refuse a name that matches both a
+`POST /start` and `cairn run` refuse a name that matches both a
 pipeline and an **agentic** flow (`flows/<name>.md`) in the same pack: the
 scaffold's own `acme/hello` is one. The message says how to name the
 pipeline explicitly:
@@ -165,11 +165,11 @@ cause this.
 
 ## 5. Check it before it runs
 
-`cairn pipeline show` prints the legs and gates. `cairn pipeline explain`
+`cairn pack show` prints the legs and gates. `cairn run --dry-run`
 resolves everything the launch will resolve, without running anything:
 
 ```text
-$ cairn pipeline explain acme/check-and-keep -e sandbox -i path=/data/chats.jsonl
+$ cairn run --dry-run acme/check-and-keep -e sandbox -i path=/data/chats.jsonl
 …
   [gate] enough-rows  gate:enough-rows   after profile
        predicate: steps.profile.verdict == 'pass' && steps.profile.record_count >= input.min_rows  → STOP (gate_blocked) when false
@@ -179,7 +179,7 @@ $ cairn pipeline explain acme/check-and-keep -e sandbox -i path=/data/chats.json
 …
 ```
 
-`cairn validate acme` checks every file in the pack offline. Mistakes fail
+`cairn pack check acme` checks every file in the pack offline. Mistakes fail
 when the file is read, with the file and field named. Unknown fields are
 rejected, and so is a gate that has both kinds of answer:
 
@@ -190,7 +190,8 @@ pipelines/t.yaml: gate 'g' declares both `predicate:` and `approvers:` — a gat
 ## 6. Run it
 
 ```bash
-cairn remote launch acme/check-and-keep -i path=$PWD/sample.jsonl --environment sandbox --watch
+curl -LsSfO https://raw.githubusercontent.com/cairndev-sh/cairn/main/examples/hello-cairn/data/sample.jsonl
+cairn run acme/check-and-keep -i path=$PWD/sample.jsonl --environment sandbox
 ```
 
 ```text
@@ -199,13 +200,18 @@ cairn remote launch acme/check-and-keep -i path=$PWD/sample.jsonl --environment 
     enough-rows        done                 run=None
     keep               done                 run=run-flow-acme--keep-0a95e9
     accept             awaiting_approval    run=None
-⏸ paused — 1 step(s) waiting on a human
+  gate accept
+    …
+→ approve   cairn decide pl_1a812abc98244cf1 approve --step accept --approver you
+→ findings  cairn status pl_1a812abc98244cf1 --results
+→ watch     cairn status pl_1a812abc98244cf1 --follow
+Approve this step? [a]pprove / [r]eject / [s]kip (detach)
 ```
 
-The data gate passed on its own. Accept the result:
+The data gate passed on its own. Answer `a` to accept the result, or from any shell:
 
 ```bash
-cairn remote advance pl_1a812abc98244cf1 accept
+cairn decide pl_1a812abc98244cf1 approve --step accept
 ```
 
 ```text
@@ -214,6 +220,46 @@ approved — pipeline status=done
 
 With `-i min_rows=1000` the data gate is false and the pipeline fails at
 `enough-rows`; `keep` never runs.
+
+## What was recorded
+
+`cairn pack check` and `cairn run --dry-run` write nothing. The launch in step 6
+writes one pipeline record to the engine's store.
+
+**The pipeline record** (`pl_…`) holds the plan of four steps (`profile`,
+`enough-rows`, `keep`, `accept`), the inputs (`path`, `name`, `min_rows`,
+`expectation`), the governance (budget $1, series `acme-check`, approvers
+`data-team`) and each step's status, run id, verdict and approver. If you kept the scaffold's
+`policies/default.yaml`, the plan also holds the extra approvals it adds.
+`cairn status <pipeline_id> --json` prints it.
+
+**Runs.** Two: `run-task-data--profile-…` for `profile` and
+`run-flow-acme--keep-…` for `keep`. `enough-rows` is decided from the
+profile's numbers and `accept` by a person, so neither has a run.
+
+**Artifacts.** `keep` registers the file as an artifact (its id is the content
+hash) and as a version of the dataset named by the `name` input,
+`acme-sample` by default. `keep.noop_content_hash` is the hash `accept` shows
+you, and `artifact_ids` and `dataset_versions` in the leg's findings name what
+was registered. The pipeline has no `artifact/promote` or `storage/put` leg,
+so it moves no tag and writes no file of its own. With `-i min_rows=1000` the
+pipeline fails at `enough-rows`: the record shows the failed gate, `keep` has no run, and no
+version is registered.
+
+`cairn status <pipeline_id> --results` prints the findings of each leg.
+
+**Audit rows.** Only when the engine's profile binds `audit.sink`. `local-dev`
+does not, so a bare `cairn setup` writes none here; `secure` and the example's
+`hello.toml` do. With a sink, the log holds `pipeline.admitted`, `leg.submitted`
+and `leg.finished` for `profile` and `keep`, `pipeline.gate_approved` for
+`accept` with the signed-in user as `actor`, and `pipeline.finished`. This
+pipeline has no `audit/store` leg, so nothing else is written.
+[What a pipeline run writes](/concepts/runs/#what-a-pipeline-run-writes) lists
+the fields, and this checks the chain:
+
+```bash
+cairn admin audit verify
+```
 
 ## Next
 

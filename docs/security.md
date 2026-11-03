@@ -11,7 +11,7 @@ live in `deploy/light/README.md`; connections in `docs/connections.md`.
 | Packs and operator packs | — installed packs are **trusted code** (entry points execute on load) | — | install is the trust decision; manifest ↔ class drift tests; `cairn.lock` pins the shipped closure |
 | Console / API clients | a bearer token (`CAIRN_JWT_SECRET`) and workspace membership (`assert_can_write_workspace`) | the `X-Cairn-Workspace` header alone (`routers/start.py:150-157`); a workspace id no store holds, with auth on (404, like another account's); the implicit workspace (`CAIRN_WORKSPACE`, else `default`) when the caller's account does not own it or it does not exist (the request acts in the account's home workspace, or 404 without one) | `require_auth`; workspace middleware (`_WorkspaceMiddleware`, `triggers/server.py`); `assert_workspace_allowed` (`workspace.py`) |
 | Webhook senders | a valid signature over the body, keyed with a non-empty secret, on the receiver's own method + path under `/triggers/` | an empty secret (refused, never public); any other method or route at that path; the `X-Cairn-Workspace` header (the run lands in the workspace that declared the receiver, queued or inline); a webhook path, trigger id or name another workspace already holds (not armed; a path that still reaches the router from two workspaces mounts no receiver). Exception: a workspace's webhook still replaces a pack/overlay receiver at the same path | `_mount_trigger_routes` (`triggers/server.py`); `verify_signature` and `TriggerRouter.from_installed` (`triggers/router.py`); `_converge` (`engine/triggers_grammar.py`) and the trigger store's `create` (`storage/trigger_store.py`); `ingress_path_problem` (`engine/triggers_spec.py`) |
-| Human approvers | the identity recorded on the gate (`StepState.approver`); the gate's `approvers:` (a username or a role; owner/admin always; an unknown name → owner/admin only, #2393) | a body `approver` field (#2310); a name the gate does not list (403, audited `operation.approval` `deny`); `/advance` on a gate (409, #2388) | `POST /pipelines/{id}/steps/{step}/approve` (auth-required, `_assert_may_decide`; declared gate steps only) |
+| Human approvers | the identity recorded on the gate (`StepState.approver`); the gate's `approvers:` (a username or a role; owner/admin always; an unknown name → owner/admin only, #2393) | a body `approver` field (#2310); a name the gate does not list (403, audited `operation.approval` `deny`); `/advance` on a gate (409, #2388) | `POST /pipelines/{id}/steps/{step}/approve` and `…/reject` (auth-required, `_assert_may_decide`; declared gate steps only; ADR-0156) |
 
 **Console sign-ins (ADR-0142).** A console sign-in is a short access token plus an httpOnly,
 `SameSite=Strict` refresh cookie (`Path=/auth`); the server stores only the cookie token's
@@ -60,7 +60,7 @@ added; with auth off, or on a single-node deployment where everything belongs to
 - **Datasets** resolve within the run's workspace: `dataset:` refs and `@latest` see only
   that workspace's versions.
 - **Pull-lane claims and heartbeats** (`POST /jobs/claim`) need a worker-pool token
-  (`cairn remote worker-token`) or the deployment admin's token; a signed-in user's token
+  (`cairn admin worker-token`) or the deployment admin's token; a signed-in user's token
   gets `403`.
 - **Pack install and uninstall** over the API (`POST /registry/install|uninstall`) are
   deployment-admin only (`CAIRN_API_USER`).
@@ -85,7 +85,7 @@ For a team account's run, the
 connections and secrets in scope are that account's own (see *Accounts and workspaces*
 above). Never log or echo a secret; the redactor (`src/cairn/core/obs/redact.py`, `redact.text` in
 `src/cairn/profiles/secure.toml`) runs on LLM traffic and logs; every LLM call goes through
-`build_chat_model` (`services/llm/factory.py:97`) — invariant 2.
+`build_chat_model` (`services/llm/factory.py:108`) — invariant 2.
 
 ## Subprocess and shell safety
 The builtin engine runs the kernel process with `create_subprocess_exec` (argv, no shell),

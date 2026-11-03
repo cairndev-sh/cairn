@@ -34,7 +34,8 @@ dir (``all_preset_dirs``) holding named input sets for that pack's own
 pipelines — YAML only, no code (the packs-are-data rule). A saved preset with
 the same name SHADOWS the pack's, so a deployment can retune the seed without
 editing an installed wheel, and deleting the saved one falls back to the shipped
-default. Pack presets are read-only: they have no ``last_used_at`` because there
+default. An input value ``$pack/data/sample.jsonl`` names a file inside the pack,
+so a preset can point at bundled data on any machine (ADR-0165 D2). Pack presets are read-only: they have no ``last_used_at`` because there
 is nowhere to write it, which is the honest answer rather than a fabricated one.
 """
 from __future__ import annotations
@@ -58,6 +59,7 @@ logger = logging.getLogger("cairn.core.pipeline_presets")
 #: Where a resolved preset came from. Stamped on the launch record's provenance
 #: so "launched from what" also answers "…and who owns that definition".
 SOURCE_PACK = "pack"
+PACK_PATH_PREFIX = "$pack/"
 SOURCE_SAVED = "saved"
 
 
@@ -80,6 +82,30 @@ class UnknownPresetInputsError(ValueError):
     The pipeline's own ``$default`` rules are untouched: this checks the
     preset's keys against the pipeline's DECLARED inputs, nothing else.
     """
+
+
+class PresetPathRefusedError(UnknownPresetInputsError):
+    """A pack preset's ``$pack/`` value names nothing inside its pack. It is refused at the same door,
+    with the same answer, as a stale key: never a launch with the wrong input."""
+
+
+def _pack_path(value: Any, pack_root: Path) -> Any:
+    """``$pack/<path>`` → the absolute path, when it exists inside the pack. Anything else, including
+    one that escapes the pack, comes back unchanged for :func:`assert_preset_paths_resolved` to refuse:
+    one bad preset must not make its neighbours in the file unresolvable."""
+    if not (isinstance(value, str) and value.startswith(PACK_PATH_PREFIX)):
+        return value
+    root = pack_root.resolve()
+    try:
+        target = (root / value.removeprefix(PACK_PATH_PREFIX)).resolve()  # resolve(): a symlink out is out
+        return str(target) if target.is_relative_to(root) and target != root and target.exists() else value
+    except (OSError, ValueError):  # a NUL in the value, say
+        return value
+
+
+def _pack_root(preset_file: Path) -> Path:
+    """The directory holding the pack's ``pack.toml``: a manifest may put ``presets`` anywhere in it."""
+    return next((p for p in preset_file.parents if (p / "pack.toml").is_file()), preset_file.parent.parent)
 
 
 def canonical_pipeline_ref(ref: str) -> str:
@@ -140,7 +166,7 @@ def _parse_preset_file(path: Path) -> list[InputPreset]:
             continue
         out.append(InputPreset(
             name=name, template_ref=ref, workspace_id="default",
-            inputs=dict(entry.get("inputs") or {}),
+            inputs={k: _pack_path(v, _pack_root(path)) for k, v in (entry.get("inputs") or {}).items()},
             description=str(entry.get("description") or "").strip(),
             # the pack, not a user — visible in the listing and on the record
             created_by=f"pack:{pipeline_pack_name(path)}",  # #2513: the manifest's name, not the dir
@@ -223,6 +249,34 @@ def assert_preset_keys_declared(preset: InputPreset, declared: dict, source: str
     )
 
 
+def assert_preset_paths_resolved(preset: InputPreset, source: str) -> None:
+    """Refuse a pack preset whose ``$pack/`` value escapes its pack or names nothing in it. A saved
+    preset is a person's own values: a ``$pack/`` in one means nothing, and stays a plain string."""
+    if source != SOURCE_PACK:
+        return
+    bad = sorted(v for v in (preset.inputs or {}).values()
+                 if isinstance(v, str) and v.startswith(PACK_PATH_PREFIX))
+    if bad:
+        raise PresetPathRefusedError(
+            f"preset {preset.name!r} ({source}) names {bad!r}, which isn't a file inside its pack.")
+
+
+async def expand_preset(
+    workspace_id: str, d: Any, name: str, *, store: Any = None,
+) -> tuple[InputPreset, str]:
+    """The launch door's preset step for an already-resolved definition ``d``: the one
+    lookup (:func:`resolve_preset`) and the stale-key refusal
+    (:func:`assert_preset_keys_declared`). ``launch_pipeline_def`` and the CLI's
+    ``pipeline explain`` / ``show --plan`` (#231) call it, so a dry run refuses what the
+    launch refuses; the caller layers its inputs over the preset with
+    :func:`merge_over_preset`."""
+    rec, source = await resolve_preset(
+        workspace_id, f"{PIPELINE_PREFIX}{d.pack}/{d.name}", name, store=store)
+    assert_preset_keys_declared(rec, d.inputs or {}, source)
+    assert_preset_paths_resolved(rec, source)
+    return rec, source
+
+
 def merge_over_preset(preset_inputs: dict, supplied: dict) -> tuple[dict, dict]:
     """``(merged, overrides)`` — an explicit ``--input k=v`` wins per key.
 
@@ -276,8 +330,9 @@ def preset_row(preset: InputPreset, source: str) -> dict[str, Any]:
 
 __all__ = [
     "SOURCE_PACK", "SOURCE_SAVED",
-    "PresetNotFoundError", "UnknownPresetInputsError",
-    "assert_preset_keys_declared", "canonical_pipeline_ref", "list_presets",
+    "PACK_PATH_PREFIX", "PresetNotFoundError", "PresetPathRefusedError", "UnknownPresetInputsError",
+    "assert_preset_paths_resolved",
+    "assert_preset_keys_declared", "canonical_pipeline_ref", "expand_preset", "list_presets",
     "merge_over_preset", "pack_presets", "preset_row", "resolve_preset",
     "touch_preset",
 ]

@@ -14,9 +14,11 @@ NOT do, now centralized here:
    per LLM call into the active ``obs`` cost scope (reusing the existing pricing +
    ``BudgetExceeded`` machinery) and enforces a per-investigation ``max_cost_usd``
    ceiling. This is what turns ``budget.max_cost_usd`` from a declared-but-dead field
-   into an enforced one. Enforcement granularity is per-LLM-call: when the running
-   tally crosses the cap, the *next* call raises ``BudgetExceeded`` and unwinds the
-   agent loop (the wall-clock budget remains the hard mid-call abort).
+   into an enforced one. Enforcement granularity is per-LLM-call: the call that
+   crosses the cap has been paid for, so it raises ``BudgetExceeded`` as it ends and
+   no later call starts. Calls in flight alongside it can pass the cap further, and
+   one cancelled as the run stops can be billed without being counted (the wall-clock
+   budget remains the hard mid-call abort).
 
 The cost tally only happens inside an ``obs.cost_scope`` (opened by the runner);
 outside one, ``record_llm`` is a no-op, so unit tests that build a model without a
@@ -74,24 +76,33 @@ class BudgetCallback(BaseCallbackHandler):
     cap from ``budget.max_cost_usd`` (``None`` = rely only on the global backstop).
     """
 
+    # LangChain logs and swallows a handler's exception unless this is set, which left
+    # every cap on this path stopping nothing (#395).
+    raise_error = True
+
     def __init__(self, model: str, max_cost_usd: Optional[float] = None):
         self.model = model
         self.cap = max_cost_usd
 
     def on_llm_end(self, response: Any, **kwargs: Any) -> None:
-        in_tok, out_tok = _extract_usage(response)
-        if not (in_tok or out_tok):
-            return
-        # Accumulate into the active obs ctx (no-op outside a cost_scope). This
-        # also enforces the GLOBAL settings.max_cost_usd backstop via record_llm.
-        obs.record_llm(self.model, in_tok, out_tok, 0.0)
-        # Per-investigation ceiling (tighter than the global one).
-        ctx = obs.get()
-        if self.cap and ctx is not None and ctx.cost_usd > self.cap:
-            raise obs.BudgetExceeded(
-                f"investigation over budget.max_cost_usd: "
-                f"${ctx.cost_usd:.4f} > ${self.cap:.4f}"
-            )
+        try:
+            in_tok, out_tok = _extract_usage(response)
+            if not (in_tok or out_tok):
+                return
+            # Accumulate into the active obs ctx (no-op outside a cost_scope). This
+            # also enforces the GLOBAL settings.max_cost_usd backstop via record_llm.
+            obs.record_llm(self.model, in_tok, out_tok, 0.0)
+            # Per-investigation ceiling (tighter than the global one).
+            ctx = obs.get()
+            if self.cap and ctx is not None and ctx.enforce_cap and ctx.cost_usd > self.cap:
+                raise obs.BudgetExceeded(
+                    f"investigation over budget.max_cost_usd: "
+                    f"${ctx.cost_usd:.6f} > ${self.cap:.6f}"
+                )
+        except obs.BudgetExceeded:
+            raise
+        except Exception:  # noqa: BLE001 — raise_error would fail a paid-for call over its own bookkeeping
+            _log.warning("LLM cost accounting failed for %s", self.model, exc_info=True)
 
 
 def build_chat_model(

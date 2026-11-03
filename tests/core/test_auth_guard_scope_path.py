@@ -252,7 +252,7 @@ def test_a_run_ingest_token_heartbeats_its_own_runs_job(client, job_store):
 
 
 def test_a_worker_pool_token_still_heartbeats_any_job(client, job_store):
-    """cairn-platform#224: a worker credential heartbeats any job; a user's token,
+    """A worker credential heartbeats any job (an internal issue); a user's token,
     which the old rule called an operator, no longer does."""
     _register(job_store, "run-x:train", "run-x")
     tok = auth.mint_worker_pool_token("gpu-a")

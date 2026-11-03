@@ -18,6 +18,11 @@ Subcommands::
     cairn connect providers
     cairn connect presets
 
+Before ``add`` or ``rm`` writes, the CLI checks that the engine it is configured for
+(the endpoint ``cairn remote`` uses) reads the same store (#229): the engine reports a
+fingerprint of its store on ``/healthz``. When they differ the write is refused with
+exit 3, unless ``--force``.
+
 ``--preset`` builds a kind=mcp connection from a shipped connector preset
 (``cairn/connectors/<name>.toml``, read only by ``cairn.services.mcp.presets``)
 through the same catalog path as ``cairn connect add mcp``; flags override the
@@ -30,6 +35,7 @@ import shlex
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -46,13 +52,49 @@ from cairn.core.connections import (
 from cairn.core.oauth import AuthSession, OAuthBrokerError, get_oauth_broker
 from cairn.services.mcp import presets
 
+# #68
 app = typer.Typer(
-    help="Manage typed infra connections (model APIs, compute, MCP) (#68). "
-    "`cairn connect presets` lists the shipped MCP connector presets "
-    "(github, slack, notion); add one with `cairn connect add --preset <name>`.",
+    help="Manage typed infra connections (model APIs, compute, MCP). "
+    "`cairn admin connect presets` lists the shipped MCP connector presets "
+    "(github, slack, notion); add one with `cairn admin connect add --preset <name>`.",
     no_args_is_help=True,
 )
 console = Console()
+
+#: #229 — the exit code of a write refused because the running engine reads another store.
+EXIT_STORE_MISMATCH = 3
+
+
+def _guard_store(force: bool) -> None:
+    """#229 — refuse a write the running engine would never see.
+
+    The qualification run's failure: an engine on ``--db ~/.cairn/train.db``, a shell
+    without ``CAIRN_STORAGE``, and ``connect add`` reported success into
+    ``~/.cairn/cairn.db``. Only a store with no credentials in its name is printed.
+    """
+    from cairn.cli.commands import remote  # noqa: PLC0415 — the engine endpoint is `cairn remote`'s
+
+    checked = remote.store_check()
+    if checked is None:
+        return  # an in-memory store is nobody else's
+    mine, ep, same = checked
+    if same:
+        return
+    if same is None:
+        why = (f"the engine at {ep} does not report its store" if ep
+               else "no engine answered to compare stores with")
+        console.print(f"[dim]writing to {escape(mine)} — {why}[/]")
+        return
+    if force:
+        console.print(f"[yellow]writing to {escape(mine)} anyway (--force): the engine at "
+                      f"{ep} reads another store and will not see this.[/]")
+        return
+    console.print(
+        f"[red]✗ not written:[/] this CLI writes {escape(mine)}, but the engine at {ep} "
+        "reads a different store, so it would never see this. Run the CLI on the "
+        "engine's store (set CAIRN_STORAGE to what the engine was started with; "
+        "`cairn setup --db PATH` is sqlite:///PATH), or pass --force to write here anyway.")
+    raise typer.Exit(EXIT_STORE_MISMATCH)
 
 
 def _kv(pairs: list[str] | None) -> dict[str, str]:
@@ -68,6 +110,7 @@ def _kv(pairs: list[str] | None) -> dict[str, str]:
 
 def _persist(conn: Connection, force: bool) -> bool:
     """Upsert a connection; return False if it exists and ``force`` is off."""
+    _guard_store(force)
 
     async def _save() -> bool:
         store = default_connection_store()
@@ -140,7 +183,8 @@ def add_cmd(
     description: str = typer.Option(None, "--description", help="override description"),
     disabled: bool = typer.Option(False, "--disabled", help="create it disabled"),
     force: bool = typer.Option(
-        False, "--force", help="overwrite an existing connection of the same name"
+        False, "--force", help="overwrite an existing connection of the same name; "
+        "also write when the running engine reads another store"
     ),
     via: str = typer.Option(
         None, "--via", help="broker an OAuth connection: --via oauth (provider can be "
@@ -155,7 +199,7 @@ def add_cmd(
     scope: list[str] = typer.Option(None, "--scope", help="oauth scope (repeatable)"),
     preset: str = typer.Option(
         None, "--preset", help="build an MCP connection from a shipped connector "
-        "preset (see `cairn connect presets`); --name/--set/--secret/--description "
+        "preset (see `cairn admin connect presets`); --name/--set/--secret/--description "
         "override its values"
     ),
 ) -> None:
@@ -174,8 +218,8 @@ def add_cmd(
         _save_and_probe(conn, force)
         return
     if provider is None:
-        console.print("[red]missing provider[/] — `cairn connect add <provider>` "
-                      "(see [bold]cairn connect providers[/]) or `--preset <name>`.")
+        console.print("[red]missing provider[/] — `cairn admin connect add <provider>` "
+                      "(see [bold]cairn admin connect providers[/]) or `--preset <name>`.")
         raise typer.Exit(2)
     if via is not None:
         _add_oauth(
@@ -191,8 +235,8 @@ def add_cmd(
         console.print(
             Panel(
                 f"unknown provider [red]{provider}[/]\n\nknown: {known}\n\n"
-                "(MCP/custom: use [bold]cairn connect add mcp --set url=…[/]; "
-                "OAuth: [bold]cairn connect add github --via oauth[/])",
+                "(MCP/custom: use [bold]cairn admin connect add mcp --set url=…[/]; "
+                "OAuth: [bold]cairn admin connect add github --via oauth[/])",
                 title="[red]no such provider[/]",
                 border_style="red",
             )
@@ -219,7 +263,7 @@ def _save_and_probe(conn: Connection, force: bool) -> None:
     # row shows a health dot immediately (best-effort — never blocks the add).
     _, result = asyncio.run(_probe_by_name(conn.name))
     _render_probe(result)
-    console.print(f"  [dim]re-check anytime with[/] [bold]cairn connect test {conn.name}[/]")
+    console.print(f"  [dim]re-check anytime with[/] [bold]cairn admin connect test {conn.name}[/]")
 
 
 def _from_preset(
@@ -320,14 +364,14 @@ def _add_oauth(
         console.print(
             f"[yellow]saved, but couldn't start authorization:[/] {exc}\n"
             f"  [dim]set the provider client creds (CAIRN_OAUTH_<P>_CLIENT_ID/SECRET) and retry:[/] "
-            f"[bold]cairn connect authorize {conn.name}[/]"
+            f"[bold]cairn admin connect authorize {conn.name}[/]"
         )
         return
     console.print(
         Panel(f"[bold]{session.redirect_url}[/]",
               title="authorize — open this URL", border_style="cyan")
     )
-    console.print(f"  [dim]then verify with[/] [bold]cairn connect test {conn.name}[/]")
+    console.print(f"  [dim]then verify with[/] [bold]cairn admin connect test {conn.name}[/]")
 
 
 @app.command("authorize")
@@ -364,7 +408,7 @@ def authorize_cmd(
         Panel(f"[bold]{session.redirect_url}[/]",
               title=f"authorize {name} — open this URL", border_style="cyan")
     )
-    console.print(f"  [dim]then verify with[/] [bold]cairn connect test {name}[/]")
+    console.print(f"  [dim]then verify with[/] [bold]cairn admin connect test {name}[/]")
 
 
 @app.command("ls")
@@ -384,8 +428,8 @@ def ls_cmd() -> None:
     if not conns:
         console.print(
             "[dim]no connections yet — add one with[/] "
-            "[bold]cairn connect add <provider>[/] "
-            "[dim](see[/] [bold]cairn connect providers[/][dim])[/]"
+            "[bold]cairn admin connect add <provider>[/] "
+            "[dim](see[/] [bold]cairn admin connect providers[/][dim])[/]"
         )
         return
     t = Table("name", "kind", "enabled", "secret keys", "description",
@@ -415,7 +459,7 @@ def _render_probe(result: ProbeResult) -> None:
 
 @app.command("test")
 def test_cmd(
-    name: str = typer.Argument(..., help="connection name (from `cairn connect ls`)"),
+    name: str = typer.Argument(..., help="connection name (from `cairn admin connect ls`)"),
 ) -> None:
     """Resolve a connection's secret refs via the SecretStore, then run the
     provider's **authenticated** health probe (the creds actually work) and
@@ -475,8 +519,11 @@ async def _probe_by_name(name: str):
 @app.command("rm")
 def rm_cmd(
     name: str = typer.Argument(..., help="connection name to remove"),
+    force: bool = typer.Option(
+        False, "--force", help="remove even when the running engine reads another store"),
 ) -> None:
     """Delete a connection. Removes only the reference — never the secret value."""
+    _guard_store(force)
 
     async def _rm() -> bool:
         store = default_connection_store()
@@ -499,7 +546,7 @@ def rm_cmd(
 
 @app.command("providers")
 def providers_cmd() -> None:
-    """List the provider catalog — what you can `cairn connect add`."""
+    """List the provider catalog — what you can `cairn admin connect add`."""
     t = Table("provider", "kind", "secret keys", "description",
               title="connectable providers")
     for key in sorted(PROVIDER_CATALOG):
@@ -512,14 +559,14 @@ def providers_cmd() -> None:
         )
     console.print(t)
     console.print(
-        "  [dim]add with[/] [bold]cairn connect add <provider>[/]"
+        "  [dim]add with[/] [bold]cairn admin connect add <provider>[/]"
         "  [dim]· aliases: hf, claude, google, k8s[/]"
     )
 
 
 @app.command("presets")
 def presets_cmd() -> None:
-    """List the shipped MCP connector presets — what you can `cairn connect add --preset`."""
+    """List the shipped MCP connector presets — what you can `cairn admin connect add --preset`."""
     t = Table("preset", "provider", "transport", "required env", "description",
               title="MCP connector presets")
     for key in presets.list_presets():
@@ -532,4 +579,4 @@ def presets_cmd() -> None:
             spec.get("connector", {}).get("description", ""),
         )
     console.print(t)
-    console.print("  [dim]add with[/] [bold]cairn connect add --preset <name>[/]")
+    console.print("  [dim]add with[/] [bold]cairn admin connect add --preset <name>[/]")

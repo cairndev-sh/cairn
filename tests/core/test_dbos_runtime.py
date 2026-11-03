@@ -156,6 +156,39 @@ def test_dbos_node_events_and_heartbeat(tmp_path):
     assert "RESULT: PASS" in r.stdout, r.stdout + r.stderr
 
 
+def test_dbos_node_events_capture_llm_cost(tmp_path):
+    r = _run("node_events_cost", tmp_path / "ne-cost")
+    assert "RESULT: PASS" in r.stdout, r.stdout + r.stderr
+
+
+def test_dbos_run_cap_is_enforced_after_node_metering(tmp_path):
+    r = _run("run_cap", tmp_path / "run-cap")
+    assert "RESULT: PASS" in r.stdout, r.stdout + r.stderr
+
+
+def test_dbos_two_nodes_share_cap_and_failed_cost_is_recorded(tmp_path):
+    r = _run("two_node_cap", tmp_path / "two-node-cap")
+    assert "RESULT: PASS" in r.stdout, r.stdout + r.stderr
+
+
+def test_dbos_recovered_cost_enforces_cap_per_call(tmp_path):
+    r = _run("recovered_cap", tmp_path / "recovered-cap")
+    assert "RESULT: PASS" in r.stdout, r.stdout + r.stderr
+
+
+@pytest.mark.parametrize("scenario", ["persisted_cap", "sync_failure"])
+def test_dbos_recovered_cap_and_sync_failure(tmp_path, scenario):
+    r = _run(scenario, tmp_path / scenario)
+    assert "RESULT: PASS" in r.stdout, r.stdout + r.stderr
+
+
+def test_dbos_cost_cap_survives_process_recovery(tmp_path):
+    workdir = tmp_path / "cost-crash"
+    submitted = _run("cost_crash_submit", workdir)
+    assert submitted.returncode == 0, submitted.stdout + submitted.stderr
+    recovered = _run("cost_crash_recover", workdir)
+    assert "RESULT: PASS" in recovered.stdout, recovered.stdout + recovered.stderr
+
 
 def test_dbos_graceful_shutdown_leaves_the_workflow_pending(tmp_path):
     """#1872 — cancelling every task on the loop (what uvicorn's asyncio.run does

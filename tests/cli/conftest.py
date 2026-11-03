@@ -93,3 +93,15 @@ def scratch_pack(tmp_path):
             (d / "flows" / "echo.md").write_text(SCRATCH_FLOW)
         return d
     return make
+
+
+@pytest.fixture(autouse=True)
+def _cairn_profile_is_restored():
+    """`cairn run` sets a dev profile for its own process, and CliRunner runs it in this one: without
+    this, whichever test runs next on the worker reads the wrong backends."""
+    before = os.environ.get("CAIRN_PROFILE")
+    yield
+    if before is None:
+        os.environ.pop("CAIRN_PROFILE", None)
+    else:
+        os.environ["CAIRN_PROFILE"] = before

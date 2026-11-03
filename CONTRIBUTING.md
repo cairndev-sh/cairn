@@ -10,6 +10,10 @@ knowledge required.
 > (choosing SQLite vs Postgres, seeding demo fixtures, starting the server).
 > This file covers *contributing*; that one covers *running*.
 
+> **Questions or ideas?** Ask in
+> [GitHub Discussions](https://github.com/cairndev-sh/cairn/discussions); issues are
+> for bugs and concrete feature requests.
+
 ## Quickstart (the 15-minute path)
 
 ```bash
@@ -27,22 +31,21 @@ uv sync --extra dev --extra rag --extra rag-sqlite-vec \
 # (`uv run <cmd>` adds what is missing but removes nothing.)
 
 # 2. A local engine on a pinned sqlite config, with demo data
-uv run cairn dev --engine-only --seed
+uv run cairn setup --seed
 
-# 3. In another shell: sign in and drive it
-uv run cairn remote login -u dev -p dev -e http://localhost:8000
-uv run cairn remote launch hello-cairn/profile-and-publish --environment sandbox \
-    -i path=$PWD/examples/hello-cairn/data/sample.jsonl --watch
+# 3. Drive it (step 2 signed you in). It asks at each gate: answer a to approve.
+uv run cairn run hello-cairn/profile-and-publish --environment sandbox \
+    -i path=$PWD/examples/hello-cairn/data/sample.jsonl
 ```
 
-`cairn dev` starts the engine on http://localhost:8000 on a **pinned** sqlite
+`cairn setup` starts the engine in the background on http://localhost:9090 on a **pinned** sqlite
 config (`~/.cairn/dev.db`): a stale `.env` can never redirect your dev session to
-someone's postgres. Sign in with **dev / dev**. From a checkout it adds
-`examples/hello-cairn` to `CAIRN_PACK_PATH`. `--seed` writes deterministic demo
+someone's postgres. It signs you in as **dev / dev**; `cairn setup --stop` stops it.
+With `--seed` it adds `examples/hello-cairn` to `CAIRN_PACK_PATH` from a checkout and writes deterministic demo
 records (three pipelines, one paused at a person gate) into the `demo` workspace;
-`cairn remote` reads the default workspace, so send `X-Cairn-Workspace: demo` to
-the HTTP API to see them. The web console is not part of this repository, so pass
-`--engine-only`. Other flags: `--port`, `--db`.
+`cairn status` reads the default workspace, so send `X-Cairn-Workspace: demo` to
+the HTTP API to see them. The web console is not part of this repository, so
+`cairn setup` starts only the engine. Other flags: `--port`, `--db`.
 
 ## Working on a pack
 
@@ -51,11 +54,11 @@ A pack is discovered through the `cairn.packs` entry-point group, which is an
 until it is installed. Two loops (#1545):
 
 ```bash
-cairn init pack mypack
+cairn pack new pack mypack
 
 # 1. Zero-install loop: the engine scans these dirs on every start.
 export CAIRN_PACK_PATH="$PWD/mypack"     # `cairn pack add --dev mypack` prints this
-cairn ls mypack                          # edits take effect on the next run
+cairn pack ls mypack                     # edits take effect on the next run
 
 # 2. Make it permanent: wires the three root-pyproject.toml points
 #    (workspace member + dependency + [tool.uv.sources]) and prints the sync
@@ -65,10 +68,10 @@ cairn pack add mypack
 
 An **installed** pack always wins a name collision with a `CAIRN_PACK_PATH`
 copy, so a dev pack can never silently shadow a deployed one; a broken dev pack
-is skipped with a warning (`cairn ls` lists load failures) rather than taking
+is skipped with a warning (`cairn pack ls` lists load failures) rather than taking
 the engine down. A pack's `[compat] cairn_engine` range is checked against the
 installed engine at load time — a mismatch warns, in the log and as a
-`pack_compat:<name>` row in `cairn doctor`, and still loads.
+`pack_compat:<name>` row in `cairn setup --check`, and still loads.
 
 ## Running tests
 
@@ -77,6 +80,25 @@ installed engine at load time — a mismatch warns, in the log and as a
 .venv/bin/pytest -q                # everything, incl. operator-pack tests
 uvx ruff check .                   # lint, the rule set CI runs
 ```
+
+### Where tests live, and how to run one layer
+
+| Directory | What it covers | Run it alone |
+|---|---|---|
+| `tests/core` | the engine: dispatch, pipelines, gates, budget, storage, policy, the HTTP control plane | `.venv/bin/pytest tests/core -q` |
+| `tests/cli` | the `cairn` command, driven through its real entry point | `.venv/bin/pytest tests/cli -q` |
+| `tests/services` | RAG, vector stores, MCP and the other services under `src/cairn/services` | `.venv/bin/pytest tests/services -q` |
+| `tests/deploy` | the Helm chart and the deploy examples | `.venv/bin/pytest tests/deploy -q` |
+| `tests/examples` | the example pack, `examples/hello-cairn` | `.venv/bin/pytest tests/examples -q` |
+| `tests/dataflow_conformance` | the dataflow engine contract every engine must meet | `.venv/bin/pytest tests/dataflow_conformance -q` |
+| `tests/e2e` | the hello-cairn feature proof: a real `cairn-server` per cell, driven as a user would | `.venv/bin/pytest -m e2e tests/e2e -q` (or `scripts/oss/feature_proof.sh` with services) |
+| `packages/*/tests` | each builtin operator pack's own tests | `.venv/bin/pytest packages/cairn-operator-data-profile/tests -q` |
+
+Run one file or one test while you work (`.venv/bin/pytest tests/cli/test_gate.py -q`,
+add `-k <name>` for one case), and the layer it belongs to before you push. What each
+kind of test is allowed to prove, and which kinds a change needs, is in
+[docs/testing/strategy.md](docs/testing/strategy.md). A bug fix lands with the
+regression test, and the PR shows that test failing without the fix.
 
 `tests/core/test_dbos_runtime.py` needs the `runtime-dbos` extra (in the sync line
 above). CI's `public` job runs `tests/core`, `tests/cli`, `tests/deploy` and the
@@ -107,11 +129,20 @@ env -u CAIRN_STORAGE .venv/bin/pytest tests/core -q
 
 ## Other CI gates
 
+- **The published numbers** — the `public` job runs the measurements in `benchmark/`, and a test fails
+  if the README's table differs from `benchmark/results` ([`benchmark/README.md`](benchmark/README.md)).
 - **`uv.lock`** — the install is `uv sync --locked`, so a dependency or version
   change needs `uv lock` in the same PR (`uv lock --check` tells you).
 - **The wheels** — `scripts/check_folded_wheels.py` builds the five wheels and
   checks that `cairndev` carries the builtin operators and the core contracts.
 - **The engine image** — the `image` job builds `Dockerfile.engine` and starts it.
+- **The Quickstart** — the `quickstart` workflow (`quickstart.yml`, not a required check) runs the commands in the
+  README's Quickstart section with `scripts/check_quickstart.py`: it starts an engine, answers both gates, trips the data
+  gate and verifies the audit log. It reads the commands from the README, so edit them there; a line the script can't
+  run fails the check until the script is taught it.
+- **The Compose stack** — the `compose` workflow (`compose.yml`, not a required check) builds the engine image, starts
+  `deploy/light` from a clean checkout with `scripts/check_compose.py`, and runs a pipeline through it with and without
+  auth. It runs nightly and on changes to the stack.
 
 ## Documentation
 
@@ -140,7 +171,18 @@ Build it locally with `npm ci && npm run build` in `docs/site/`. The one-line in
    [Developer Certificate of Origin](https://developercertificate.org/): commit
    with `git commit -s`, which adds a `Signed-off-by: Your Name <you@example.com>`
    line matching the commit author. The public repository's `dco` check refuses a
-   pull request with an unsigned commit; `git rebase --signoff main` fixes a branch after the fact.
+   pull request with an unsigned commit. To fix it after the fact, use
+   `git commit --amend -s --no-edit` for the last commit, or `git rebase --signoff main`
+   for the whole branch, then force-push your branch.
+
+   ```bash
+   git config user.name  "Your Name"
+   git config user.email "you@example.com"   # the address on your GitHub account
+   git commit -s -m "fix(cli): …"
+   ```
+
+   If your GitHub email is private, use your `<id>+<login>@users.noreply.github.com`
+   address for both the author and the sign-off, or GitHub refuses the push.
 
 ### What review looks for
 
@@ -185,7 +227,8 @@ vocabulary.
    concept, pipelines as the runnable surface), ADR-0085 (this contributor
    experience and where it's going).
 3. The GitHub issue tracker — what's in flight. Issues labeled
-   `good-first-issue` are curated to be self-contained.
+   [`good first issue`](https://github.com/cairndev-sh/cairn/labels/good%20first%20issue)
+   are curated to be self-contained.
 
 Changing a locked surface needs a **new ADR**, not an edit to an old one.
 

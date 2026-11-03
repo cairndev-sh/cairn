@@ -83,6 +83,17 @@ def test_scope_resets_after_exit():
     assert obs.get() is None
 
 
+def test_non_enforcing_child_scope_defers_cap_to_parent():
+    cb = BudgetCallback("gpt-4o-mini", max_cost_usd=0.5)
+    with obs.cost_scope("run", max_cost_usd=0.5) as parent:
+        with obs.cost_scope("node", enforce_cap=False) as child:
+            cb.on_llm_end(_big_usage_response())
+            assert child.cost_usd > 0.5
+        with pytest.raises(obs.BudgetExceeded):
+            obs.merge_cost(parent, child)
+        assert parent.cost_usd == child.cost_usd
+
+
 # ─── gateway routing ────────────────────────────────────────────────
 
 

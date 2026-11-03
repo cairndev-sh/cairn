@@ -112,6 +112,47 @@ def test_async_client_speaks_the_same_wire_shape():
     asyncio.run(main())
 
 
+def test_reject_step_posts_the_reason_on_both_clients():
+    """ADR-0156 D4/D6 — `reject_step` beside `approve_step`: the reason is required, the
+    approver is sent only when given, and a 404/403/409 maps to CairnAPIError."""
+    import asyncio
+    import json
+
+    import httpx
+    import pytest
+
+    from cairn_client import AsyncCairnClient, CairnAPIError
+
+    seen: list = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path, json.loads(request.content)))
+        code = {"pl_403": 403, "pl_404": 404, "pl_409": 409}.get(request.url.path.split("/")[2], 200)
+        return httpx.Response(code, json={"detail": f"d{code}"} if code != 200 else {"status": "failed"})
+
+    sync = CairnClient("http://c", transport=httpx.MockTransport(handler))
+    assert sync.reject_step("pl_1", "gate", reason="no") == {"status": "failed"}
+    assert sync.reject_step("pl_1", "gate", reason="no", approver="dana") == {"status": "failed"}
+    assert seen[0] == ("POST", "/pipelines/pl_1/steps/gate/reject", {"reason": "no"})
+    assert seen[1][2] == {"reason": "no", "approver": "dana"}
+    with pytest.raises(TypeError):
+        sync.reject_step("pl_1", "gate")                      # the reason is required
+    for pid, code in (("pl_403", 403), ("pl_404", 404), ("pl_409", 409)):
+        with pytest.raises(CairnAPIError) as ei:
+            sync.reject_step(pid, "gate", reason="no")
+        assert ei.value.status_code == code
+
+    async def main():
+        c = AsyncCairnClient("http://c", transport=httpx.MockTransport(handler))
+        assert await c.reject_step("pl_2", "g", reason="r", approver="x") == {"status": "failed"}
+        with pytest.raises(CairnAPIError):
+            await c.reject_step("pl_404", "g", reason="r")
+        await c.close()
+
+    asyncio.run(main())
+    assert seen[-2][2] == {"reason": "r", "approver": "x"}
+
+
 # ── #2573: Ask is platform-only — the client says so on the public server's 404 ──────────────
 def _server(status: int):
     import httpx

@@ -1,7 +1,7 @@
 # hello-cairn: the example pack
 
 `hello-cairn` is a domain pack: data plus a little glue, no operators. It runs on the cairn
-engine and its builtin operator packs alone. Its four pipelines each do one thing a new user
+engine and its builtin operator packs alone. Its five pipelines each do one thing a new user
 recognises, and together they exercise what the engine adds around a piece of work: gates
 answered by data or by a person, budgets, triggers, an agentic template, an MCP tool,
 retrieval, a run hook, SSH, secrets, and an audit record.
@@ -11,7 +11,8 @@ retrieval, a run hook, SSH, secrets, and an audit record.
 | `profile-and-publish` | data | Profile a dataset, stop unless the profile passes, redact the summary, run a flow, stage it, ask a person, tag it, publish it, audit it. |
 | `ask-the-docs` | agentic | Retrieve from the pack's docs, ask a model, measure the answer with a tool on the pack's own MCP server, remember it, check its length, ask a person. |
 | `nightly-ops` | operations | Check a secret, run a report on an SSH box, carry it through a flow, propose the follow-up to a person, audit it. Nightly once enabled; a run hook writes receipts. |
-| `tiny-finetune` | ml | Profile training rows, LoRA fine-tune a small model on CPU, gate on its held-out loss, tag it, ask a person, write its card. |
+| `tiny-finetune` | ml | Profile training rows, LoRA fine-tune a small model on CPU, gate on the loss over the rows it held out, tag it, ask a person, write its card. |
+| `over-budget` | data | Declare an estimate above the budget and watch the flow leg's reservation refuse it before the engine starts. No key, no spend. |
 
 ## Quickstart
 
@@ -26,7 +27,7 @@ export CAIRN_PROFILE=examples/hello-cairn/profiles/hello.toml
 ```
 
 `--extra rag` is what lets the engine index the docs corpus at boot (LlamaIndex ingest);
-without it ask-the-docs still runs and retrieves nothing. `auth` is optional: `cairn dev`
+without it ask-the-docs still runs and retrieves nothing. `auth` is optional: `cairn setup`
 signs you in as dev/dev without it.
 
 `cairndev[hello]` installs this pack as the wheel `cairn-pack-hello` plus what its pipelines
@@ -40,20 +41,21 @@ pack declares no entry points, so the run-hook listener does not fire.
 mcp), but not local-dev's `eval.delta` binding (a platform operator) or its `llm_gateway` and
 `embedder` backend entries: the model and the embedder come from the engine's environment
 (step 3). It adds `secrets.store` → `secrets/env` (nightly-ops' secret check is a capability
-node and compiles only with a binding, which local-dev does not carry) and the `hello-calc`
-MCP server the pack declares. It pins no runtime, so `CAIRN_RUNTIME=dbos` selects DBOS.
+node and compiles only with a binding, which local-dev does not carry), `audit.sink` →
+`audit/store` (the audit trail, which local-dev leaves off) and the `hello-calc` MCP server the
+pack declares. It pins no runtime, so `CAIRN_RUNTIME=dbos` selects DBOS.
 
 ### 2. See what will happen before anything runs
 
 ```bash
-cairn pipeline explain hello-cairn/profile-and-publish -e sandbox
-cairn validate examples/hello-cairn          # with CAIRN_PROFILE set as in step 1
+cairn run --dry-run hello-cairn/profile-and-publish -e sandbox
+cairn pack check examples/hello-cairn          # with CAIRN_PROFILE set as in step 1
 ```
 
-`cairn validate` needs the example's profile: under local-dev the nightly-job template does
+`cairn pack check` needs the example's profile: under local-dev the nightly-job template does
 not compile (no `secrets.store` binding).
 
-`explain` lists every leg with the operator class or flow file it resolves to, the gate that
+`--dry-run` lists every leg with the operator class or flow file it resolves to, the gate that
 answers it, and the budget, series and approvers.
 
 ### 3. Start an engine
@@ -64,8 +66,7 @@ export RAG_EMBED_PROVIDER=openai             # retrieval and memory embed with O
 export CAIRN_RAG_AUTOINDEX=1                 # index rag/docs at boot (needs the `rag` extra)
 export CAIRN_MCP_SERVERS='{"hello-calc": {"transport": "stdio", "command": "python",
   "args": ["examples/hello-cairn/tools/calc_server.py"]}}'
-cairn dev --engine-only --port 8471 &        # sqlite engine, in-process runtime, login dev/dev
-cairn remote login -u dev -p dev -e http://localhost:8471
+cairn setup --port 8471                      # sqlite engine, in-process runtime, signed in as dev/dev
 ```
 
 Any OpenAI-compatible endpoint works in place of a key: `OPENAI_BASE_URL`, or
@@ -79,29 +80,31 @@ uses a deterministic model response; governed pipelines still use the configured
 **profile-and-publish**
 
 ```bash
-cairn remote launch hello-cairn/profile-and-publish --environment sandbox --watch
-cairn remote advance <pipeline_id> review        # the person gate
-cairn remote advance <pipeline_id> promote       # the operator's own gate
+cairn run hello-cairn/profile-and-publish --environment sandbox
+cairn decide <pipeline_id> approve --step review        # the person gate
+cairn decide <pipeline_id> approve --step promote       # the operator's own gate
 ```
 
-The pipeline stops a second time at `promote`: `artifact/promote` declares
+On a terminal, `cairn run` asks at each gate, so answer `a` there; the `cairn decide` lines answer
+from any shell. The pipeline stops a second time at `promote`: `artifact/promote` declares
 `requires_approval`, and a pipeline can add a gate but never remove one an operator declares.
-`cairn remote advance` approves either kind and records the signed-in user as the approver.
+`cairn decide` approves either kind and records the signed-in user as the approver.
 
 The record ends `done`: `data-ok` has verdict `data`, `review` `approved`, `promote` the
 tag `hello-sample@published` on the flow leg's registered artifact, and `audit` a
-hash-chained row in `CAIRN_AUDIT_LOG` (default `./audit.jsonl`). `storage/put` writes under
+hash-chained row in `CAIRN_AUDIT_LOG` (default `./audit.jsonl`), beside the rows the profile's
+`audit.sink` binding adds for the launch, each step and each decision a person made. `storage/put` writes under
 `CAIRN_ARTIFACTS_DIR` (default `~/.cairn/artifacts`). With `-i min_rows=1000` the data gate
-stops the pipeline (`gate_blocked`) before anything is written. Launch with
+stops the pipeline (`gate_blocked`) before any later step starts. Launch with
 `--environment hello-prod` and the pack's policy
 (`policies/require-review-on-publish.yaml`) stops `stage` for an approval before it writes.
 
 **ask-the-docs**
 
 ```bash
-cairn remote launch hello-cairn/ask-the-docs --environment sandbox --watch
-cairn remote advance <pipeline_id> review
-cairn remote findings <pipeline_id>              # hits, answer, answer_stats, remembered
+cairn run hello-cairn/ask-the-docs --environment sandbox
+cairn decide <pipeline_id> approve --step review
+cairn status <pipeline_id> --results              # hits, answer, answer_stats, remembered
 ```
 
 The `assistant` leg (`flows/assistant.md`) searches the `docs` corpus (`rag/docs`, declared
@@ -117,9 +120,9 @@ hits and the model says the docs do not cover the question. Retrieval uses sqlit
 export HELLO_REPORT_TOKEN=...                    # the secret the job checks for
 export HELLO_SSH_KEY="$(cat ~/.ssh/id_ed25519)"  # in the ENGINE's environment
 CAIRN_STORAGE=sqlite:///$HOME/.cairn/dev.db \
-cairn connect add ssh --name hello-ssh --set host=<box> --set user=<user> \
+cairn admin connect add ssh --name hello-ssh --set host=<box> --set user=<user> \
   --set known_hosts=$HOME/.ssh/known_hosts --secret PRIVATE_KEY=HELLO_SSH_KEY
-cairn remote launch hello-cairn/nightly-ops --environment sandbox --watch
+cairn run hello-cairn/nightly-ops --environment sandbox
 ```
 
 The connection goes into the engine's store, hence `CAIRN_STORAGE`; its secret is an env var
@@ -128,7 +131,7 @@ NAME the engine reads. The box needs `sh`, an SFTP subsystem, and `setsid` (Linu
 present (#2606). `job` (`flows/nightly-job.md`) checks the secret through the profile's
 `secrets.store` binding, then runs `command` on the box and reads back `metrics.json`.
 `propose` waits for a person (`monitor/propose` declares `requires_approval`;
-`cairn remote advance <pipeline_id> propose`). With the wheel installed, every settled leg
+`cairn decide <pipeline_id> approve --step propose`). With the wheel installed, every settled leg
 appends a line to `$CAIRN_HOME/hello-cairn/receipts.jsonl` (default `~/.cairn`).
 
 For secrets in Infisical, run the engine with
@@ -143,13 +146,26 @@ box: `cairndev[train]` (torch, transformers, peft, datasets; CPU is enough;
 there is no torch wheel for Intel macOS).
 
 ```bash
-cairn remote launch hello-cairn/tiny-finetune --environment sandbox --watch
-cairn remote launch hello-cairn/tiny-finetune -i base_model=Qwen/Qwen2.5-0.5B --watch
+cairn run hello-cairn/tiny-finetune --environment sandbox
+cairn run hello-cairn/tiny-finetune -i base_model=Qwen/Qwen2.5-0.5B
 ```
 
 `base_model` defaults to the stand-in `sshleifer/tiny-gpt2` (seconds); Qwen2.5-0.5B trains
-in minutes. `loss-ok` stops the pipeline when the held-out loss is above `target_loss`;
+in minutes. `loss-ok` stops the pipeline when the held-out loss is above `target_loss`: the
+trainer holds out the last row in every eight (6 of the 48 rows in `data/train.jsonl`,
+all distinct from the 42 it trains on) and reports its loss over those rows only;
 `promote` and `review` each wait for a person.
+
+**Where the adapter lives:** in the engine's temp workdir, unless you say otherwise. The system
+can delete that directory, and then the promoted tag and the model card name a path that's gone.
+To keep the adapter, give each run its own directory on the engine's box:
+
+```bash
+cairn run hello-cairn/tiny-finetune --environment sandbox -i output_dir=$HOME/adapters/run-1
+```
+
+Use a new directory for each run, because a later run writes over it. On more than one machine,
+`CAIRN_ARTIFACT_STORE` also copies the adapter to an object store.
 
 Until the train-local pack was merged (hello-cairn WP3), tiny-finetune was pending in two
 strict xfails and one strict list entry. WP3 removed all three in the change that added the
@@ -158,6 +174,29 @@ pack: `test_tiny_finetune_is_runnable_on_the_public_core`
 (`tests/cli/test_validate_example_pack.py`, under `profiles/hello.toml`) are ordinary tests,
 and `tests/core/test_validate_author_gate.py` admits tiny-finetune like every other shipped
 pipeline.
+
+**over-budget**
+
+```bash
+cairn run hello-cairn/over-budget --environment sandbox
+```
+
+```text
+pipeline_id=pl_592c6c850aec40a5 status=running
+  failed
+    engine-check       failed               run=run-flow-hello-cairn--engine-check-78f6c9
+  engine-check: series 'hello-over-budget': this run's estimate $5.00 would exceed the $1.00 cap ($0.00 spent, $0.00 reserved by in-flight runs). Raise the budget or start a new series.
+→ logs      cairn status run-flow-hello-cairn--engine-check-78f6c9 --logs   # leg engine-check
+→ findings  cairn status pl_592c6c850aec40a5 --results
+```
+
+`governance` declares `estimated_usd: 5` against `budget: {usd: 1}` on the series
+`hello-over-budget`. Before a flow leg starts its engine it reserves that estimate, and the
+reservation fails, so the engine is never handed the job. The figure is declared in the file
+and the flow is one `noop` stage, so this shows the refusal, not a measured price. The launch
+itself is admitted, so the audit trail has `leg.budget_refused` (`estimated_usd`, `budget_usd`)
+and no `pipeline.refused`, and the leg still has its failed run on the record. Raise
+`budget.usd` to 5 and the same leg runs.
 
 ### Triggers
 
@@ -193,7 +232,7 @@ start door to its legs, names where governance fires, and lists the proof for ea
 
 ### Seeded demo data
 
-`cairn dev --seed` and `cairn demo` seed three records of profile-and-publish
+`cairn setup --seed` and `cairn admin demo` seed three records of profile-and-publish
 (`cairn/core/demo_seed.py`). The seeder takes the steps from the loaded pipeline's plan, so
 each record carries every step in plan order (`redact`, `promote` and `audit` included):
 the published record has all of them done, the blocked one stops at `data-ok`, and the
@@ -204,7 +243,7 @@ waiting one stops at `review` with the later steps pending (#2608).
 ```
 pack.toml                         manifest (kind = domain): the docs corpus, the MCP server
 __init__.py                       the one-line shim the entry point targets
-pipelines/*.yaml                  the four pipelines (the runnable surface)
+pipelines/*.yaml                  the five pipelines (the runnable surface)
 flows/engine-check.yaml           data flow: one noop stage
 flows/summarise.yaml              data flow: noop + noop.slow
 flows/lora.yaml                   ml flow: train.lora
@@ -222,7 +261,7 @@ pyproject.toml                    builds the data wheel cairn-pack-hello
 ```
 
 Tests: `tests/examples/test_hello_cairn.py`, `tests/core/test_example_pipeline_governance.py`,
-`tests/cli/test_validate_example_pack.py`. The feature proof (ADR-0127 D1) runs all four pipelines
+`tests/cli/test_validate_example_pack.py`. The feature proof (ADR-0127 D1) runs every pipeline but `over-budget`
 on real servers in every storage × runtime × bus cell, plus the crash cells: `tests/e2e/hello`,
 driven by `scripts/oss/feature_proof.sh`, which writes `FEATURE_PROOF.md`. Its model is a keyless
 OpenAI-compatible stub, `tests/e2e/model_stub.py`.

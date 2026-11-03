@@ -146,7 +146,7 @@ async def seed_demo_workspace(
     result = SeedResult(workspace_id=workspace_id, enabled=[], completed_runs=[])
     if not found:
         logger.warning("no `cairn.seeds` provider is installed: the %r workspace is empty "
-                       "(see `cairn doctor`)", workspace_id)
+                       "(see `cairn setup --check`)", workspace_id)
         return result
     run_store = store or default_store()
     review_store = reviews if reviews is not None else build_review_store()

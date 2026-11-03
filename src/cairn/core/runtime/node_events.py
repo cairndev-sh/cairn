@@ -3,17 +3,18 @@
 A ``node`` event marks one completed graph node in the run's append-only log so
 the console/Pilot per-node trace can show progress + what each step produced.
 
-Two runtimes record these, and they must produce IDENTICAL payloads:
+Three runtimes record these using the same payload format:
 
   - **in-process** — the dispatcher's node sink (``_node_sink``) fires from the
     ``adrive`` streaming helper (``node_stream.py``) in the server process.
-  - **Temporal** — the ``run_node`` activity fires from the WORKER process,
-    which the in-process contextvar sink can't reach (#415). The activity
-    appends straight to the run/event store instead.
+  - **Temporal** — the worker wraps activity-backed graph nodes dispatched by
+    the LangGraph plugin, then appends events from the worker process (#415).
+  - **DBOS** — the workflow drives the graph through ``adrive`` on its
+    background loop and writes events through its node sink (#1865).
 
-This module owns the shared, size-capped payload builder so the two paths stay
-byte-identical. It depends on nothing but the stdlib, so both the dispatcher
-and the worker activity can import it without dragging in each other.
+This module owns the shared, size-capped payload builder so all three paths stay
+consistent. It depends on nothing but the stdlib, so the dispatcher and
+either worker runtime can import it without dragging in each other.
 """
 from __future__ import annotations
 
@@ -60,16 +61,37 @@ def bound_node_output(
     return summary
 
 
-def node_event_data(node_name: str, output: Any = None) -> dict[str, Any]:
-    """Build the ``node`` event payload: ``{"node", "state": "done", ["output"]}``.
+def node_event_data(
+    node_name: str,
+    output: Any = None,
+    *,
+    llm_cost_usd: float | None = None,
+    state: str = "done",
+) -> dict[str, Any]:
+    """Build the bounded ``node`` event payload and any measured LLM cost.
 
     ``output`` is the node's state-update delta; it's included (bounded) only when
-    non-empty, matching the in-process sink exactly."""
-    data: dict[str, Any] = {"node": node_name, "state": "done"}
+    non-empty. A supplied cost is included even when zero so zero-cost attempts
+    remain visible in the cumulative run total."""
+    data: dict[str, Any] = {"node": node_name, "state": state}
     summary = bound_node_output(output)
     if summary is not None:
         data["output"] = summary
+    if llm_cost_usd is not None:
+        data["llm_cost_usd"] = round(float(llm_cost_usd), 6)
     return data
 
 
-__all__ = ["bound_node_output", "node_event_data"]
+def llm_cost_from_node_events(events: list[Any]) -> float:
+    """Sum every measured node attempt, including loops and retries."""
+    total = 0.0
+    for event in events:
+        if getattr(event, "type", None) != "node":
+            continue
+        data = getattr(event, "data", None)
+        if isinstance(data, dict) and isinstance(data.get("llm_cost_usd"), (int, float)):
+            total += float(data["llm_cost_usd"])
+    return round(total, 6)
+
+
+__all__ = ["bound_node_output", "llm_cost_from_node_events", "node_event_data"]
