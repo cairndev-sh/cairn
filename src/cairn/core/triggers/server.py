@@ -727,7 +727,7 @@ def build_app(
         owner_probe=liveness.lock_free, self_owner_fn=liveness.self_owner,
         owner_reacquire_seconds=liveness.REACQUIRE_SECONDS,
         dead_leg_fn=_reconcile_dead_leg, pipeline_status_fn=_reconcile_pipeline_status,
-        cancel_fn=dispatcher.cancel,
+        cancel_fn=dispatcher.cancel, live_fn=dispatcher.has_live_task,
     )
 
     # Bus → skill bridge (ADR-0010 P3.c): activates skills from cross-pack bus
