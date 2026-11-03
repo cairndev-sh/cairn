@@ -21,7 +21,7 @@ first four share the series `hello`.
 | Pipeline | What it does | Legs | Gates | Budget |
 |---|---|---|---|---|
 | `hello-cairn/profile-and-publish` | Profile a small JSONL dataset, stop unless the profile passes, redact the summary, stage it, and publish it only after a person approves. | 9 | 1 data, 1 person | $1 |
-| `hello-cairn/tiny-finetune` | Fine-tune a small model with LoRA on CPU, gate on its held-out loss, tag it, and write its card only after a person approves. | 9 | 2 data, 1 person | $1 |
+| `hello-cairn/tiny-finetune` | Fine-tune a small model with LoRA on CPU, gate on the loss the trainer measures on the rows it held out, tag it, and write its card only after a person approves. | 8 | 2 data, 1 person | $1 |
 | `hello-cairn/ask-the-docs` | Answer a question from the example's own docs with retrieval, a model call and an MCP tool, check the answer's length, and have a person read it. | 3 | 1 person | $0.50 |
 | `hello-cairn/nightly-ops` | Check a secret, run a report on an SSH box, carry it through a flow, propose the follow-up to a person, and audit it. | 4 | — | $0.10 |
 | `hello-cairn/over-budget` | Declare an estimate above the budget and watch the flow leg's reservation refuse it before the engine starts. | 1 | — | $1 |

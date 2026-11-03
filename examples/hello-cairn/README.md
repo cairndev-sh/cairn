@@ -11,7 +11,7 @@ retrieval, a run hook, SSH, secrets, and an audit record.
 | `profile-and-publish` | data | Profile a dataset, stop unless the profile passes, redact the summary, run a flow, stage it, ask a person, tag it, publish it, audit it. |
 | `ask-the-docs` | agentic | Retrieve from the pack's docs, ask a model, measure the answer with a tool on the pack's own MCP server, remember it, check its length, ask a person. |
 | `nightly-ops` | operations | Check a secret, run a report on an SSH box, carry it through a flow, propose the follow-up to a person, audit it. Nightly once enabled; a run hook writes receipts. |
-| `tiny-finetune` | ml | Profile training rows, LoRA fine-tune a small model on CPU, gate on its held-out loss, tag it, ask a person, write its card. |
+| `tiny-finetune` | ml | Profile training rows, LoRA fine-tune a small model on CPU, gate on the loss over the rows it held out, tag it, ask a person, write its card. |
 | `over-budget` | data | Declare an estimate above the budget and watch the flow leg's reservation refuse it before the engine starts. No key, no spend. |
 
 ## Quickstart
@@ -151,7 +151,9 @@ cairn run hello-cairn/tiny-finetune -i base_model=Qwen/Qwen2.5-0.5B
 ```
 
 `base_model` defaults to the stand-in `sshleifer/tiny-gpt2` (seconds); Qwen2.5-0.5B trains
-in minutes. `loss-ok` stops the pipeline when the held-out loss is above `target_loss`;
+in minutes. `loss-ok` stops the pipeline when the held-out loss is above `target_loss`: the
+trainer holds out the last row in every eight (6 of the 48 rows in `data/train.jsonl`,
+all distinct from the 42 it trains on) and reports its loss over those rows only;
 `promote` and `review` each wait for a person.
 
 Until the train-local pack was merged (hello-cairn WP3), tiny-finetune was pending in two

@@ -111,6 +111,67 @@ def test_the_pipeline_declares_what_the_example_is_for(hello_pack):
     assert not any(t["enabled"] for t in d.triggers)   # declared, never armed by default
 
 
+# ── tiny-finetune's loss gate reads a loss over rows the adapter did not train on (#252) ──
+
+def _tiny_finetune_def():
+    return parse_pipeline_def((PACK_DIR / "pipelines" / "tiny-finetune.yaml").read_text(),
+                              pack="hello-cairn")
+
+
+def test_the_shipped_training_rows_are_distinct_so_no_held_out_row_is_also_a_training_row():
+    """The dataset had 10 distinct rows repeated to 48, so all 6 held-out rows also sat among
+    the 42 training rows. The trainer's split (`split_holdout`) is the one the stage uses."""
+    from operator_train_local import finetune as F
+
+    defaults = _tiny_finetune_def().inputs
+    dataset = PACK_DIR / "data" / "train.jsonl"
+    texts = F.load_texts(str(dataset), int(defaults["max_samples"]["default"]))
+    assert len(texts) == 48 and len(set(texts)) == len(texts)
+    train, held = F.split_holdout(texts)
+    assert (len(train), len(held)) == (42, 6)
+    assert not set(train) & set(held)
+
+
+def test_the_trainers_split_leaves_no_held_out_row_among_the_training_rows(tmp_path):
+    """The fixture the gate's figure rests on: distinct rows split into disjoint train and
+    held-out sets, the held-out rows being the last `len // 8`."""
+    from operator_train_local import finetune as F
+
+    rows = tmp_path / "rows.jsonl"
+    rows.write_text("".join(json.dumps({"text": f"row {n}"}) + "\n" for n in range(16)), encoding="utf-8")
+    texts = F.load_texts(str(rows), 16)
+    train, held = F.split_holdout(texts)
+    assert held == ["row 14", "row 15"] and train == texts[:14]
+    assert not set(train) & set(held)
+
+
+def test_the_loss_gate_reads_the_trainers_held_out_loss_and_nothing_scores_training_rows(hello_pack):
+    """`loss` is wired to the `train.lora` stage's own `eval_loss`, which `finetune()` computes
+    over the held-out rows only. The `eval` leg (train/eval-loss scores the first `max_samples`
+    rows with no split) is gone, so nothing in the pipeline scores rows the adapter trained on."""
+    from types import SimpleNamespace
+
+    from cairn.core.dispatch.pipeline_bridge import _flow_leg_output
+    from cairn.core.engine.expr import Scopes, resolve_value
+
+    d = _tiny_finetune_def()
+    steps = {s.id or s.gate: s for s in d.steps}
+    assert "eval" not in steps
+    assert not [s.id for s in d.steps if s.task == "train/eval-loss"]
+    loss = steps["loss"]
+    assert loss.depends_on == ["train"]
+    assert loss.inputs["value"] == "$steps.train.train_lora_eval_loss"
+    # that spelling resolves against the stats the runner reports for the flow leg
+    plan = {s.id: s for s in plan_pipeline(d).steps}
+    stats = {"train.lora.adapter_path": "/w/adapter", "train.lora.output": "/w/adapter",
+             "train.lora.train_loss": 3.2, "train.lora.eval_loss": 3.4}
+    out = _flow_leg_output(plan["train"], SimpleNamespace(ok=True, stats=stats))
+    gated = resolve_value(loss.inputs["value"], Scopes(state={}, steps={"train": out}), source="test")
+    assert gated == 3.4                      # the held-out figure, not train_loss
+    assert d.outputs["eval_loss"] == "train.train_lora_eval_loss"
+    assert "train.train_lora_eval_loss" in steps["review"].show
+
+
 # ── end to end through the launch door ──────────────────────────────────────
 
 async def _bridge():
