@@ -123,7 +123,7 @@ measured on: see [`benchmark/`](./benchmark/README.md).
 |---|---|
 | The untouched log, 23 rows, with `cairn admin audit verify` | verifies: exit 0 |
 | The untouched log against its own head, with `cairn admin lineage --expect-head` | matches: exit 0 |
-| The same, without `--json`, on a log with no lineage records | exit 1, because it has no lineage records, though the head matches |
+| The same, without `--json`, on a log with no lineage records | matches: exit 0 |
 | Changed who gave an approval, row 11 | detected: exit 2, row 11 (hash) |
 | Deleted that row | detected: exit 2, row 11 (prev_hash) |
 | Inserted a forged approval before it, correctly linked, so the row after the forgery breaks | detected: exit 2, row 12 (prev_hash) |
@@ -135,10 +135,10 @@ measured on: see [`benchmark/`](./benchmark/README.md).
 | Limit: changed row 1 and recomputed every hash in the file | NOT detected by the chain: exit 0. Detected only against a head saved outside the log (`--expect-head`): exit 2 |
 | Limit: rows written after a head was saved, then cut | NOT detected, even with that head: exit 0 |
 | Limit: a head saved earlier, on a log that has grown since | reported as a mismatch: exit 2. The saved head has to be the latest one |
-| Limit: cut the last 3 rows, with `--expect-head` given an empty or blank value | NOT detected: exit 0. The check compares nothing |
-| Limit: cut the last 3 rows and tried values in the new last row until its hash began with the first 4 characters of the saved head | NOT detected with that prefix: exit 0. With the full saved head: exit 2 |
+| Cut the last 3 rows, with `--expect-head` given an empty or blank value | refused, nothing compared: exit 2 |
+| Cut the last 3 rows and tried values in the new last row until its hash began with the first 4 characters of the saved head | a prefix that short is refused: exit 2. With the full saved head: exit 2 |
 
-cairndev 0.4.0, `uv.lock` `2f3a08bed7ab`, Linux x86_64 with 4 CPUs and Python 3.13.13, 2026-11-02.
+cairndev 0.4.0, `uv.lock` `2f3a08bed7ab`, Linux x86_64 with 4 CPUs and Python 3.13.13, 2026-11-03.
 
 **What happens when the server is killed** ([reproduce](./benchmark/crash_matrix.py))
 
@@ -318,6 +318,7 @@ The same governed core is driven from two places in this repository:
 | [Architecture](./docs/architecture/00-overview.md) | Engine, packs, profiles, request lifecycle |
 | [Write a pipeline](https://docs.cairndev.sh/guides/write-a-pipeline/) · [Capabilities and operators](https://docs.cairndev.sh/concepts/capabilities/) | Packs, and how operators pick up a provider |
 | [Gates and approvals](https://docs.cairndev.sh/concepts/gates/) · [Cost and budgets](https://docs.cairndev.sh/concepts/cost/) | Policies, HITL gates, budget, audit |
+| [Gate CI on a check](https://docs.cairndev.sh/guides/gate-ci/) | Fail a pull request on a bad dataset with `cairn run --check` |
 | [Pipelines](https://docs.cairndev.sh/concepts/pipelines/) | Chain governed workflows with gates and events |
 | [Install and deploy](https://docs.cairndev.sh/install/) | Install, Docker Compose, Helm, sign-in |
 | [Operators catalog](https://docs.cairndev.sh/reference/operators/) | Every shipped operator, by domain |
