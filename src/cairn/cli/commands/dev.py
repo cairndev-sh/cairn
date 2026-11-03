@@ -1,4 +1,4 @@
-"""``cairn dev`` — the one-command sqlite dev environment (#1188, ADR-0085 D5).
+"""``cairn setup``'s local engine — the one-command sqlite dev environment (#1188, ADR-0085 D5).
 
 The 15-minute-quickstart entrypoint: starts the engine on a pinned, hermetic
 dev configuration and (unless ``--engine-only``) the console's vite dev server
@@ -30,12 +30,9 @@ from typing import Optional
 
 import typer
 
-from cairn.cli.aliases import renamed
 from cairn.core import settings as _settings
 
 # ADR-0085 D5
-app = typer.Typer(help="One-command sqlite dev environment.", no_args_is_help=False)
-
 #: Every knob the repo .env could otherwise inject into a dev session. Pinned
 #: explicitly (set-but-empty = "use the built-in default"; every getter treats
 #: "" as unset) so the dev env is identical on every machine.
@@ -123,21 +120,6 @@ def _seed(env: dict[str, str]) -> None:
         typer.secho("seed failed — continuing without demo data.", fg=typer.colors.YELLOW)
 
 
-@app.callback(invoke_without_command=True)
-@renamed("cairn dev", "cairn setup --foreground")
-def dev_cmd(
-    port: int = typer.Option(8000, "--port", help="Engine port (vite proxies to it)."),
-    engine_only: bool = typer.Option(False, "--engine-only", help="Start only the engine."),
-    web_only: bool = typer.Option(False, "--web-only", help="Start only the console dev server."),
-    db: Optional[str] = typer.Option(None, "--db", help="Sqlite path (default ~/.cairn/dev.db)."),
-    seed: bool = typer.Option(
-        False, "--seed",
-        # #1189
-        help="Seed deterministic demo data first — every surface non-empty on first paint.",
-    ),
-) -> None:
-    """Start the engine + console on a pinned sqlite dev config. Ctrl-C stops both."""
-    run_attached(port=port, engine_only=engine_only, web_only=web_only, db=db, seed=seed, example_pack=True)
 
 
 def run_attached(*, port: int, engine_only: bool, web_only: bool, db: Optional[str], seed: bool,

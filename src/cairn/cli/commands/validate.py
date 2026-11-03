@@ -163,7 +163,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     default_dev_profile()
     parser = argparse.ArgumentParser(
-        prog="cairn validate",
+        prog="cairn pack check",
         description="Validate templates / skills / policies offline (no LLM, no backend).",
     )
     parser.add_argument("paths", nargs="+", help="Files or directories to validate.")

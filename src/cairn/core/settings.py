@@ -1295,7 +1295,7 @@ INVENTORY: list[SettingSpec] = [
     SettingSpec(
         "remote_endpoint", "CAIRN_REMOTE_ENDPOINT", None, "cli",
         "Control-plane URL the CLI/app client talks to; unset → in-process "
-        "(cairn remote falls back to http://localhost:9090).",
+        "(the CLI falls back to http://localhost:9090).",
     ),
     SettingSpec(
         "remote_token", "CAIRN_REMOTE_TOKEN", None, "cli",
@@ -1303,7 +1303,7 @@ INVENTORY: list[SettingSpec] = [
     ),
     SettingSpec(
         "config_home", "CAIRN_CONFIG_HOME", "~/.cairn", "cli",
-        "Directory holding the CLI's config.toml (cairn remote profiles).",
+        "Directory holding the CLI's config.toml (its connection profiles).",
     ),
 ]
 

@@ -1,4 +1,4 @@
-"""``cairn pipeline`` — inspect a pack's runnable surface (#1126, ADR-0084 D9).
+"""What ``cairn pack ls`` and ``cairn pack show`` run — inspect a pack's runnable surface (#1126, ADR-0084 D9).
 
 A pipeline composes a pack's own flows into one entity; each step is a leg that
 becomes its own governed run. ``show`` answers "what will this do, and on which
@@ -32,15 +32,9 @@ import json
 import typer
 from rich.console import Console
 
-from cairn.cli.aliases import renamed
 from cairn.core.engine.pipeline import PipelineDef, plan_pipeline
 from cairn.core.engine.pipeline_resolve import PIPELINE_PREFIX, all_pipeline_defs, resolve_pipeline_ref
 
-# ADR-0084 D4
-app = typer.Typer(
-    help="Inspect pack pipelines — the composed, runnable surface.",
-    no_args_is_help=True,
-)
 console = Console()
 
 #: Which runtime executes each leg kind — the point of the whole design, so the
@@ -217,8 +211,6 @@ def show_cmd(
 
 
 # #1792; the RESOLVED block: #2134 S4; --preset refusals: #231
-@app.command("explain", hidden=True)
-@renamed("cairn pipeline explain", "cairn run --dry-run")
 def explain_cmd(
     ref: str = typer.Argument(..., help="<pack>/<name> or pipeline:<pack>/<name>"),
     input_: list[str] = typer.Option(
@@ -298,179 +290,10 @@ def explain_cmd(
 _TERMINAL = ("done", "failed", "cancelled")
 
 
-async def _drive_until_terminal(bridge, pipeline_id: str, *, poll_s: float = 2.0):
-    """#1702 — keep the launching bridge ALIVE and report leg transitions until
-    the pipeline terminates. Returns the final record.
-
-    Under the in-process runtime the launching process's bridge is the ONLY
-    thing driving the pipeline: `launch_pipeline` returns as soon as the first
-    leg is submitted, so stopping the bridge there abandons the record at
-    `status=running` with no executor behind it — exit 0, looks like success,
-    and manufactures exactly the orphan class the reconciler never reaps
-    (#1670). Observed live 2026-08-26 (`pl_61ac889bd661477a`, 13 minutes of
-    nothing); the identical launch under a kept-alive bridge worked first try.
-    """
-    import asyncio
-
-    last: dict[str, str] = {}
-    while True:
-        rec = await bridge.store.get(pipeline_id)
-        if rec is None:
-            return None
-        for sid, st in rec.step_state.items():
-            if last.get(sid) != st.status:
-                last[sid] = st.status
-                console.print(f"  [dim]leg[/dim] {sid:24s} → {st.status}"
-                              + (f"  [dim]{st.run_id}[/dim]" if st.run_id else ""))
-        if rec.status in _TERMINAL:
-            return rec
-        # #260 — a person's wait has nobody to answer it here: this process has no prompt and no
-        # server, so polling on would never end.
-        if rec.status == "paused" and any(
-                st.status in ("awaiting_approval", "awaiting_advance") for st in rec.step_state.values()):
-            return rec
-        await asyncio.sleep(poll_s)
 
 
 # ref resolution: ADR-0106 D1 (#2134); the dev loop needs no pipeline: ADR-0106 D6;
 # the CLI owns the pipeline it launched: #1702
-@app.command("run", hidden=True)
-@renamed("cairn pipeline run", "cairn run")
-def run_pipeline(
-    ref: str = typer.Argument(
-        ..., help="`<pack>/<name>` or `pipeline:<pack>/<name>` — a declared pipeline; "
-                  "bare flow refs are refused. A pipeline wins at a shared ref"),
-    input_: list[str] = typer.Option(
-        None, "--input", "-i", help="`key=value` (JSON parsed when possible); repeatable"),
-    environment: str = typer.Option("", "--environment", "-e", help="environment to run in"),
-    detach: bool = typer.Option(
-        False, "--detach", help="Launch and exit without waiting. Under the in-process "
-        "runtime this leaves the pipeline UNOWNED (nothing drives its legs) — exit 2."),
-) -> None:
-    """Launch a pipeline and drive it.
-
-    The same door the console uses, so a run started here and one started from
-    the UI are the same governed object. ``ref`` is resolved the way ``POST
-    /start`` resolves it, which means: a declared pipeline runs, a bare FLOW
-    ref is refused with the one-leg wrapper to add, and a pipeline WINS over a
-    flow at the same ref. ``cairn run`` keeps the flow-shaped surface — its
-    inputs and the dev-loop flags, which need no pipeline at all.
-
-    The difference from the console is ownership: its caller is a
-    long-lived server; this process is the pipeline's owner only for as long as
-    it lives. So by default the CLI STAYS: bridge up, leg transitions printed,
-    exit code from the pipeline's own terminal state. ``--detach`` restores
-    fire-and-forget — a fine thing under the Temporal runtime (the workflow
-    owns the pipeline), and an explicit, loudly-flagged abandonment under the
-    in-process one.
-    """
-    from cairn.profiles import default_dev_profile  # noqa: PLC0415 — #2241 D: local compiles get local-dev
-
-    default_dev_profile()
-    import asyncio
-    import json
-
-    from cairn.core import liveness, settings
-    from cairn.core.dispatch.dispatcher import RunDispatcher
-    from cairn.core.dispatch.pipeline_bridge import PipelineBridge
-    from cairn.core.engine.runner import Runner
-    from cairn.core.storage import build_storage
-    from cairn.core.dispatch.pipeline_launch import (
-        MissingInputsError, PipelineNotFoundError, launch_pipeline,
-    )
-    from cairn.core.dispatch.start import (
-        FlowNotRunnableError, UnknownStartRefError, resolve_start_ref,
-    )
-    from cairn.core.engine.pipeline_resolve import AmbiguousRefError
-
-    inputs: dict = {}
-    for pair in input_ or []:
-        key, _, raw = pair.partition("=")
-        if not key or not _:
-            console.print(f"[red]--input must be key=value, got {pair!r}[/red]")
-            raise typer.Exit(2)
-        try:
-            inputs[key] = json.loads(raw)
-        except ValueError:
-            inputs[key] = raw            # a bare string is the common case
-
-    async def _go():
-        # Resolved INSIDE, so an unknown ref or a bare flow ref lands in the
-        # same except-block that renders every other launch refusal.
-        _kind, bare = resolve_start_ref(ref)
-        dispatcher = RunDispatcher(Runner(), backend=build_storage())
-        bridge = PipelineBridge(dispatcher)
-        # ADR-0125 D2 — this process runs in-process legs, so it holds an owner
-        # lock for its life, as the server does: a server next to it can tell
-        # its legs are alive, and it can tell the server's are.
-        await liveness.start_process_owner(dispatcher.store)
-        await bridge.start()
-        try:
-            rec = await launch_pipeline(
-                f"pipeline:{bare}", inputs=inputs, bridge=bridge,
-                environment=environment or None, trigger={"source": "cli"},
-            )
-            console.print(f"[green]launched[/green] {ref}  →  [bold]{rec.pipeline_id}[/bold]")
-            console.print(f"  status: {rec.status}   legs: {len(rec.step_state)}")
-            if detach or rec.status in _TERMINAL:
-                return rec
-            # #1702 — the whole fix: the bridge stays up until the pipeline no
-            # longer needs an owner, instead of dying in a `finally` millis
-            # after the first leg submits.
-            return await _drive_until_terminal(bridge, rec.pipeline_id)
-        finally:
-            bridge.stop()
-            await liveness.stop_process_owner()
-
-    from cairn.core.policy.pipeline_gates import PolicyDeniedError  # noqa: PLC0415 - cycle: policy → engine
-    from cairn.core.admission_door import AdmissionRefusedError  # noqa: PLC0415 — same
-
-    try:
-        rec = asyncio.run(_go())
-    except FlowNotRunnableError as e:
-        # ADR-0106 D1 — the ref names a component. Exit 2 (a refusal of the
-        # request, not a failure of the launch), with the remedy in the message.
-        console.print(f"[red]{e}[/red]")
-        raise typer.Exit(2) from e
-    except (PipelineNotFoundError, AmbiguousRefError, MissingInputsError,
-            UnknownStartRefError, NotImplementedError) as e:
-        console.print(f"[red]{e}[/red]")
-        raise typer.Exit(1) from e
-    except PolicyDeniedError as e:  # #1252 — the environment refused the launch
-        console.print(f"[red]{e}[/red]")
-        raise typer.Exit(3) from e
-    except AdmissionRefusedError as e:  # #2190 — the admission door refused
-        console.print(f"[red]{e}[/red]")
-        raise typer.Exit(3) from e
-    except KeyboardInterrupt:
-        # The bridge died with this process; say so instead of pretending.
-        console.print("[yellow]interrupted — the pipeline record survives, but under the "
-                      "in-process runtime nothing is driving it now. A server restart "
-                      "re-adopts ownership (not execution) of in-flight records.[/yellow]")
-        raise typer.Exit(130) from None
-
-    if detach and rec.status not in _TERMINAL and settings.runtime() != "temporal":
-        # #1702 fix-direction 3: never exit 0 after abandoning a pipeline.
-        console.print(f"[yellow]detached — {rec.pipeline_id} is UNOWNED under the "
-                      f"in-process runtime: its legs will not advance. Drive it from a "
-                      f"server, or rerun without --detach.[/yellow]")
-        raise typer.Exit(2)
-
-    waiting = ", ".join(s for s, st in rec.step_state.items()
-                        if st.status in ("awaiting_approval", "awaiting_advance"))
-    if rec.status == "paused" and waiting:  # #260
-        console.print(f"[yellow]paused at {waiting}: this command has no way to ask you. The record is "
-                      f"kept. To answer gates at a prompt, run it with `cairn run {ref}`.[/yellow]",
-                      soft_wrap=True)
-        raise typer.Exit(2)
-    console.print(f"  final: [bold]{rec.status}[/bold]"
-                  + (f"   [red]{rec.trigger.get('failure_reason', '')}[/red]"
-                     if rec.status == "failed" else ""))
-    console.print(f"  inspect: [dim]cairn pack show {ref}[/dim]")
-    if rec.status == "failed":
-        raise typer.Exit(1)
-    if rec.status == "cancelled":
-        raise typer.Exit(1)
 
 
 # #2527
@@ -634,10 +457,3 @@ def backfill_cmd(
                 console.print(f"    [dim]{run_id}[/]")
     if not apply and rep.wrapped:
         console.print("  [dim]re-run with --apply to write them[/]")
-
-
-# The commands above are `cairn pack`'s and `cairn admin`'s now; these names are their aliases.
-app.command("ls", hidden=True)(renamed("cairn pipeline ls", "cairn pack ls --pipelines")(ls_cmd))
-app.command("show", hidden=True)(renamed("cairn pipeline show", "cairn pack show")(show_cmd))
-app.command("respell-packs", hidden=True)(renamed("cairn pipeline respell-packs", "cairn admin respell-packs")(respell_packs_cmd))
-app.command("backfill", hidden=True)(renamed("cairn pipeline backfill", "cairn admin backfill")(backfill_cmd))

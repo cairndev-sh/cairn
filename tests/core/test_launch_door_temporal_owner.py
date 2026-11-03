@@ -2,7 +2,7 @@
 plan the Temporal pipeline owner would start and not finish: a ``task:`` leg (the
 owner's SUBMIT routes only flow legs to an engine and everything else to
 ``run_template``, #59) and a ``finalizer:`` step (the workflow schedules by
-``depends_on`` only). Before any record exists, as a refused launch (403 / exit 3).
+``depends_on`` only). Before any record exists, as a refused launch (403).
 
 The refusal reads the owner's own declaration
 (``cairn.core.runtime.temporal.PIPELINE_OWNER_*``), so it lifts when the owner learns
@@ -91,7 +91,7 @@ async def test_temporal_refuses_a_task_leg_before_any_record(installed, monkeypa
     msg = str(e.value)
     assert "'check'" in msg and "task:" in msg and "monitor/threshold" in msg
     assert "CAIRN_RUNTIME=inprocess" in msg and "CAIRN_RUNTIME=dbos" in msg
-    assert isinstance(e.value, PolicyDeniedError)  # every surface answers it 403 / exit 3
+    assert isinstance(e.value, PolicyDeniedError)  # every surface answers it 403
     assert bridge.calls == []
 
 
@@ -161,22 +161,32 @@ def test_both_http_doors_answer_403(installed, monkeypatch, path, body):
     assert bridge.calls == []
 
 
-def test_the_cli_exits_3(installed, monkeypatch, tmp_path):
-    from cairn.cli.commands import pipeline as cli_pipeline
-    from cairn.core.dispatch import pipeline_bridge as PB
+def _cli_run(monkeypatch, tmp_path, bridge):
+    """``cairn run`` against the launch door's own routes, in this process."""
+    from cairn_client import CairnClient
+    from fastapi.testclient import TestClient
 
+    from cairn.cli.commands import remote
+    from cairn.cli.main import app as cairn
+
+    for k in ("OBS_REMOTE_ENDPOINT", "OBS_REMOTE_TOKEN", "CAIRN_REMOTE_ENDPOINT", "CAIRN_REMOTE_TOKEN",
+              "OBS_REQUIRE_AUTH", "CAIRN_REQUIRE_AUTH"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("CAIRN_CONFIG_HOME", str(tmp_path / "cfg"))
     monkeypatch.setenv("OBS_STORAGE", f"sqlite://{tmp_path / 'cli.db'}")
     monkeypatch.setenv("OBS_RUN_DB", str(tmp_path / "runs.db"))
     monkeypatch.setenv("CAIRN_RUNTIME", "temporal")
-    started = []
+    served = _app(bridge)
+    monkeypatch.setattr(remote, "_api", lambda ep, tok, *, timeout=30.0: CairnClient(
+        "http://testserver", token=tok, timeout=timeout, transport=TestClient(served)._transport))
+    return CliRunner().invoke(cairn, ["run", "pipeline:ownerpack/with-task", "--endpoint", "http://testserver"])
 
-    async def _never_start(self, plan, **kw):  # pragma: no cover — must not be reached
-        started.append(plan)
 
-    monkeypatch.setattr(PB.PipelineBridge, "start_pipeline", _never_start)
-    r = CliRunner().invoke(cli_pipeline.app, ["run", "pipeline:ownerpack/with-task"])
-    assert r.exit_code == 3, r.output
-    assert "monitor/threshold" in r.output and started == []
+def test_the_cli_reports_the_refusal_and_starts_nothing(installed, monkeypatch, tmp_path):
+    bridge = _Bridge()
+    r = _cli_run(monkeypatch, tmp_path, bridge)
+    assert r.exit_code != 0, r.output
+    assert "monitor/threshold" in r.output and bridge.calls == []
 
 
 async def test_explain_reports_the_refusal_by_the_doors_function(installed, monkeypatch):

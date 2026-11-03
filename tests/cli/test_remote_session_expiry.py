@@ -1,8 +1,8 @@
-"""#230 — a `cairn remote` session the server refuses ends in one line and exit 77.
+"""#230 — a CLI session the server refuses ends in one line and exit 77.
 
 The qualification run's failure: the CLI token expired mid-run and a watch went quiet.
 Now any verb that meets a 401 with a session prints `session expired at HH:MM — run
-cairn remote login` (or `session refused by the server (401)` for an unexpired token)
+cairn setup` (or `session refused by the server (401)` for an unexpired token)
 and exits 77, watches and the end-of-stream status check included. The CLI does not
 renew its sign-in (ADR-0142 D8). The profile file is written 0600.
 
@@ -23,6 +23,7 @@ import pytest  # noqa: E402
 from typer.testing import CliRunner  # noqa: E402
 
 from cairn.cli.commands import remote  # noqa: E402
+from cairn.cli.main import app as cairn  # noqa: E402
 
 cli = CliRunner()
 SECRET = "test-secret-long-enough-for-hs256-abc"
@@ -39,6 +40,7 @@ def app(tmp_path, monkeypatch):
     from cairn.core import account as A
     from cairn.core import refresh_tokens as RT
     from cairn.core import workspace as _ws
+    from cairn.core.storage import pipeline_store as PS
     from cairn.core.triggers import auth
     from cairn.core.triggers.server import build_app
 
@@ -55,6 +57,7 @@ def app(tmp_path, monkeypatch):
     monkeypatch.setattr(_ws, "_store", _ws.SqliteWorkspaceStore(path=str(tmp_path / "w.db")))
     monkeypatch.setattr(RT, "_default_store", RT.SqliteRefreshTokenStore(path=str(tmp_path / "rt.db")))
     monkeypatch.setattr(auth, "_login_failures", {})
+    monkeypatch.setattr(PS, "_default_store", PS.InMemoryPipelineStore())  # `cairn status` lists pipelines
 
     class FakeRunner:
         default_environment = "production"
@@ -87,7 +90,7 @@ def _expired_token(minutes_ago: int = 5) -> str:
 
 
 def _login() -> dict:
-    res = cli.invoke(remote.app, ["login", "-u", "admin", "-p", "pw", "-e", "http://testserver"])
+    res = cli.invoke(cairn, ["setup", "--server", "http://testserver", "-u", "admin", "--password", "pw"])
     assert res.exit_code == 0, res.output
     return remote._load_config()["profiles"]["default"]
 
@@ -107,14 +110,14 @@ def test_login_writes_only_the_access_token_to_a_private_file(app):
     prof = _login()
     assert prof["token"] and set(prof) == {"endpoint", "token"}  # no refresh credential
     assert stat.S_IMODE(os.stat(remote._config_path()).st_mode) == 0o600
-    assert cli.invoke(remote.app, ["ps"]).exit_code == 0
+    assert cli.invoke(cairn, ["status"]).exit_code == 0
 
 
 def test_an_expired_session_says_so_and_exits_77(app):
     _login()
     stale = _expired_token(minutes_ago=7)
     _set_token(stale)
-    res = cli.invoke(remote.app, ["ps"])
+    res = cli.invoke(cairn, ["status"])
     assert res.exit_code == remote.EXIT_SESSION_EXPIRED == 77
     assert _expired_line(stale) in res.output
     assert stale not in res.output
@@ -123,26 +126,26 @@ def test_an_expired_session_says_so_and_exits_77(app):
 def test_findings_ends_the_same_way(app):
     _login()
     _set_token(_expired_token())
-    res = cli.invoke(remote.app, ["findings", "pl_x"])
+    res = cli.invoke(cairn, ["status", "pl_x", "--results"])
     assert res.exit_code == 77, res.output
     assert "run `cairn setup`" in res.output
 
 
 def test_an_explicit_expired_token_exits_77(app):
     _login()
-    res = cli.invoke(remote.app, ["ps", "--token", _expired_token()])
+    res = cli.invoke(cairn, ["status", "--token", _expired_token()])
     assert res.exit_code == 77, res.output
 
 
 def test_a_refused_unexpired_token_is_named_as_refused(app):
     _login()
-    res = cli.invoke(remote.app, ["ps", "--token", "not.a-real.token"])
+    res = cli.invoke(cairn, ["status", "--token", "not.a-real.token"])
     assert res.exit_code == 77, res.output
     assert "session refused by the server (401)" in res.output
 
 
 def test_no_session_at_all_keeps_the_plain_401_and_exit_1(app):
-    res = cli.invoke(remote.app, ["ps", "-e", "http://testserver"])
+    res = cli.invoke(cairn, ["status", "--endpoint", "http://testserver"])
     assert res.exit_code == 1, res.output
     assert "401 Unauthorized — run `cairn setup`" in res.output
 
@@ -151,13 +154,13 @@ def test_logs_follow_ends_loudly_when_the_stream_is_refused(app):
     _login()
     stale = _expired_token()
     _set_token(stale)
-    res = cli.invoke(remote.app, ["logs", "run_x", "--follow"])
+    res = cli.invoke(cairn, ["status", "run_x", "--logs", "--follow"])
     assert res.exit_code == 77, res.output
     assert _expired_line(stale) in res.output
 
 
-def test_launch_watch_ends_loudly_mid_poll_with_how_to_reattach(tmp_path, monkeypatch):
-    """`launch --watch` polls `GET /pipelines/{id}`; a 401 mid-watch prints the expiry
+def test_following_a_pipeline_ends_loudly_mid_poll_with_how_to_reattach(tmp_path, monkeypatch):
+    """`cairn run` polls `GET /pipelines/{id}`; a 401 mid-follow prints the expiry
     and how to re-attach (the pipeline keeps running) and exits 77, never silently."""
     from cairn_client import CairnAPIError
 
@@ -238,7 +241,7 @@ def _offline(monkeypatch, sse_code, script):
     monkeypatch.setattr(remote, "_api", lambda ep, tok, timeout=30.0: _RunClient(script))
 
 
-def test_approve_watch_ends_loudly_when_the_stream_is_refused(monkeypatch):
+def test_following_a_run_ends_loudly_when_the_stream_is_refused(monkeypatch):
     import typer
 
     _offline(monkeypatch, 401, [])

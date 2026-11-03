@@ -3,6 +3,14 @@
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+
+### Upgrade notes
+- **The old command names are gone, as 0.4 warned.** `cairn dev`, `doctor`, `gate`, `preflight`, `replay`, `ls`, `validate`, `export`, `test`, `lock`, `visualize`, `lineage`, `init`, `audit`, `compute`, `config`, `connect`, `demo`, `deploy`, `worker`, `flow`, `pipeline` and `remote` run nothing now. Each says its new name on stderr and exits 2, so a script still using one fails where it used to warn. `cairn --help` and the CLI reference have the new names.
+- **Approval notifications and failure messages name the new commands.** Anything that matches their text sees `cairn decide <id> approve --step <step>` and `cairn status <id> --results`.
+
+### Removed
+- The old command names, after their one minor version of warning (ADR-0165 D12). (#415)
+
 ### Added
 - The example pack's `over-budget` pipeline shows a budget refusing a run before its engine starts, with no key and no spend, and `cairn run` now prints why a leg failed (#368).
 - The failing and warning rows of `cairn setup --check` now end with `— fix:` and the command or setting that resolves it, on the same line, so the failures `cairn setup` prints carry it too. Rows that read `unset (optional)` are unchanged.

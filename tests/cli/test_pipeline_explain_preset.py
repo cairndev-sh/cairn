@@ -1,4 +1,4 @@
-"""#231 — `cairn pipeline explain` and `cairn pipeline show --plan` take `--preset`.
+"""#231 — `cairn run --dry-run` and `cairn pack show --plan` take `--preset`.
 
 They resolve it the way the launch door does: the same lookup (a saved preset, else
 the pack's), the same refusal for a key the pipeline no longer declares, and the same
@@ -18,7 +18,7 @@ os.environ.setdefault("OPENAI_API_KEY", "sk-test-dummy")
 import pytest  # noqa: E402
 from typer.testing import CliRunner  # noqa: E402
 
-from cairn.cli.commands import pipeline  # noqa: E402
+from cairn.cli.main import app  # noqa: E402
 
 _PIPELINE = """\
 name: tune
@@ -59,7 +59,7 @@ def tune_pack(dev_packs, scratch_pack, monkeypatch):
 
 
 def _explain(*args: str) -> dict:
-    res = CliRunner().invoke(pipeline.app, ["explain", "scratch-tune/tune", "--json", *args])
+    res = CliRunner().invoke(app, ["run", "--dry-run", "scratch-tune/tune", "--json", *args])
     assert res.exit_code == 0, res.output
     return json.loads(res.stdout)
 
@@ -76,7 +76,7 @@ def test_explain_resolves_a_pack_preset_and_shows_each_layer(tune_pack):
 
 
 def test_explain_text_marks_the_preset_layer(tune_pack):
-    res = CliRunner().invoke(pipeline.app, ["explain", "scratch-tune/tune", "--preset", "small"])
+    res = CliRunner().invoke(app, ["run", "--dry-run", "scratch-tune/tune", "--preset", "small"])
     assert res.exit_code == 0, res.output
     assert "← preset 'small'" in res.output
     assert "cairn run scratch-tune/tune --preset small" in res.output
@@ -117,20 +117,20 @@ def test_explain_shows_the_inputs_the_launch_uses(tune_pack, monkeypatch):
 
 
 def test_explain_refuses_an_unknown_preset_naming_what_exists(tune_pack):
-    res = CliRunner().invoke(pipeline.app, ["explain", "scratch-tune/tune", "--preset", "nope"])
+    res = CliRunner().invoke(app, ["run", "--dry-run", "scratch-tune/tune", "--preset", "nope"])
     assert res.exit_code == 2
     assert "no preset 'nope'" in res.output and "small" in res.output
 
 
 def test_explain_refuses_a_stale_preset_key_as_the_launch_does(tune_pack):
-    res = CliRunner().invoke(pipeline.app, ["explain", "scratch-tune/tune", "--preset", "stale"])
+    res = CliRunner().invoke(app, ["run", "--dry-run", "scratch-tune/tune", "--preset", "stale"])
     assert res.exit_code == 2
     assert "warmup" in res.output
 
 
 def test_show_plan_takes_the_preset_and_input_layers(tune_pack):
-    res = CliRunner().invoke(pipeline.app, ["show", "scratch-tune/tune", "--plan",
-                                            "--preset", "small", "-i", 'lr="3e-4"'])
+    res = CliRunner().invoke(app, ["pack", "show", "scratch-tune/tune", "--plan",
+                                     "--preset", "small", "-i", 'lr="3e-4"'])
     assert res.exit_code == 0, res.output
     lines = res.output.splitlines()
     assert any("model" in ln and "qwen3-4b" in ln and "← preset 'small'" in ln for ln in lines)
@@ -139,6 +139,6 @@ def test_show_plan_takes_the_preset_and_input_layers(tune_pack):
 
 
 def test_show_refuses_a_preset_without_plan(tune_pack):
-    res = CliRunner().invoke(pipeline.app, ["show", "scratch-tune/tune", "--preset", "small"])
+    res = CliRunner().invoke(app, ["pack", "show", "scratch-tune/tune", "--preset", "small"])
     assert res.exit_code == 2
     assert "--plan" in res.output

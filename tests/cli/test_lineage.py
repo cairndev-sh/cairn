@@ -1,8 +1,8 @@
-"""``cairn lineage`` — read the provenance record(s) back from the audit chain (#146).
+"""``cairn admin lineage`` — read the provenance record(s) back from the audit chain (#146).
 
 End-to-end against the REAL writer: we write a ``lineage.record`` row with the
 ``audit/store`` operator (the same node ``run-lineage-audit`` uses), then read it
-with ``cairn lineage``. This proves the reader's hash-chain verification matches
+with ``cairn admin lineage``. This proves the reader's hash-chain verification matches
 the writer's canonicalization — and that tampering is detected.
 """
 from __future__ import annotations
@@ -64,7 +64,7 @@ async def test_lineage_detail_for_model(tmp_path, capsys, monkeypatch):
     # the eval dict is rendered generically as k=v pairs
     assert "dataset_verdict=pass" in out and "model_verdict=warn" in out
     assert "approver=alice" in out
-    assert "cairn replay run-xyz-999" in out      # replayable from the record
+    assert "cairn status run-xyz-999 --replay" in out      # replayable from the record
 
 
 async def test_lineage_json_and_chain_ok(tmp_path, capsys, monkeypatch):
@@ -167,7 +167,7 @@ async def test_generic_non_model_record(tmp_path, capsys, monkeypatch):
     assert "INC-4521" in out
     assert "source=pagerduty" in out          # rendered generically, no model assumptions
     assert "action=rollback" in out and "approver=bob" in out
-    assert "cairn replay run-inc-1" in out
+    assert "cairn status run-inc-1 --replay" in out
 
 
 def test_missing_log(tmp_path, capsys, monkeypatch):
@@ -188,7 +188,7 @@ def test_missing_log_without_the_writer_says_lineage_is_not_installed(tmp_path, 
     assert rc == 1
     assert "written by the platform's lineage operator" in err
     assert "this install does not have" in err
-    assert "GET /runs/{id}/lineage" in err and "cairn remote status <run>" in err
+    assert "GET /runs/{id}/lineage" in err and "cairn status <run>" in err
     assert "no audit log" not in err and "CAIRN_AUDIT_LOG" not in err
 
 

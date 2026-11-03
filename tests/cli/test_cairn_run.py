@@ -1,20 +1,17 @@
-"""ADR-0165 D3, D12 — `cairn run` is the one door that starts work, and the old names still work.
+"""ADR-0165 D3 — `cairn run` is the one door that starts work.
 
 The HTTP seam is a stub: what's under test is which door each form takes, what it follows and what
 it prints. The door itself is pinned in ``test_run_one_leg_pipeline.py``.
 """
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import json
 import os
-from types import SimpleNamespace
 
 os.environ.setdefault("OPENAI_API_KEY", "sk-test-dummy")
 
 import pytest
-from typer.main import get_command
 from typer.testing import CliRunner
 
 from cairn.cli.commands import pipeline as pipeline_cli
@@ -360,38 +357,3 @@ def test_skill_goes_to_the_skill_door(monkeypatch):
     assert r.exit_code == 0, r.output
     assert seen["skill"] == "triage" and seen["payload"] == {"a": 1}
     assert seen["follow"] is False and seen["service"] == "api"
-
-
-# ── the old names (ADR-0165 D12) ─────────────────────────────────────────────────────────────
-
-@pytest.mark.parametrize("old, new", [
-    (["pipeline", "run"], "cairn run"),
-    (["pipeline", "explain"], "cairn run --dry-run"),
-    (["remote", "launch"], "cairn run"),
-    (["remote", "submit"], "cairn run --skill"),
-    (["preflight"], "cairn run --dry-run"),
-    (["gate"], "cairn run --check"),
-])
-def test_an_old_name_warns_on_stderr_and_is_hidden(old, new):
-    command = get_command(app)
-    for name in old:
-        command = command.commands[name]
-    assert command.hidden
-    # any exit is fine (these have no server or no such ref): the warning comes first and on stderr
-    r = cli.invoke(app, [*old, "nope/nope"], env={"CAIRN_REMOTE_ENDPOINT": "http://127.0.0.1:9"})
-    assert f"is now `{new}" in " ".join(r.stderr.split()), r.output
-    assert "is now" not in r.stdout
-
-
-def test_a_gated_pipeline_run_stops_at_the_pause_instead_of_polling_forever():
-    """#260: `cairn pipeline run` has no prompt and no server, so a person's wait ends the command."""
-    reads = []
-
-    async def get(pipeline_id):
-        reads.append(pipeline_id)
-        assert len(reads) < 3, "polled past a pause nobody here can answer"
-        return SimpleNamespace(status="paused", step_state={"gate": SimpleNamespace(status="awaiting_approval", run_id=None)})
-
-    bridge = SimpleNamespace(store=SimpleNamespace(get=get))
-    rec = asyncio.run(pipeline_cli._drive_until_terminal(bridge, "pl_a", poll_s=0))
-    assert rec.status == "paused" and reads == ["pl_a"]

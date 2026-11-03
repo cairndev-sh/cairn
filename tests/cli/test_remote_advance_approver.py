@@ -1,4 +1,4 @@
-"""#2388 — a gate approved with `cairn remote advance` is recorded with who decided.
+"""#2388 — a gate approved with `cairn decide … approve --step` is recorded with who decided.
 
 The CLI sent ``--approver`` to ``POST …/steps/{id}/advance``, a route that ignores
 its body, so a gate released from the CLI was audited with no approver (and its
@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
 from cairn.cli.commands import remote
+from cairn.cli.main import app as cairn
 from cairn.core.dispatch.pipeline_bridge import PipelineBridge
 from cairn.core.storage.pipeline_store import InMemoryPipelineStore, PipelineRecord, StepState
 from cairn.core.triggers.auth import create_access_token
@@ -44,7 +45,7 @@ def _auth_on(monkeypatch) -> str:
 
 
 def _wire(monkeypatch, tc: TestClient, token) -> None:
-    """Point `cairn remote` at ``tc``'s app through the real client."""
+    """Point the CLI at ``tc``'s app through the real client."""
     from cairn_client import CairnClient
 
     @contextlib.contextmanager
@@ -77,7 +78,7 @@ def parked(monkeypatch):
 
 
 def _advance(step: str, *extra: str):
-    return cli.invoke(remote.app, ["advance", "pl_gate", step, *extra])
+    return cli.invoke(cairn, ["decide", "pl_gate", "approve", "--step", step, *extra])
 
 
 def test_cli_gate_approval_under_auth_records_the_signed_in_user(monkeypatch, parked):
@@ -121,7 +122,7 @@ class _RecordingBus:
 
 
 def test_cli_gate_approval_through_the_real_bridge_names_the_approver(monkeypatch, tmp_path):
-    """No stubbed door: the real PipelineBridge parks a gate, `cairn remote advance`
+    """No stubbed door: the real PipelineBridge parks a gate, `cairn decide`
     releases it, and the audit event and the review both name the token identity."""
     monkeypatch.setenv("OBS_STORAGE", f"sqlite://{tmp_path / 'rev.db'}")
     tok = _auth_on(monkeypatch)
@@ -146,7 +147,7 @@ def test_cli_gate_approval_through_the_real_bridge_names_the_approver(monkeypatc
         _wire(monkeypatch, tc, tok)
         assert tc.post(f"/pipelines/{pid}/steps/train/advance",
                        headers={"Authorization": f"Bearer {tok}"}).status_code == 409
-        r = cli.invoke(remote.app, ["advance", pid, "train", "--approver", "someone-else"])
+        r = cli.invoke(cairn, ["decide", pid, "approve", "--step", "train", "--approver", "someone-else"])
         assert r.exit_code == 0, r.output
 
     approved = [p for t, p in bus.events if t == "pipeline.approved"]

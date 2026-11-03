@@ -154,7 +154,7 @@ def release_commands(pipeline_id: str, step_id: str, *, approver: str = "") -> t
     base = _settings.approval_base_url() or "$CAIRN_ENDPOINT"
     body = f'{{"approver": "{approver or "you"}"}}'
     return (
-        f"cairn remote advance {pipeline_id} {step_id}{who}",
+        f"cairn decide {pipeline_id} approve --step {step_id}{who}",
         f"curl -sX POST {base}/pipelines/{pipeline_id}/steps/{step_id}/approve "
         f"-H 'content-type: application/json' -d '{body}'",
     )

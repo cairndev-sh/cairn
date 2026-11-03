@@ -687,7 +687,7 @@ def _pull_worker_token_checks(values: dict) -> list[CheckResult]:
     if not token and not existing:
         return [fail("pullWorker.enabled=true but neither pullWorker.token nor "
                      "pullWorker.existingSecret is set (a whitespace-only token counts as "
-                     "unset) — the pull worker reads a worker-pool token (`cairn remote "
+                     "unset) — the pull worker reads a worker-pool token (`cairn admin "
                      "worker-token --name <pool>`) from a Secret of its own.")]
     jwt = str(_get(values, "secrets", "obsJwtSecret", default="") or "").strip()
     if token and jwt and token == jwt:

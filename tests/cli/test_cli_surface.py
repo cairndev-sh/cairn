@@ -1,7 +1,7 @@
 """The `cairn` command tree is pinned to ADR-0165 (D1, D8, D10, D11, D12).
 
 The table in D10 is read from the ADR, so there is one copy. A command in the tree with no row
-fails here, and so does a row whose new name does not work or whose old name does not warn.
+fails here, and so does a row whose new name does not work or whose old name still runs.
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from typer.testing import CliRunner
 
 import cairn.cli.main as cli_main
 import cairn.cli.providers as cli_providers
+from cairn.cli.moved import EXIT_MOVED, MOVED
 
 ADR = Path(__file__).parents[2] / "docs/decisions/ADR-0165-the-cli-is-five-commands.md"
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")  # typer forces colour under GITHUB_ACTIONS
@@ -184,13 +185,6 @@ def test_an_unlisted_command_fails_the_tree_test() -> None:
     assert unlisted(tree(app), {"cairn run": "unchanged"}) == {"cairn made-up"}
 
 
-@pytest.mark.parametrize("today", sorted(ROWS))
-def test_a_row_still_answers_under_its_old_name(public_app, today: str) -> None:
-    if ROWS[today].startswith("removed"):
-        pytest.skip("a group whose commands have their own rows")
-    assert today in tree(public_app)
-
-
 @pytest.mark.parametrize("today", sorted(RENAMED))
 def test_a_row_works_under_its_new_name(public_app, today: str) -> None:
     commands = tree(public_app)
@@ -204,39 +198,63 @@ def test_a_row_works_under_its_new_name(public_app, today: str) -> None:
         assert flags <= options, f"{spelling}: {flags - options} missing"
 
 
+def _args(today: str) -> list[str]:
+    return today.split()[1:]
+
+
 @pytest.mark.parametrize("today", sorted(RENAMED))
-def test_an_old_name_is_hidden_and_warns(public_app, today: str) -> None:
+def test_an_old_name_runs_nothing_and_says_its_new_name(public_app, today: str) -> None:
+    assert today not in tree(public_app), f"{today} is still a command"
+    res = CliRunner().invoke(public_app, _args(today))
+    assert res.exit_code == EXIT_MOVED, res.output
+    assert res.stdout == ""
+    assert f"`{today}` is now " in " ".join(res.stderr.split())
+
+
+def test_the_removed_group_says_where_its_commands_went(public_app) -> None:
+    res = CliRunner().invoke(public_app, ["remote"])
+    assert res.exit_code == EXIT_MOVED and "`cairn status`" in res.stderr and "`cairn decide`" in res.stderr
+
+
+def test_the_table_covers_d10_and_nothing_else() -> None:
+    assert {f"cairn {old}" for old in MOVED} == set(RENAMED) | {"cairn remote"}
+
+
+@pytest.mark.parametrize("old", sorted(MOVED))
+def test_what_the_message_names_is_a_real_visible_command_d10_agrees_with(public_app, old: str) -> None:
     commands = tree(public_app)
-    chain = commands[today]
-    assert any(c.hidden for c in chain), f"{today} is listed in --help"
-    if chain[-1].callback is None:  # a bare group: its commands have their own rows
-        return
-    said = getattr(chain[-1].callback, "renamed_to", None)
-    assert said, f"{today} does not say its new name"
-    allowed = {resolve(commands, s) for s in spellings(today, ROWS[today])}
-    assert resolve(commands, said) in allowed, f"{today} says {said}, the table says {ROWS[today]}"
+    named = re.findall(r"`(cairn [^`]+)`", MOVED[old])
+    assert named, old
+    for spelling in named:
+        reached = resolve(commands, spelling)
+        assert reached and not any(c.hidden for c in commands[reached]), f"{old}: {spelling}"
+        options = {o for p in commands[reached][-1].params for o in getattr(p, "opts", [])}
+        assert {w for w in spelling.split() if w.startswith("-")} <= options, f"{old}: {spelling}"
+    if f"cairn {old}" in RENAMED:
+        allowed = {resolve(commands, s) for s in spellings(f"cairn {old}", ROWS[f"cairn {old}"])}
+        assert {resolve(commands, s) for s in named} <= allowed, f"{old} disagrees with D10"
 
 
-@pytest.mark.parametrize("old, new", [
-    (["connect", "providers"], ["admin", "connect", "providers"]),
-    (["init", "policy", "--help"], ["pack", "new", "policy", "--help"]),
+@pytest.mark.parametrize("args, says", [
+    (["doctor", "--strict"], "`cairn doctor` is now `cairn setup --check`"),
+    (["deploy", "doctor", "--help"], "`cairn deploy doctor` is now `cairn admin deploy doctor`"),
+    (["pipeline", "run", "a/b", "-i", "x=1"], "`cairn pipeline run` is now `cairn run`"),
+    (["remote", "launch", "a/b"], "`cairn remote launch` is now `cairn run`"),
+    (["connect", "no-such-subcommand"], "`cairn connect` is now `cairn admin connect`"),
 ])
-def test_old_and_new_run_the_same_code(public_app, old: list[str], new: list[str]) -> None:
-    run = CliRunner().invoke
-    before, after = run(public_app, old), run(public_app, new)
-    assert before.exit_code == after.exit_code == 0
-    if "--help" not in old:
-        assert before.stdout == after.stdout
-        assert "is now `cairn admin connect providers`" in before.stderr and not after.stderr
+def test_the_longest_old_name_wins_and_what_follows_it_runs_nothing(public_app, args, says) -> None:
+    res = CliRunner().invoke(public_app, args)
+    assert res.exit_code == EXIT_MOVED and says in " ".join(res.stderr.split()) and res.stdout == ""
 
 
-def test_a_group_that_is_a_command_warns_when_it_runs(public_app, monkeypatch) -> None:
-    import cairn.cli.commands.demo as demo
+def test_a_name_that_never_existed_gets_the_usual_error(public_app) -> None:
+    res = CliRunner().invoke(public_app, ["no-such-command"])
+    assert res.exit_code == 2 and "is now" not in res.output and "No such command" in res.output
 
-    monkeypatch.setattr(demo, "seed_demo_workspace", lambda *a, **k: _async({"runs": 0, "pipelines": 0}))
-    res = CliRunner().invoke(public_app, ["demo"])
-    assert "`cairn demo` is now `cairn admin demo`" in res.stderr
-    assert "is now" not in CliRunner().invoke(public_app, ["admin", "demo"]).stderr
+
+def test_help_still_lists_no_old_name(public_app) -> None:
+    listed = {name for rows in _command_panels(public_app).values() for name in rows}
+    assert not {old.split()[0] for old in MOVED} & listed
 
 
 async def _async(value):
@@ -282,6 +300,12 @@ def with_providers(monkeypatch):
     yield load
     monkeypatch.undo()
     importlib.reload(cli_main)
+
+
+def test_a_providers_command_wins_over_a_moved_name(with_providers) -> None:
+    main = with_providers(_Ep("platform", lambda: [("flow", _single("Platform commands"))]))
+    res = CliRunner().invoke(main.app, ["flow"])
+    assert res.exit_code == 0 and res.output == "only ran\n"
 
 
 def test_a_provider_names_its_heading_between_main_and_the_rest(with_providers) -> None:
@@ -455,11 +479,6 @@ def test_admin_engine_commands_take_long_options_only(public_app, path: list[str
     options = {o for p in chain[-1].params for o in getattr(p, "opts", [])}
     assert {"--endpoint", "--token", "--profile"} <= options
     assert "-e" not in options
-
-
-def test_an_old_remote_alias_keeps_e_as_the_endpoint(public_app) -> None:
-    chain = tree(public_app)["cairn remote triggers"]
-    assert "-e" in {o for p in chain[-1].params for o in getattr(p, "opts", [])}
 
 
 # ── D6, D7: every option the ADR lists ────────────────────────────────────────────────────────

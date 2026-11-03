@@ -1365,7 +1365,7 @@ class RunDispatcher:
             if pid and sid:
                 raise NotResumableError(
                     f"run {run_id} is a pipeline STEP gate, not a resumable template run. "
-                    f"Release it with: cairn remote advance {pid} {sid} --approver <you> "
+                    f"Release it with: cairn decide {pid} approve --step {sid} --approver <you> "
                     f"(or POST /pipelines/{pid}/steps/{sid}/approve)"
                 )
             raise NotResumableError(

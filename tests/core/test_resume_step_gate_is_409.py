@@ -1,6 +1,6 @@
 """Resuming a pipeline STEP gate through the run-level verb is a client error.
 
-0.1.2 answered ``POST /runs/{id}/resume`` (``cairn remote approve/reject``) on a
+0.1.2 answered ``POST /runs/{id}/resume`` (``cairn decide <run> approve|reject``) on a
 pipeline step gate with HTTP 502 (verification bug 15), which reads as an engine
 fault. The run has no template interrupt; the step is released by advancing it.
 The real dispatcher decides here; only the route's workspace guard is stubbed.
@@ -45,4 +45,4 @@ def test_reject_on_a_step_gate_is_409_with_the_advance_command(client_and_dispat
     asyncio.run(disp.store.create(run))
     r = client.post("/runs/run-step-gate/resume", json={"decision": "reject"})
     assert r.status_code == 409, (r.status_code, r.text)
-    assert "cairn remote advance pl_abc review" in r.json()["detail"]
+    assert "cairn decide pl_abc approve --step review" in r.json()["detail"]

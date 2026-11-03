@@ -1,4 +1,4 @@
-"""`cairn remote` CLI (an internal issue).
+"""The CLI's server commands (`cairn status`, `decide`, `run --skill`; an internal issue).
 
 Pure helpers (kv parse, config round-trip, resolution precedence) plus
 end-to-end command coverage against an in-process server: the CLI's two HTTP
@@ -8,7 +8,7 @@ Starlette's sync test transport, so the CLI exercises the actual HTTP control
 plane, routes and JWT middleware included.
 
 #1560: these patched ``remote._client`` until 2026-08-24, an attribute
-removed by #1216 when ``cairn remote`` was ported onto cairn-client. Nine
+removed by #1216 when the remote commands were ported onto cairn-client. Nine
 tests had been failing on ``AttributeError`` ever since — asserting against a
 surface that no longer existed, and hiding whatever the CLI actually does.
 """
@@ -23,7 +23,8 @@ import typer
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
-from cairn.cli.commands import remote
+from cairn.cli.commands import remote, run, status
+from cairn.cli.main import app
 from cairn.core.engine.runner import Runner
 from cairn.core.triggers.server import build_app
 
@@ -38,6 +39,10 @@ def _isolate(monkeypatch, tmp_path):
         "OBS_JWT_SECRET", "OBS_API_USER", "OBS_API_PASSWORD", "OBS_API_PASSWORD_HASH",
     ):
         monkeypatch.delenv(k, raising=False)
+    # `cairn status` lists pipelines too: not the ones in this machine's own cairn.db
+    from cairn.core.storage import pipeline_store as ps
+
+    monkeypatch.setattr(ps, "_default_store", ps.InMemoryPipelineStore())
     yield
 
 
@@ -86,12 +91,12 @@ def _patch_client(monkeypatch, app):
 
 
 def test_parse_kv():
-    assert remote._parse_kv(["a=1", "b=two"]) == {"a": "1", "b": "two"}
+    assert run._collect_inputs(["a=1", "b=two"], []) == {"a": 1, "b": "two"}
 
 
 def test_parse_kv_rejects_bare():
     with pytest.raises(typer.Exit):
-        remote._parse_kv(["bad"])
+        run._collect_inputs(["bad"], [])
 
 
 def test_config_roundtrip(tmp_path, monkeypatch):
@@ -123,16 +128,16 @@ def test_resolve_precedence(tmp_path, monkeypatch):
 # ─── e2e against an in-process server ──────────────────────────────
 
 
-def test_ps_empty(monkeypatch):
+def test_status_empty(monkeypatch):
     _patch_client(monkeypatch, build_app(Runner(), enable_scheduler=False, enable_spec_routes=False))
-    res = cli.invoke(remote.app, ["ps"])
+    res = cli.invoke(app, ["status"])
     assert res.exit_code == 0, res.output
-    assert "no runs" in res.output
+    assert "nothing has run yet" in res.output
 
 
 def test_submit_returns_run_id(monkeypatch):
     _patch_client(monkeypatch, build_app(Runner(), enable_scheduler=False, enable_spec_routes=False))
-    res = cli.invoke(remote.app, ["submit", "nonexistent-skill"])
+    res = cli.invoke(app, ["run", "--skill", "nonexistent-skill", "--detach"])
     assert res.exit_code == 0, res.output
     assert "run_id=" in res.output
 
@@ -142,31 +147,42 @@ def test_submit_401_when_auth_enabled(monkeypatch):
     monkeypatch.setenv("OBS_API_PASSWORD", "p")
     _patch_client(monkeypatch, build_app(Runner(), enable_scheduler=False, enable_spec_routes=False))
     # no token configured → middleware rejects
-    res = cli.invoke(remote.app, ["submit", "x"])
+    res = cli.invoke(app, ["run", "--skill", "x", "--detach"])
     assert res.exit_code == 1
     assert "401" in res.output or "Unauthorized" in res.output
 
 
-def test_runs_table_renders_rows():
-    import io
-
-    from rich.console import Console
-
-    t = remote._runs_table([{
-        "id": "r1", "status": "running", "lane": "realtime",
-        "matched_skills": 1, "results": [{"template_name": "finetune"}], "created_at": "t0",
-    }])
-    buf = io.StringIO()
-    Console(file=buf, width=200).print(t)
-    out = buf.getvalue()
+def test_runs_table_renders_rows(capsys):
+    status._print_overview([], [{"id": "r1", "status": "running", "template_ref": "finetune"}])
+    out = capsys.readouterr().out
     assert "r1" in out and "running" in out and "finetune" in out
 
 
-def test_watch_once_renders(monkeypatch):
+def test_status_is_one_frame(monkeypatch):
     _patch_client(monkeypatch, build_app(Runner(), enable_scheduler=False, enable_spec_routes=False))
-    res = cli.invoke(remote.app, ["watch", "--once"])
+
+    def _no_second_frame(*_a):
+        raise AssertionError("cairn status without --watch must not wait for another frame")
+
+    monkeypatch.setattr(status.time, "sleep", _no_second_frame)
+    res = cli.invoke(app, ["status"])
     assert res.exit_code == 0, res.output
-    assert "run_id" in res.output  # table header rendered (empty server)
+    assert "nothing has run yet" in res.output  # the frame rendered (empty server)
+
+
+def test_status_watch_redraws_until_stopped(monkeypatch):
+    _patch_client(monkeypatch, build_app(Runner(), enable_scheduler=False, enable_spec_routes=False))
+    naps: list = []
+
+    def _nap(seconds):
+        naps.append(seconds)
+        if len(naps) == 2:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(status.time, "sleep", _nap)
+    res = cli.invoke(app, ["status", "--watch", "--interval", "1"])
+    assert res.output.count("nothing has run yet") == 2
+    assert naps == [1.0, 1.0]
 
 
 @pytest.mark.parametrize("cmd", ["approve", "reject"])
@@ -176,7 +192,7 @@ def test_hitl_targets_resume_endpoint_not_action_saga(monkeypatch, cmd):
     # run on the resume endpoint returns 404; the old action-saga path returned
     # 501 (no DurableActionHandler). So 404-not-501 proves the routing fix.
     _patch_client(monkeypatch, build_app(Runner(), enable_scheduler=False, enable_spec_routes=False))
-    res = cli.invoke(remote.app, [cmd, "no-such-run"])
+    res = cli.invoke(app, ["decide", "no-such-run", cmd])
     assert res.exit_code == 1, res.output
     assert "404" in res.output
     assert "501" not in res.output
@@ -345,10 +361,10 @@ def test_watch_detaches_headless(monkeypatch):
 
 
 def test_watch_command_unknown_run_against_real_server(monkeypatch):
-    # `approve --watch` end-to-end through CliRunner against the real build_app:
+    # `status --follow` end-to-end through CliRunner against the real build_app:
     # an unknown run's SSE stream returns 404, so the watch loop fails cleanly.
     _patch_client(monkeypatch, build_app(Runner(), enable_scheduler=False, enable_spec_routes=False))
-    res = cli.invoke(remote.app, ["approve", "no-such-run", "--watch", "--decision", "approve"])
+    res = cli.invoke(app, ["status", "no-such-run", "--follow", "--decision", "approve"])
     assert res.exit_code == 1
     assert "not found" in res.output or "404" in res.output
 
@@ -371,8 +387,8 @@ def test_pipelines_lists_name_and_step_progress(monkeypatch):
                     "publish": ps.StepState(status="pending")})
     asyncio.run(store.put(rec))
     _patch_client(monkeypatch, build_app(Runner(), enable_scheduler=False, enable_spec_routes=False))
-    res = cli.invoke(remote.app, ["pipelines"])
+    res = cli.invoke(app, ["status"])
     assert res.exit_code == 0, res.output
     line = next(ln for ln in res.output.splitlines() if rec.pipeline_id in ln)
     assert "2/4 steps" in line, line
-    assert line.rstrip().endswith("profile-and-publish"), line
+    assert line.rstrip().endswith("profile-and-publish  waiting: review"), line

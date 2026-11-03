@@ -1,4 +1,4 @@
-"""DB-backed `cairn replay` (#76 slice 2).
+"""DB-backed `cairn status --replay` (#76 slice 2).
 
 The local-file replay path stays the default; this exercises `--source db`,
 which renders a run's trace + full result from the configured run store —
@@ -325,13 +325,12 @@ def test_a_named_engine_does_not_go_with_a_source_that_would_ignore_it(no_store,
 
 def test_nowhere_offers_no_option_the_command_does_not_have(no_store, monkeypatch):
     monkeypatch.setattr(remote, "_reachable", lambda ep: False)
-    r = CliRunner().invoke(app, ["replay", "run-x"])
+    r = CliRunner().invoke(app, ["status", "run-x", "--replay"])
     assert r.exit_code == 1 and "--endpoint" not in r.stderr
 
 
-@pytest.mark.parametrize("command", [["replay", "pl_abc"], ["status", "pl_abc", "--replay"]])
-def test_both_spellings_point_a_pipeline_at_its_runs(no_store, command):
-    r = CliRunner().invoke(app, command)
+def test_a_pipeline_is_pointed_at_its_runs(no_store):
+    r = CliRunner().invoke(app, ["status", "pl_abc", "--replay"])
     assert r.exit_code == 1 and "cairn status pl_abc --logs" in r.stderr
 
 
