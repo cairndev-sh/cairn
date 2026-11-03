@@ -1,12 +1,14 @@
 """The ONE implementation of ``train.finetune`` (ADR-0127 D4), shared by the ``train/lora``
 operation, the ``train.lora`` ml stage and ``train/eval-loss``.
 
-A plain LoRA fine-tune on CPU: ``transformers`` loads the base model in float32, ``peft``
-wraps it with a LoRA adapter (target modules inferred per architecture), and a torch AdamW
-loop runs ``steps`` optimizer steps over batches of the training rows. No ``Trainer``, no
-``accelerate``, no ``trl``, no ``bitsandbytes``, no CUDA: the point is a real loss curve and a
-real adapter on any laptop, in seconds on the ``sshleifer/tiny-gpt2`` stand-in and minutes on
-the ``Qwen/Qwen2.5-0.5B`` default.
+A plain LoRA fine-tune: ``transformers`` loads the base model, ``peft`` wraps it with a LoRA
+adapter (target modules inferred per architecture), and a torch AdamW loop runs ``steps``
+optimizer steps over batches of the training rows. On a machine without CUDA it is the fp32
+CPU run it always was; with ``device``/``precision`` at ``auto`` it uses a CUDA GPU when one
+is available, in fp16 or bf16 by the GPU's compute capability (ADR-0153). No ``Trainer``, no
+``accelerate``, no ``trl``, no ``bitsandbytes``: the point is a real loss curve and a real
+adapter on any laptop or a single GPU, in seconds on the ``sshleifer/tiny-gpt2`` stand-in and
+minutes on the ``Qwen/Qwen2.5-0.5B`` default.
 
 The training stack is the pack's ``[train]`` extra. Nothing here imports it at module load, so
 the pack imports and registers on a base install; :func:`require_train_stack` is the one place

@@ -9,7 +9,7 @@
 #
 #   * `train` runs flows/lora.yaml on the builtin ml engine: one `train.lora` stage
 #     from the builtin train-local pack (cairn-operator-train-local, contract
-#     train.finetune/1.0.0). The stage reports `kind: model`, so the leg registers
+#     train.finetune/1.1.0). The stage reports `kind: model`, so the leg registers
 #     the adapter and exposes it as `candidate_artifact_id`.
 #   * `eval` scores the saved adapter with train/eval-loss (read-only).
 #   * `loss` compares it with `target_loss`; `loss-ok` stops the pipeline when the
@@ -38,6 +38,9 @@ inputs:
   max_samples: {type: int, default: 48, description: "At most this many rows are read (train plus held-out)."}
   lora_rank: {type: int, default: 8, description: "LoRA rank r."}
   target_loss: {type: float, default: 12.0, description: "The loss gate passes when the held-out loss is at or below this."}
+  device: {type: str, default: "auto", description: "auto, cpu, cuda or mps. auto is CUDA when available, else the CPU."}
+  precision: {type: str, default: "auto", description: "auto, fp32, fp16 or bf16. auto is fp16 or bf16 on CUDA (by GPU), fp32 elsewhere."}
+  output_dir: {type: str, default: "", description: "Where the adapter is written (e.g. a Google Drive path on Colab). Empty: the engine's temporary workdir."}
   expectation:
     type: dict
     description: "What the training rows must contain (data/profile roles)."
@@ -82,6 +85,9 @@ steps:
       steps: $input.steps
       max_samples: $input.max_samples
       lora_rank: $input.lora_rank
+      device: $input.device
+      precision: $input.precision
+      output_dir: $input.output_dir
 
   # ── score the adapter on held-out rows (read-only) ────────────────────────
   - id: eval
@@ -93,6 +99,8 @@ steps:
       base_model: $input.base_model
       dataset: $input.dataset
       max_samples: $input.max_samples
+      device: $input.device
+      precision: $input.precision
 
   # ── the loss gate ─────────────────────────────────────────────────────────
   # monitor/threshold says whether the loss crossed the target (gt: above it);

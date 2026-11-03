@@ -1,7 +1,7 @@
 # obs-operator-train-local — declarative manifest (ADR-0127 D4, #2572 WP3).
 #
-# A LoRA fine-tune on CPU: train/lora (the operation face of contract
-# train.finetune/1.0.0, also shipped as the ml stage `train.lora`) and
+# A LoRA fine-tune on CPU or a CUDA GPU: train/lora (the operation face of contract
+# train.finetune/1.1.0, also shipped as the ml stage `train.lora`) and
 # train/eval-loss (scores a saved adapter). The training stack is the [train]
 # extra; without it the pack still imports and registers, and both operations
 # refuse at run naming the extra. The [operator."…"] tables below are GENERATED
@@ -11,7 +11,7 @@
 name        = "obs-operator-train-local"
 version     = "0.1.0"
 type        = "operator"
-description = "LoRA fine-tuning on CPU — provides train.finetune (train/lora, stage train.lora) and train/eval-loss."
+description = "LoRA fine-tuning on CPU or a CUDA GPU — provides train.finetune (train/lora, stage train.lora) and train/eval-loss."
 kind        = "operator"
 publisher   = "cairn"
 trust_level = "builtin"
@@ -30,7 +30,7 @@ supports_heartbeat = false
 supports_mock = true
 risk      = "read_only"
 executors = ["in_process"]
-implements = ["contract://train.eval_loss/1.0.0"]
+implements = ["contract://train.eval_loss/1.1.0"]
 
 [operator."train/eval-loss".capabilities]
 provides = ["train.eval_loss"]
@@ -49,7 +49,7 @@ supports_heartbeat = false
 supports_mock = true
 risk      = "external_write"
 executors = ["in_process"]
-implements = ["contract://train.finetune/1.0.0"]
+implements = ["contract://train.finetune/1.1.0"]
 
 [operator."train/lora".capabilities]
 provides = ["train.finetune"]

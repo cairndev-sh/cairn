@@ -4,12 +4,12 @@ Shared contract definitions for the `train` capability domain — data only (ADR
 
 | Definition | Kind | Owner of the meaning |
 |---|---|---|
-| `contract://train.finetune/1.0.0` | capability | this distribution |
-| `contract://train.finetune.input/1.0.0` | schema | this distribution |
+| `contract://train.finetune/1.1.0` | capability | this distribution |
+| `contract://train.finetune.input/1.1.0` | schema | this distribution |
 | `contract://train.finetune.configuration/1.0.0` | schema (closed: `base_model`) | this distribution |
 | `contract://train.finetune.output/1.0.0` | schema | this distribution |
-| `contract://train.eval_loss/1.0.0` | capability | this distribution |
-| `contract://train.eval_loss.input/1.0.0` | schema | this distribution |
+| `contract://train.eval_loss/1.1.0` | capability | this distribution |
+| `contract://train.eval_loss.input/1.1.0` | schema | this distribution |
 | `contract://train.eval_loss.configuration/1.0.0` | schema (closed, empty in v1) | this distribution |
 | `contract://train.eval_loss.output/1.0.0` | schema | this distribution |
 | `contract://train.finetune.report/1.0.0` | report | this distribution |

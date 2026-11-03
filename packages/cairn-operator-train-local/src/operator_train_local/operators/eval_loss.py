@@ -1,7 +1,7 @@
 """train/eval-loss — score a saved LoRA adapter: mean causal-LM loss over a JSONL's rows.
 
 Reads the adapter ``train/lora`` wrote and the rows; writes nothing. The pipeline's loss gate
-reads ``eval_loss``. Implements ``train.eval_loss/1.0.0`` (``cairn-contracts-train``, beside
+reads ``eval_loss``. Implements ``train.eval_loss/1.1.0`` (``cairn-contracts-train``, beside
 ``train.finetune``): every builtin operator implements a contract (the tier guard).
 """
 from __future__ import annotations
@@ -18,7 +18,7 @@ from operator_train_local.schemas.train import EvalLossInput, EvalLossOutput
     name="train/eval-loss",
     version="0.1.0",
     capabilities=["train.eval_loss"],
-    implements=["contract://train.eval_loss/1.0.0"],  # cairn-contracts-train
+    implements=["contract://train.eval_loss/1.1.0"],  # cairn-contracts-train
 )
 class EvalLossOp(Operation[EvalLossInput, EvalLossOutput]):
     """Mean loss of ``base_model`` + the adapter at ``adapter_path`` over ``dataset``."""

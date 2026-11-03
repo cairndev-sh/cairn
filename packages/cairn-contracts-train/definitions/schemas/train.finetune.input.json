@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "contract://train.finetune.input/1.0.0",
+  "$id": "contract://train.finetune.input/1.1.0",
   "description": "What to fine-tune, on what, and how long: a LoRA adapter over base_model trained on the dataset's {\"text\": ...} rows.",
   "properties": {
     "dataset": {

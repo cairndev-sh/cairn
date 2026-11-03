@@ -27,12 +27,12 @@ def test_the_manifest_declares_both_operations_as_the_classes_do():
     ops = MANIFEST["operator"]
     assert sorted(ops) == ["train/eval-loss", "train/lora"]
     assert MANIFEST["pack"]["trust_level"] == "builtin"
-    assert TrainLoraOp.implements == ("contract://train.finetune/1.0.0",)
+    assert TrainLoraOp.implements == ("contract://train.finetune/1.1.0",)
     assert ops["train/lora"]["implements"] == list(TrainLoraOp.implements)
     assert ops["train/lora"]["capabilities"]["provides"] == ["train.finetune"]
     assert ops["train/lora"]["risk"] == TrainLoraOp.risk == "external_write"
     assert ops["train/eval-loss"]["risk"] == EvalLossOp.risk == "read_only"
-    assert EvalLossOp.implements == ("contract://train.eval_loss/1.0.0",)
+    assert EvalLossOp.implements == ("contract://train.eval_loss/1.1.0",)
     assert ops["train/eval-loss"]["implements"] == list(EvalLossOp.implements)
 
 

@@ -1,4 +1,4 @@
-"""train/lora — a LoRA fine-tune on CPU, the operation face of ``train.finetune/1.0.0``.
+"""train/lora — a LoRA fine-tune (CPU, or a CUDA GPU when available), the operation face of ``train.finetune/1.1.0``.
 
 The fine-tune itself is :func:`operator_train_local.finetune.finetune`, the same function the
 ``train.lora`` ml stage runs, so the contract holds on both paths. The blocking torch loop
@@ -35,7 +35,7 @@ def default_output_dir(ctx: OperationContext) -> str:
     name="train/lora",
     version="0.1.0",
     capabilities=["train.finetune"],
-    implements=["contract://train.finetune/1.0.0"],  # ADR-0127 D4 — cairn-contracts-train
+    implements=["contract://train.finetune/1.1.0"],  # ADR-0127 D4 — cairn-contracts-train
 )
 class TrainLoraOp(Operation[TrainLoraInput, TrainLoraOutput]):
     """Fine-tune ``base_model`` with a LoRA adapter on a JSONL of ``{"text": ...}`` rows."""

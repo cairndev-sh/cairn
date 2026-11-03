@@ -2,17 +2,17 @@ format = "cairn.contracts/1"
 
 [distribution]
 name = "cairn-contracts-train"
-version = "1.0.0"
+version = "1.1.0"
 
 [[definitions]]
 id = "train.finetune"
-revision = "1.0.0"
+revision = "1.1.0"
 kind = "capability"
 path = "capabilities/train.finetune.json"
 
 [[definitions]]
 id = "train.finetune.input"
-revision = "1.0.0"
+revision = "1.1.0"
 kind = "schema"
 path = "schemas/train.finetune.input.json"
 
@@ -30,13 +30,13 @@ path = "schemas/train.finetune.output.json"
 
 [[definitions]]
 id = "train.eval_loss"
-revision = "1.0.0"
+revision = "1.1.0"
 kind = "capability"
 path = "capabilities/train.eval_loss.json"
 
 [[definitions]]
 id = "train.eval_loss.input"
-revision = "1.0.0"
+revision = "1.1.0"
 kind = "schema"
 path = "schemas/train.eval_loss.input.json"
 

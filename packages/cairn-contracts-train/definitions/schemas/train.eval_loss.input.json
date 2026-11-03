@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "contract://train.eval_loss.input/1.0.0",
+  "$id": "contract://train.eval_loss.input/1.1.0",
   "description": "Score a saved adapter: mean causal-LM loss over the first max_samples rows of the dataset.",
   "properties": {
     "adapter_path": {"description": "Directory of a LoRA adapter (what train.finetune returned).", "title": "Adapter Path", "type": "string"},

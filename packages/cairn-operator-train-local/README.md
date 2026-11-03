@@ -1,13 +1,13 @@
 # cairn-operator-train-local
 
-A real LoRA fine-tune on CPU, the builtin provider of the `train.finetune` capability
-(contract `contract://train.finetune/1.0.0`, distribution `cairn-contracts-train`; ADR-0127 D4).
+A real LoRA fine-tune on CPU or a CUDA GPU, the builtin provider of the `train.finetune` capability
+(contract `contract://train.finetune/1.1.0`, distribution `cairn-contracts-train`; ADR-0127 D4).
 
 | Ref | Kind | What it does |
 |---|---|---|
-| `train/lora` | operation (`external_write`) | Fine-tunes a causal LM with a LoRA adapter on a JSONL of `{"text": ...}` rows; returns the adapter path, train and held-out eval loss, tokens seen. Implements `train.finetune/1.0.0`. |
+| `train/lora` | operation (`external_write`) | Fine-tunes a causal LM with a LoRA adapter on a JSONL of `{"text": ...}` rows; returns the adapter path, train and held-out eval loss, tokens seen. Implements `train.finetune/1.1.0`. |
 | `train.lora` | ml flow stage (`cairn.dataflow_stages`) | The same fine-tune as an engine kernel; its stats carry the adapter as the leg's `model` artifact. |
-| `train/eval-loss` | operation (`read_only`) | Scores a saved adapter: mean loss over a JSONL's rows. Implements `train.eval_loss/1.0.0`. |
+| `train/eval-loss` | operation (`read_only`) | Scores a saved adapter: mean loss over a JSONL's rows. Implements `train.eval_loss/1.1.0`. |
 
 ```bash
 pip install 'cairndev[train]'
@@ -32,7 +32,14 @@ base_model = "sshleifer/tiny-gpt2"
 There is no environment variable for the model: the operator config layer reads profiles, not
 the process environment (`cairn/core/operator/config.py`).
 
-**Platforms.** CPU only, no CUDA assumptions. The `[train]` extra pins `torch>=2.11,<2.12`
+**GPU.** `device` and `precision` (both `auto` by default) train on one CUDA GPU when torch can
+see one, in bf16 on compute capability 8.0+ (Ampere and later) and fp16 below (a T4), and on
+the CPU in fp32 otherwise; a Mac stays on the CPU unless `device: mps` is asked for. Naming
+`cuda` where it is unavailable, or `fp16`/`bf16` off CUDA, is refused. Findings report where a
+run trained: `device`, `precision`, `peak_gpu_mem_gb`. One GPU only: pick it with
+`CUDA_VISIBLE_DEVICES`. Verified on a Colab T4 (ADR-0153).
+
+**Platforms.** The `[train]` extra pins `torch>=2.11,<2.12`
 (the private training pack's floor), which publishes wheels for Linux x86_64/aarch64, macOS
 arm64 and Windows, **not Intel macOS**.
 
