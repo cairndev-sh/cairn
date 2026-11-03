@@ -18,7 +18,7 @@ A patch release: fixes to the CLI only, and one of them stops a secret being pri
 
 ### Fixed
 - `cairn setup --check` and `cairn doctor` no longer print the path of a secret URL. They show `https://hooks.slack.com/***`; a database URL keeps its name. (#402)
-- `cairn gate` and `cairn run --check` don't pass a check that didn't finish. (#394)
+- `cairn gate` and `cairn run --check` no longer pass a check that didn't finish. A step that failed (on a missing file, say), a pause at an approval, no verdict, or a verdict word that isn't a pass, a warning or a failure used to exit 0 with PASS; all now exit 2 with the reason. So a check that gives no verdict fails CI where it used to pass: it has to write `$state.verdict` or `$state.outcome`. A FAIL verdict still exits 1, even if a step also failed, and an `outcome` list with no verdict item now gates on how its items are graded. A selector of single steps still recovers from a failed step; a selector with a compound child doesn't count as recovering, so some real recoveries exit 2. A failure inside a `subgraph_node` still isn't detected. (#386)
 - `--expect-head` refuses a value that can't mean anything, and a match exits 0 in both the plain and `--json` forms when the log has no lineage records. (#380)
 - `cairn status --replay` reads a run from the local engine. (#382)
 - A named endpoint is never replaced by local data in `cairn status --replay`. (#388)
@@ -52,7 +52,6 @@ The CLI is five commands: `cairn setup`, `run`, `status`, `decide` and `pack` (A
 - The pages written against an older tree describe this repository: the architecture overview's system description, `examples/README.md` (which said `max_cost_usd` is not enforced; it is) and the engine's test lists. The fine-tune guide says what the `finetune-ssh` profile's audit log records. (#255)
 
 ### Fixed
-- `cairn gate` and `cairn run --check` no longer pass a check that didn't finish. A step that failed (on a missing file, say), a pause at an approval, no verdict, or a verdict word that isn't a pass, a warning or a failure used to exit 0 with PASS; all now exit 2 with the reason. So a check that gives no verdict fails CI where it used to pass: it has to write `$state.verdict` or `$state.outcome`. A FAIL verdict still exits 1, even if a step also failed, and an `outcome` list with no verdict item now gates on how its items are graded. A selector of single steps still recovers from a failed step; a selector with a compound child doesn't count as recovering, so some real recoveries exit 2. A failure inside a `subgraph_node` still isn't detected. (#386)
 - `cairn dev` and the temporary engine `cairn run` starts now listen on `127.0.0.1`, as `cairn setup` does. They run with the fixed `dev`/`dev` login and used to listen on every interface. To reach one from outside this machine, a container or a VM, set `CAIRN_TRIGGER_HOST`. (#359)
 - `cairn pipeline run` no longer polls forever at a human gate it has no way to answer: it says so and exits 2, with the record kept. (#260)
 - `examples/ci` gates on a check that ships. It named a pack that isn't in the public install, so every run exited 2; it now uses `examples/ci/templates/dataset-check.md`, which needs only `pip install cairndev`. (#255)
