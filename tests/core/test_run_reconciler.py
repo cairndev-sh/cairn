@@ -97,6 +97,12 @@ async def test_terminal_runs_are_never_touched():
 # ── a run that reached its own terminal while the sweep was looking at it ──
 
 
+def _listing_only(run):
+    async def fn(*, status=None, **_kw):
+        return [run] if status == run.status else []
+    return fn
+
+
 def _finishes_during(store, *, result_fn=False, **terminal):
     """A status_fn or result_fn where the run's own task records its end first, as a workflow
     that has just ended and the dispatcher that was waiting on it do."""
@@ -165,15 +171,39 @@ async def test_a_run_that_only_moved_between_active_states_is_still_reconciled()
 
 
 @pytest.mark.asyncio
-async def test_a_run_the_store_no_longer_has_is_skipped():
+async def test_a_run_the_store_no_longer_has_is_skipped(monkeypatch):
     store = _store()
     await store.create(_run("run-v", "running", OLD))
-    real_get = store.get
+    with monkeypatch.context() as patch:
+        async def gone(run_id):
+            return None
 
-    async def gone(run_id):
-        return None
-
-    store.get = gone
-    assert await reconcile_stale_runs(store, _fixed_status({"run-v": "failed"}), grace_seconds=120) == []
-    store.get = real_get
+        patch.setattr(store, "get", gone)
+        assert await reconcile_stale_runs(store, _fixed_status({"run-v": "failed"}), grace_seconds=120) == []
     assert (await store.get("run-v")).status == "running"
+
+
+@pytest.mark.asyncio
+async def test_a_verdict_the_store_refuses_publishes_nothing(monkeypatch):
+    """The run ends done between the re-read and the write: the guard refuses `failed`."""
+    store = _store()
+    emitted = []
+
+    async def emit(run_id, event_type, data):
+        emitted.append(event_type)
+
+    await store.create(_run("run-u", "running", OLD))
+    stale = await store.get("run-u")
+    await store.update("run-u", status="done")
+
+    async def stale_get(run_id):
+        return stale
+
+    monkeypatch.setattr(store, "get", stale_get)
+    monkeypatch.setattr(store, "list", _listing_only(stale))
+    done = await reconcile_stale_runs(store, _fixed_status({"run-u": "failed"}), grace_seconds=120, emit_fn=emit)
+    monkeypatch.undo()
+
+    assert done == [] and emitted == []
+    assert (await store.get("run-u")).status == "done"
+    assert not [e for e in await store.get_events("run-u") if e.type == "failed"]

@@ -347,19 +347,23 @@ async def reconcile_stale_runs(
             try:
                 # The list and the probes above took time, and a workflow that has just ended is
                 # the moment its own task records why. That record is better than this one, so
-                # it isn't overwritten and no second terminal is published. The store has no
-                # conditional update, so a write landing between these two lines still can be.
+                # it isn't overwritten and no second terminal is published. The store refuses a
+                # move to a different terminal, but it allows failed to failed, so a write landing
+                # between these two lines can still lose its reason.
                 current = await store.get(run.id)
                 if current is None or current.status not in ACTIVE_STATUSES:
                     logger.debug("reconciler: %s ended while it was being judged; leaving it", run.id)
                     continue
-                await store.update(
+                updated = await store.update(
                     run.id,
                     status=terminal,
                     ended_at=now.isoformat(),
                     error=(None if terminal == "done" else f"reconciled: {note}"),
                     **extra,
                 )
+                if updated.status != terminal:  # the store's transition guard refused it
+                    logger.debug("reconciler: %s is %s; %s was refused", run.id, updated.status, terminal)
+                    continue
                 await store.append_event(
                     run.id,
                     terminal,
