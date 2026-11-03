@@ -96,6 +96,8 @@ work runs behind deterministic guardrails you can inspect afterward:
   deployment's `MAX_COST_USD` ($1 by default) if that's lower: the call that crosses the cap
   has been paid for, the leg fails, and the pipeline stops. A flow checks its own
   `budget.max_cost_usd` between stages, and a leg in a series reserves its estimate first.
+- **Holdout door** — a training dataset version that shares rows with a registered test set
+  is refused at launch, and the refusal names the rows.
 - **Policy + human approval** — proposed actions pass declarative policy rules
   before any executor runs; high-risk ones (promote a model, destroy a
   resource) pause for a human and resume durably from a checkpoint.

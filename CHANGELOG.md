@@ -4,6 +4,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+- A page on the holdout door and eval cutoff, and `examples/holdout`, which you can run to see it refuse. The `noop` stage takes `register_role`, so a file can be registered as a test set without a pack of your own. (#333)
+
 ## [0.5.0] - 2026-11-03
 
 The old command names are gone, and a cost cap now stops a run.

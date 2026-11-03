@@ -149,6 +149,7 @@ export default defineConfig({
             { label: 'Flows', slug: 'concepts/flows' },
             { label: 'Capabilities and environments', slug: 'concepts/capabilities' },
             { label: 'Gates and approvals', slug: 'concepts/gates' },
+            { label: 'Holdout and eval cutoff', slug: 'concepts/holdout' },
             { label: 'Cost and budgets', slug: 'concepts/cost' },
             { label: 'Runs and the record', slug: 'concepts/runs' },
             { label: 'How cairn compares', slug: 'compare' },

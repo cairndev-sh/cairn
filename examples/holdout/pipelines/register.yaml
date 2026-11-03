@@ -1,0 +1,18 @@
+name: register
+kind: pipeline
+visibility: public
+description: Register a file as a dataset version with a role, so the holdout door can see it.
+outcome: A dataset version with a role
+suite: data
+inputs:
+  source: {type: str, description: "The file to register. An absolute path."}
+  name: {type: str, description: "The dataset's name."}
+  role: {type: str, default: "training", description: "training, validation or test. The holdout door compares training versions with test versions."}
+steps:
+  - id: register
+    label: Register the version
+    flow: register
+    with:
+      source: $input.source
+      register: $input.name
+      register_role: $input.role
