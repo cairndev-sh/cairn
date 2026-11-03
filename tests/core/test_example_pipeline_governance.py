@@ -114,8 +114,8 @@ def test_each_pipeline_is_runnable_on_the_public_core(name, example_loaded):
 
 
 def test_tiny_finetune_is_runnable_on_the_public_core(example_loaded):
-    """`train.lora` and `train/eval-loss` come from the builtin train-local pack (WP3), a base
-    dependency of the public core."""
+    """`train.lora` and `monitor/threshold` come from builtin packs (train-local since WP3), base
+    dependencies of the public core."""
     from cairn.core.engine.pipeline_resolve import assert_runnable
 
     assert_runnable(_pipeline("tiny-finetune"))
@@ -374,8 +374,10 @@ def test_the_finetune_trains_after_the_data_gate_and_tags_after_the_loss_gate():
     assert _step("data-ok", "tiny-finetune").depends_on == ["profile"]
     assert _step("train", "tiny-finetune").flow == "hello-cairn/lora"
     assert _step("train", "tiny-finetune").depends_on == ["data-ok"]
-    assert _step("eval", "tiny-finetune").task == "train/eval-loss"
+    assert [s for s in _pipeline("tiny-finetune").steps if s.id == "eval"] == []   # #252: no leg scores training rows
     assert _step("loss", "tiny-finetune").task == "monitor/threshold"
+    assert _step("loss", "tiny-finetune").depends_on == ["train"]
+    assert _step("loss", "tiny-finetune").inputs["value"] == "$steps.train.train_lora_eval_loss"
     assert "steps.loss.crossed" in _step("loss-ok", "tiny-finetune").predicate
     assert _step("promote", "tiny-finetune").depends_on == ["loss-ok"]
     review = _step("review", "tiny-finetune")
@@ -402,9 +404,9 @@ def test_ask_the_docs_starts_on_dataset_ready_paused():
 
 
 def test_the_finetune_legs_read_the_adapter_and_loss_the_train_flow_reports():
-    """The proof (all eight cells) found `eval` failing on `$steps.train.adapter_path` —
+    """The proof (all eight cells) found a leg failing on `$steps.train.adapter_path` —
     the ml flow leg's stats are namespaced by stage, and nothing mapped them. The leg's
-    declared product and the review gate's `show:` now resolve against exactly the stats
+    declared product, the loss gate's wire and the review gate's `show:` now resolve against exactly the stats
     the runner reports for `train.lora` (`runner.py`: `stats[f"{stage}.{k}"]`)."""
     from types import SimpleNamespace
 
@@ -417,7 +419,7 @@ def test_the_finetune_legs_read_the_adapter_and_loss_the_train_flow_reports():
              "train.lora.train_loss": 3.2, "train.lora.eval_loss": 3.4,
              "candidate_artifact_id": "sha256:abc"}
     out = _flow_leg_output(plan["train"], SimpleNamespace(ok=True, stats=stats))
-    assert step_field(out, "adapter_path") == "/w/adapter"              # eval's wire, outputs.adapter
+    assert step_field(out, "adapter_path") == "/w/adapter"              # outputs.adapter
     assert step_field(out, "candidate_artifact_id") == "sha256:abc"     # promote's wire
-    shown = resolve_show(["train.train_lora_train_loss"], {"train": out})
-    assert shown == {"train.train_lora_train_loss": 3.2}
+    shown = resolve_show(["train.train_lora_train_loss", "train.train_lora_eval_loss"], {"train": out})
+    assert shown == {"train.train_lora_train_loss": 3.2, "train.train_lora_eval_loss": 3.4}   # the gate's figure

@@ -268,13 +268,17 @@ def check_ask_the_docs(ctx: Ctx) -> None:   # assistant (template) → length �
     _cell_receipts(ctx)
 
 
-def check_tiny_finetune(ctx: Ctx) -> None:  # profile → train (ml flow) → eval → loss → promote ⏸ → review ⏸ → card
-    ids = _one_run_per_leg(ctx, ("profile", "train", "eval", "loss", "promote", "card"), operator_gated=("promote",))
+def check_tiny_finetune(ctx: Ctx) -> None:  # profile → train (ml flow) → loss → promote ⏸ → review ⏸ → card
+    ids = _one_run_per_leg(ctx, ("profile", "train", "loss", "promote", "card"), operator_gated=("promote",))
     ctx.receipt("pipeline.ml", f"pipeline {ctx.pid} done")
     ctx.receipt("gate.person", _decided(ctx, "promote", "review"))
     _operator_gate_receipt(ctx, ("promote",))
+    # the figure `loss-ok` gated on is the trainer's own, measured over the rows it held out
+    held_out = (ctx.out("train").get("findings") or {}).get("train_lora_eval_loss")
+    gated = ctx.out("loss").get("value")
+    assert held_out is not None and gated == held_out, (held_out, gated)
     ctx.receipt("train", f"train.lora flow leg done (run {ids['train']}, model {ctx.rec['inputs'].get('base_model')}, "
-                f"held-out eval_loss={ctx.out('eval').get('eval_loss')})")
+                f"held-out eval_loss={held_out}, from rows the adapter was not trained on; loss-ok gated on it)")
     ctx.receipt("worker.pull", "no hello-cairn leg is routed to the pull lane (an ML target `worker:<pool>` "
                 "on a remote-job leg) and no cell starts `cairn admin worker --pull`; only the worker's claim, "
                 "its token check and an empty queue are tested", proved=False)
