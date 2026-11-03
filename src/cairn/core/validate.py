@@ -49,6 +49,7 @@ from cairn.core.operator.loader import ensure_loaded as _ensure_operators_loaded
 ArtifactType = Literal[
     "template", "skill", "policy", "eval", "pipeline", "trigger", "schema",
     "manifest", "flow", "unknown",
+    "preset",
 ]
 
 # Output schema names the platform ships: the structured Pydantic models (RCA,
@@ -127,6 +128,8 @@ def detect_artifact_type(path: Path) -> ArtifactType:
         if isinstance(doc, dict):
             if doc.get("kind") == "pipeline" or "steps" in doc:
                 return "pipeline"
+            if "presets" in doc:
+                return "preset"
             if "ingress" in doc:
                 return "trigger"
             if "applies_to" in doc or "rules" in doc:
@@ -416,6 +419,31 @@ def _pack_local_search_paths(path: Path) -> list[Path]:
         cur = cur.parent
 
 
+def validate_preset(path: Path) -> ValidationReport:
+    """A pack's ``presets/*.yaml``: names a pipeline, and each preset has a name and inputs. A
+    ``$pack/`` value must name a file inside the pack, as the launch door will require."""
+    report = ValidationReport(str(path), "preset")
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not str(doc.get("pipeline") or "").strip():
+        report.error("a preset file must name its `pipeline:`")
+    entries = doc.get("presets")
+    if not isinstance(entries, list) or not entries:
+        report.error("`presets:` must be a list with at least one preset")
+        return report
+    root = path.resolve().parent.parent
+    for entry in entries:
+        name = entry.get("name") if isinstance(entry, dict) else None
+        if not name or not isinstance(entry.get("inputs", {}), dict):
+            report.error(f"each preset needs a `name` and an `inputs` mapping, got {entry!r}")
+            continue
+        for key, value in entry.get("inputs", {}).items():
+            if isinstance(value, str) and value.startswith("$pack/"):
+                target = (root / value[len("$pack/"):]).resolve()
+                if not (target.is_relative_to(root) and target.exists()):
+                    report.error(f"preset {name!r}: input {key!r} names {value}, which isn't in this pack")
+    return report
+
+
 def validate_path(
     path: Path,
     *,
@@ -441,10 +469,12 @@ def validate_path(
         return validate_manifest(path)
     if atype == "flow":
         return validate_flow(path)
+    if atype == "preset":
+        return validate_preset(path)
     report = ValidationReport(str(path), "unknown")
     report.error(
         "could not detect artifact type (expected template/skill/policy/eval/"
-        "pipeline/trigger/schema/flow/pack.toml)"
+        "pipeline/trigger/schema/flow/preset/pack.toml)"
     )
     return report
 

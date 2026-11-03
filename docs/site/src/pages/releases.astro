@@ -1,0 +1,22 @@
+---
+// The Releases page. Its content is the repository's CHANGELOG.md, read at build
+// time: nobody edits this page by hand, and a release that updates CHANGELOG.md
+// updates the page. The changelog's own "# Changelog" title is dropped because
+// the page title already says it.
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import { compiledContent, getHeadings } from '../../../../CHANGELOG.md';
+
+const html = (await compiledContent()).replace(/<h1[^>]*>.*?<\/h1>/s, '');
+const headings = getHeadings().filter((h) => h.depth > 1);
+---
+
+<StarlightPage
+  frontmatter={{
+    title: 'Releases',
+    description: 'What changed in each cairn release, from the changelog.',
+    tableOfContents: { minHeadingLevel: 2, maxHeadingLevel: 2 },
+  }}
+  headings={headings}
+>
+  <div set:html={html} />
+</StarlightPage>

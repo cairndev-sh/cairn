@@ -263,6 +263,33 @@ Before you rely on a check, run it on a file that doesn't exist and on one that 
 confirm each exits the way you expect. A failure inside a `subgraph_node` isn't detected yet,
 so keep a check to plain steps.
 
+## What was recorded
+
+Nothing in cairn's store. `cairn run --check` compiles the check, runs it once
+in the CLI's own process and exits: it writes no pipeline record, no run, no
+artifact and no run trace. A check is a template, not a pipeline, so it has no legs, gates or
+`pl_…` id to read back with `cairn status`.
+
+What is left is what you keep from the call:
+
+- **The exit code**: `0`, `1` or `2`. The CI job's status is its record.
+- **The summary on stderr**, which is in the job log.
+- **The JSON on stdout**, only with `--json`. It is gone unless you keep it. Redirect
+  it (`> gate.json`) and keep the file with your CI system's own artifact feature:
+  `examples/ci/gitlab-ci-gate.yml` lists `gate.json` under `artifacts:`.
+
+**Audit rows.** None from `dataset-check`. The rows in
+[What a pipeline run writes](/concepts/runs/#what-a-pipeline-run-writes) come
+from the launch door and the pipeline's legs, which `--check` never goes
+through, and `dataset-check` makes no model call, `mcp/call` call or approval.
+A check of your own that calls `mcp/call`, or an operator that makes a direct
+model completion, writes that call's row when `CAIRN_PROFILE` binds `audit.sink`.
+A template's own prompt and agent nodes write none.
+
+To keep a record of what a dataset was when it was checked, run the same check
+as a leg of a pipeline, as
+[Run your first pipeline](/guides/first-pipeline/) does with `data/profile`.
+
 ## Next
 
 - [Run your first pipeline](/guides/first-pipeline/): the same data check as a governed pipeline with a gate.

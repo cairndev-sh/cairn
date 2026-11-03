@@ -113,7 +113,9 @@ def noop(workdir: Path, config: dict, inputs: list[str]) -> dict:
     and the control plane registers ``<name>`` at that content from the descriptor's
     ``register_as`` (``dispatch/leg_executor._register_dataset_versions``), exactly as it
     does for a platform export stage. Same content, same hash: a re-run adds no version.
-    Nothing is written or copied, so the stage stays ``read_only``.
+    Nothing is written or copied, so the stage stays ``read_only``. ``register_role:`` says
+    what the version is for (``training``, ``validation`` or ``test``), so the holdout door
+    can see a test set; unset keeps the dataset's default role.
     """
     name = str(config.get("register") or "").strip()
     if not name:
@@ -131,8 +133,10 @@ def noop(workdir: Path, config: dict, inputs: list[str]) -> dict:
     # `output` is the file itself, so the descriptor's URI names real bytes (the
     # durable relay copies them, and the version and any tag resolve to them); a
     # stage without `output` gets a `stage-NN` placeholder URI holding nothing.
+    role = str(config.get("register_role") or "").strip()
     return {"rows": 0, "register_as": name, "content_hash": f"sha256:{digest[:16]}",
-            "bytes": path.stat().st_size, "output": str(path.resolve())}
+            "bytes": path.stat().st_size, "output": str(path.resolve()),
+            **({"register_role": role} if role else {})}
 
 
 def noop_slow(workdir: Path, config: dict, inputs: list[str]) -> dict:

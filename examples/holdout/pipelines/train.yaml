@@ -1,0 +1,16 @@
+name: train
+kind: pipeline
+visibility: public
+description: >
+  Stands in for a fine-tune: it takes a training version and waits for a person. The
+  holdout door judges the version at launch, before this pipeline has a record.
+outcome: A training run that never saw the eval set
+suite: ml
+inputs:
+  train_version: {type: str, role: training, description: "dataset:<name>@<version>"}
+  eval_cutoff: {type: str, default: "", description: "A date or timestamp. Holdout rows dated after it aren't compared."}
+steps:
+  - id: approve
+    label: Approve the run
+    gate: approve
+    approvers: owners
