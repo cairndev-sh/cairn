@@ -1,0 +1,16 @@
+# hello-budget — the budget cell's pack (tests/e2e/hello/test_budget_cap.py).
+#
+# A domain pack owned by the harness, never shipped: a template leg whose
+# budget.max_cost_usd its model calls cross, and a leg after it that must not run.
+
+[pack]
+name        = "hello-budget"
+version     = "0.1.0"
+description = "The feature proof's budget cell: a template leg over its cost cap."
+tags = ["domain:example", "test:budget"]
+kind        = "domain"
+publisher   = "cairn"
+trust_level = "builtin"
+
+[compat]
+cairn_engine = ">=0.1.0"

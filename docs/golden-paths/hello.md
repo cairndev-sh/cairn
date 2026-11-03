@@ -42,7 +42,7 @@ flowchart TD
   G -->|gate| G1[data gate: predicate on a leg output<br/>person gate: _open_review :2945]
   G -->|task| G2[_submit_task_leg :1853 → _invoke_task_op :2034<br/>→ enforce_gate :2072 → invoke_operator_core<br/>operator/runtime.py:400]
   G -->|flow| G3[_submit_flow_leg :1618 → enforce_flow_gate :1787<br/>→ execute_leg dispatch/leg_executor.py:153 → builtin engine]
-  G -->|template| G4[dispatcher.run_template<br/>dispatch/dispatcher.py:726 → build_chat_model<br/>services/llm/factory.py:97]
+  G -->|template| G4[dispatcher.run_template<br/>dispatch/dispatcher.py:726 → build_chat_model<br/>services/llm/factory.py:108]
   G2 & G3 & G4 --> H[leg terminal → _advance]
   H -->|step declares emits| I[_emit_step_event :3103 → bus topic]
   I -.->|kind: event row| A

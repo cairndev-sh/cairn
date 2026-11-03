@@ -15,8 +15,8 @@ from "cost unknown" (the #1664 lesson; ``operator_compute``'s ``tokens.py``
 refuses the same way). There is no hand-kept price table here any more.
 
 Budget cap: when ``ctx.cost_usd`` exceeds ``settings.max_cost_usd``,
-``record_llm`` raises ``BudgetExceeded``. The graph node bubbles it up and
-the stream emits an SSE ``error`` frame. Set ``max_cost_usd=0`` to disable.
+``record_llm`` raises ``BudgetExceeded``. The graph node bubbles it up, and the
+dispatcher fails the run. Set ``max_cost_usd=0`` to disable.
 A scope can tighten this cap, or measure without enforcing its own cap.
 """
 from __future__ import annotations
@@ -42,6 +42,18 @@ def _cap_for(ctx: RequestCtx) -> float:
     return float(min(caps)) if caps else 0.0
 
 
+def over_cap_reason(ctx: RequestCtx, spent_usd: float) -> str:
+    """Why ``spent_usd`` passes ``ctx``'s cap, or ``""`` when it doesn't.
+
+    For run-level accounting, which sees spend the meter didn't raise on: a Temporal
+    worker's non-enforcing node scopes, or a handler that swallowed ``BudgetExceeded``.
+    """
+    cap = _cap_for(ctx) if ctx.enforce_cap else 0.0
+    if cap and spent_usd > cap:
+        return f"session {ctx.session_id} over budget: ${spent_usd:.6f} > ${cap:.6f}"
+    return ""
+
+
 def merge_cost(parent: RequestCtx, child: RequestCtx) -> None:
     """Fold a non-enforcing child meter into its enforcing parent.
 
@@ -58,7 +70,7 @@ def merge_cost(parent: RequestCtx, child: RequestCtx) -> None:
         if cap and parent.cost_usd > cap:
             raise BudgetExceeded(
                 f"session {parent.session_id} over budget: "
-                f"${parent.cost_usd:.3f} > ${cap:.3f}"
+                f"${parent.cost_usd:.6f} > ${cap:.6f}"
             )
 
 
@@ -151,7 +163,7 @@ def record_llm(
             if cap and meter.cost_usd > cap:
                 exceeded = BudgetExceeded(
                     f"session {meter.session_id} over budget: "
-                    f"${meter.cost_usd:.3f} > ${cap:.3f}"
+                    f"${meter.cost_usd:.6f} > ${cap:.6f}"
                 )
     if exceeded is not None:
         raise exceeded

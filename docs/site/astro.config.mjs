@@ -124,6 +124,11 @@ export default defineConfig({
           label: 'GitHub',
           href: 'https://github.com/cairndev-sh/cairn',
         },
+        {
+          icon: 'comment',
+          label: 'Discussions',
+          href: 'https://github.com/cairndev-sh/cairn/discussions',
+        },
       ],
       sidebar: [
         // Cross-link to the marketing landing — a separate deployment.
@@ -156,6 +161,7 @@ export default defineConfig({
             { label: 'Run your first pipeline', slug: 'guides/first-pipeline' },
             { label: 'Write a pipeline', slug: 'guides/write-a-pipeline' },
             { label: 'Write a flow', slug: 'guides/write-a-flow' },
+            { label: 'Gate CI on a check', slug: 'guides/gate-ci' },
             { label: 'Connect a provider', slug: 'guides/connect-a-provider' },
             { label: 'Set up your team', slug: 'guides/team' },
           ],

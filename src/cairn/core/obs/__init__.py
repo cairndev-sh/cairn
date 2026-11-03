@@ -25,7 +25,7 @@ from cairn.core.obs.audit import (
     get_audit_sink,
     reset_audit_sink,
 )
-from cairn.core.obs.cost import BudgetExceeded, merge_cost, record_llm
+from cairn.core.obs.cost import BudgetExceeded, merge_cost, over_cap_reason, record_llm
 from cairn.core.obs.guard import sanitize_query
 from cairn.core.obs.redact import (
     NoOpRedactor,
@@ -55,6 +55,7 @@ __all__ = [
     "get_audit_sink",
     "get_redactor",
     "merge_cost",
+    "over_cap_reason",
     "record_llm",
     "record_mcp",
     "record_timeout",

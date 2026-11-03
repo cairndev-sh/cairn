@@ -92,7 +92,9 @@ What is shared per name across workspaces:
   and the pipeline launch door once per launch (`src/cairn/core/admission_door.py`, T05 #2190),
   which also applies the policies' required checks and writes the decision on the record.
 - Holdout: a `role=training` version may not overlap a golden/test version; checked on the
-  same agentic door (`src/cairn/core/holdout.py:473`; `dispatcher.py:837`).
+  same agentic door (`src/cairn/core/holdout.py:503`; `dispatcher.py:847`). A malformed
+  `eval_cutoff` is refused there too, whatever the data, and a holdout row whose `dated_at`
+  can't be read stays in the comparison with a warning.
 
 ### Failure and refusal (CURRENT)
 Unknown ref → leg fails at launch. Hash mismatch → kernel raises, leg fails, nothing
