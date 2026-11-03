@@ -5,6 +5,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ## [Unreleased]
 ### Added
 - The example pack's `over-budget` pipeline shows a budget refusing a run before its engine starts, with no key and no spend, and `cairn run` now prints why a leg failed (#368).
+- The failing and warning rows of `cairn setup --check` now end with `— fix:` and the command or setting that resolves it, on the same line, so the failures `cairn setup` prints carry it too. Rows that read `unset (optional)` are unchanged.
 
 ### Fixed
 - A malformed `eval_cutoff` (`"last tuesday"`, `"06/01/2026"`, `5`) is now refused at launch and at run start, where it used to switch the holdout check off and admit overlapping data. Use an ISO-8601 date or timestamp, or leave it out. One holdout row with an unreadable `dated_at` no longer voids the check either: the row stays in the comparison, with a warning that also reaches the run's record.

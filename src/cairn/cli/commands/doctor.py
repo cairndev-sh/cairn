@@ -66,6 +66,19 @@ def _mask(value: str) -> str:
     return value[:keep] + "*" * max(4, len(value) - keep)
 
 
+def _fix(detail: str, how: str) -> str:
+    """``detail`` with what fixes it at the end, on the same line: ``cairn setup`` shows only
+    the lines that start with ✗, so a hint on a second line would be lost. A detail that
+    already says ``fix:`` keeps its own. A hint names a command, a flag, a setting or a file;
+    it never holds a value read from the environment."""
+    return detail if "fix:" in detail else f"{detail} — fix: {how}"
+
+
+#: The hint for an extension point that does not load; the error beside it says what failed.
+_FIX_ENTRY_POINT = ("install what the error names, or uninstall the package that declares it "
+                    "(`pip uninstall <package>`)")
+
+
 def check_settings() -> list[CheckResult]:
     """One CheckResult per declared knob in the inventory."""
     out: list[CheckResult] = []
@@ -75,7 +88,8 @@ def check_settings() -> list[CheckResult]:
         if raw is None or raw == "":
             if spec.required:
                 out.append(CheckResult(spec.env_var, "fail",
-                                       f"required but unset ({spec.description})",
+                                       _fix(f"required but unset ({spec.description})",
+                                            f"set {spec.env_var} in the environment cairn runs in"),
                                        category=spec.category))
             elif spec.default:
                 out.append(CheckResult(spec.env_var, "ok",
@@ -90,7 +104,8 @@ def check_settings() -> list[CheckResult]:
         shown = _mask(raw) if spec.secret else _settings.redacted_url(raw)
         if legacy and not os.environ.get(spec.env_var):  # ADR-0122 D4: read until 1.0, then ignored
             out.append(CheckResult(spec.env_var, "warn",
-                                   f"set: {shown} via {legacy} — deprecated, rename it to {spec.env_var}",
+                                   f"set: {shown} via {legacy} — deprecated — "
+                                   f"fix: rename {legacy} to {spec.env_var}",
                                    category=spec.category))
             continue
         out.append(CheckResult(spec.env_var, "ok", f"set: {shown}", category=spec.category))
@@ -114,15 +129,17 @@ def check_run_db() -> CheckResult:
         scheme = _settings.url_scheme(url)  # only the scheme: the value may carry a user and password
         named = f"has an unrecognized scheme {scheme!r}" if scheme else "is not a storage URL"
         return CheckResult("run_db", "fail",
-                           f"CAIRN_STORAGE {named}; the run store refuses it "
-                           "(postgres://…, sqlite:///path.db, sqlite://:memory:)",
+                           _fix(f"CAIRN_STORAGE {named}; the run store refuses it "
+                                "(postgres://…, sqlite:///path.db, sqlite://:memory:)",
+                                "set CAIRN_STORAGE to postgres://… or sqlite:///path.db, or unset it"),
                            category="store")
     else:
         path, knob = _settings.run_db_path(), "CAIRN_RUN_DB"
     if not path:
         return CheckResult(
             "run_db", "warn",
-            "CAIRN_STORAGE and CAIRN_RUN_DB unset → in-memory store (state lost on restart)",
+            _fix("CAIRN_STORAGE and CAIRN_RUN_DB unset → in-memory store (state lost on restart)",
+                 "set CAIRN_STORAGE to postgres://… or sqlite:///path.db, or CAIRN_RUN_DB to a file path"),
             category="store",
         )
     if path == ":memory:":
@@ -133,10 +150,16 @@ def check_run_db() -> CheckResult:
             parent.mkdir(parents=True, exist_ok=True)
         except OSError as e:
             return CheckResult("run_db", "fail",
-                               f"cannot create parent {parent}: {e}", category="store")
+                               _fix(f"cannot create parent {parent}: {e}",
+                                    f"make that directory creatable, or point {knob} at a path in a "
+                                    "directory this user can write"),
+                               category="store")
     if not os.access(parent, os.W_OK):
         return CheckResult("run_db", "fail",
-                           f"parent dir {parent} is not writable", category="store")
+                           _fix(f"parent dir {parent} is not writable",
+                                f"make it writable for this user, or point {knob} at a path in a "
+                                "directory this user can write"),
+                           category="store")
     return CheckResult("run_db", "ok",
                        f"{path} ({knob}); parent {parent} is writable", category="store")
 
@@ -153,15 +176,20 @@ def check_engine_store() -> Optional[CheckResult]:
     mine, ep, same = checked
     if same is None:
         return CheckResult("engine_store", "warn",
-                           f"the engine at {ep} does not report its store; "
-                           f"cannot compare it with {mine}", category="store")
+                           _fix(f"the engine at {ep} does not report its store; "
+                                f"cannot compare it with {mine}",
+                                "start the engine with CAIRN_STORAGE set to a persistent store, "
+                                "or upgrade it: an in-memory or older engine reports none"),
+                           category="store")
     if same:
         return CheckResult("engine_store", "ok", f"{mine} — the store the engine at {ep} reads",
                            category="store")
     return CheckResult("engine_store", "warn",
-                       f"this CLI writes {mine}, but the engine at {ep} reads a different "
-                       "store: `cairn admin connect add` refuses until CAIRN_STORAGE names the "
-                       "engine's store (or --force)", category="store")
+                       _fix(f"this CLI writes {mine}, but the engine at {ep} reads a different "
+                            "store: `cairn admin connect add` refuses until CAIRN_STORAGE names the "
+                            "engine's store (or --force)",
+                            "set CAIRN_STORAGE here to the store the engine reads"),
+                       category="store")
 
 
 # ─── network reachability probes ────────────────────────────────────
@@ -182,6 +210,11 @@ async def _probe_url(url: str) -> tuple[bool, str]:
         return False, type(e).__name__
 
 
+def _probe_fix(detail: str, how: str) -> str:
+    """The hint for a URL the probe could not reach; a probe that never ran needs httpx."""
+    return "pip install httpx" if detail == "httpx not installed" else how
+
+
 async def check_runtime() -> CheckResult:
     """Temporal Step 3 — surface the configured StateGraph runtime.
 
@@ -198,8 +231,8 @@ async def check_runtime() -> CheckResult:
     except ImportError as e:
         return CheckResult(
             "runtime", "fail",
-            f"CAIRN_RUNTIME=temporal but the SDK is missing ({e}); "
-            "pip install 'temporalio[langgraph]'",
+            _fix(f"CAIRN_RUNTIME=temporal but the SDK is missing ({e})",
+                 "pip install 'cairndev[runtime-temporal]'"),
             category="runtime",
         )
     address = _settings.temporal_address()
@@ -213,7 +246,9 @@ async def check_runtime() -> CheckResult:
         detail = f"temporal — {address} reachable"
         status = "ok"
     except Exception as e:  # noqa: BLE001 — any connect failure is a warn
-        detail = f"temporal — {address} unreachable ({type(e).__name__})"
+        detail = _fix(f"temporal — {address} unreachable ({type(e).__name__})",
+                      "start a Temporal server at that address, or set CAIRN_TEMPORAL_ADDRESS "
+                      "to the host:port of one")
         status = "warn"
     return CheckResult("runtime", status, detail, category="runtime")
 
@@ -223,10 +258,12 @@ async def check_slack_webhook() -> Optional[CheckResult]:
     if not url:
         return None
     ok, detail = await _probe_url(url)
+    row = f"{_mask(url)} — {detail}"
     return CheckResult(
         "slack_webhook",
         "ok" if ok else "warn",
-        f"{_mask(url)} — {detail}",
+        row if ok else _fix(row, _probe_fix(detail, "check that SLACK_WEBHOOK_URL is the webhook's full "
+                                       "https URL and that this host can reach it")),
         category="reachability",
     )
 
@@ -247,12 +284,14 @@ async def check_metaflow_service() -> Optional[CheckResult]:
     if not url:
         return None
     ok, detail = await _probe_url(url.rstrip("/") + "/ping")
+    row = f"{url} — {detail}" + ("" if ok else " (run resolution falls back to CWD-scoped local "
+                                              "metadata: cross-box resume and detached runs break, #1358)")
     return CheckResult(
         "metaflow_service",
         "ok" if ok else "fail",
-        f"{url} — {detail}"
-        + ("" if ok else " (run resolution falls back to CWD-scoped local "
-                         "metadata: cross-box resume and detached runs break, #1358)"),
+        row if ok else _fix(row, _probe_fix(
+            detail, "start the metadata service, and set CAIRN_METAFLOW_SERVICE_URL (or "
+                    "`metaflow_metadata_service` under [profile.backends]) to its http(s) URL")),
         category="reachability",
     )
 
@@ -289,8 +328,8 @@ def check_engine_clients() -> list[CheckResult]:
             "ok" if present else "fail",
             f"{field}={choice} → `{module}` "
             + ("importable" if present else
-               f"NOT importable — every {field.split('_')[0]} flow leg will fail at "
-               f"submit; install `{extra}` (the image's `engines` extra bakes it)"),
+               _fix(f"NOT importable — every {field.split('_')[0]} flow leg will fail at submit",
+                    f"pip install '{extra}'")),
             category="reachability",
         ))
     return out
@@ -313,10 +352,11 @@ def check_stage_kernels() -> list[CheckResult]:
         except Exception as e:  # noqa: BLE001 — a diagnostic must never crash the doctor
             broken.append(CheckResult(
                 f"stage_kernel[{name}]", "warn",
-                f"kernel {name!r} cannot be imported on the control plane ({type(e).__name__}: {e}) — "
-                "its `implements` cannot be read here, so if it opts in to a stage contract the "
-                "launch door records nothing and the contract is NOT checked (#2363). Install its "
-                "dependencies on the control plane.", category="packs"))
+                _fix(f"kernel {name!r} cannot be imported on the control plane ({type(e).__name__}: {e}) — "
+                     "its `implements` cannot be read here, so if it opts in to a stage contract the "
+                     "launch door records nothing and the contract is NOT checked (#2363)",
+                     "install the kernel's dependencies in this environment (the error names what is missing)"),
+                category="packs"))
     return broken or [CheckResult("stage_kernels", "ok",
                                   f"all {len(eps)} registered stage kernels load on the control plane "
                                   f"({opted_in} opted in to a stage contract)", category="packs")]
@@ -330,14 +370,16 @@ def check_seed_providers() -> list[CheckResult]:
 
     found = load_seed_providers()
     out = [CheckResult(f"seed_provider[{f['name']}]", "warn",
-                       f"{f['target']} does not load ({f['error']}) — `cairn admin demo` skips it",
-                       category="packs") for f in seed_load_failures()]
+                       _fix(f"{f['target']} does not load ({f['error']}) — `cairn admin demo` skips it",
+                            _FIX_ENTRY_POINT), category="packs") for f in seed_load_failures()]
     if found:
         out.append(CheckResult("seed_providers", "ok", ", ".join(found), category="packs"))
     else:
         out.append(CheckResult("seed_providers", "warn",
-                               "no `cairn.seeds` provider is installed — `cairn admin demo` seeds an empty "
-                               "workspace (reinstall cairn, or install a pack that ships one)",
+                               _fix("no `cairn.seeds` provider is installed — `cairn admin demo` seeds an empty "
+                                    "workspace",
+                                    "pip install --force-reinstall cairndev (it ships the example one), or "
+                                    "install a pack that ships one"),
                                category="packs"))
     return out
 
@@ -350,15 +392,16 @@ def check_model_catalog_providers() -> list[CheckResult]:
 
     found = load_catalog_providers()
     out = [CheckResult(f"model_catalog[{f['name']}]", "warn",
-                       f"{f['target']} does not load ({f['error']}) — the licence door skips it",
-                       category="packs") for f in catalog_load_failures()]
+                       _fix(f"{f['target']} does not load ({f['error']}) — the licence door skips it",
+                            _FIX_ENTRY_POINT), category="packs") for f in catalog_load_failures()]
     if found:
         out.append(CheckResult("model_catalogs", "ok", ", ".join(found), category="packs"))
     else:
         out.append(CheckResult("model_catalogs", "warn",
-                               "no `cairn.model_catalogs` provider is installed — a `base_model` input "
-                               "is not checked against a catalogue (install the platform, or a pack "
-                               "that ships one)", category="packs"))
+                               _fix("no `cairn.model_catalogs` provider is installed — a `base_model` input "
+                                    "is not checked against a catalogue",
+                                    "install a package that declares a `cairn.model_catalogs` entry point "
+                                    "(cairndev ships none)"), category="packs"))
     return out
 
 
@@ -370,8 +413,8 @@ def check_run_hooks() -> list[CheckResult]:
 
     found = load_run_hooks()
     out = [CheckResult(f"run_hook[{f['name']}]", "warn",
-                       f"{f['target']} does not load ({f['error']}) — the dispatcher skips it",
-                       category="packs") for f in run_hook_load_failures()]
+                       _fix(f"{f['target']} does not load ({f['error']}) — the dispatcher skips it",
+                            _FIX_ENTRY_POINT), category="packs") for f in run_hook_load_failures()]
     out.append(CheckResult("run_hooks", "ok",
                            ", ".join(found) if found else
                            "no `cairn.run_hooks` provider installed — runs are recorded and scored by their own evals only",
@@ -387,8 +430,8 @@ def check_router_providers() -> list[CheckResult]:
 
     providers = discover_router_providers()
     out = [CheckResult(f"router_provider[{p.name}]", "warn",
-                       f"router provider {p.name!r} ({p.value}) does not load: {p.error} — "
-                       "the server boots without it", category="packs")
+                       _fix(f"router provider {p.name!r} ({p.value}) does not load: {p.error} — "
+                            "the server boots without it", _FIX_ENTRY_POINT), category="packs")
            for p in providers if p.fn is None]
     loaded = [p.name for p in providers if p.fn is not None]
     out.append(CheckResult("router_providers", "ok",
@@ -408,11 +451,12 @@ def check_cli_providers() -> list[CheckResult]:
 
     providers = load_cli_providers()
     out = [CheckResult(f"cli_provider[{p.name}]", "warn",
-                       f"cli provider {p.name!r} ({p.value}) does not load: {p.error} — "
-                       "`cairn` starts without it", category="packs")
+                       _fix(f"cli provider {p.name!r} ({p.value}) does not load: {p.error} — "
+                            "`cairn` starts without it", _FIX_ENTRY_POINT), category="packs")
            for p in providers if p.error]
     out += [CheckResult(f"cli_provider[{f['name']}]", "warn",
-                        f"command {f['name']!r} from {f['target']} refused: {f['error']}",
+                        _fix(f"command {f['name']!r} from {f['target']} refused: {f['error']}",
+                             "rename the command in the package that declares it, or uninstall that package"),
                         category="packs") for f in cli_mount_failures()]
     loaded = [f"{p.name} ({', '.join(n for n, _ in p.commands)})" for p in providers if not p.error]
     out.append(CheckResult("cli_providers", "ok",
@@ -443,6 +487,43 @@ def check_packs() -> list[CheckResult]:
 
 
 # ─── §24.3 composition (P2.c) ───────────────────────────────────────
+
+
+def _pack_compat_fix(detail: str) -> str:
+    """The hint for a pack whose ``[compat] cairn_engine`` range does not check out. Which
+    case it is shows in the text the loader wrote; a case it does not know gets none."""
+    if "not installed" in detail:
+        return _fix(detail, "pip install cairndev, so the range can be checked")
+    if "not a valid PEP 440 specifier" in detail:
+        return _fix(detail, "write `cairn_engine` in the pack's pack.toml as a PEP 440 range, "
+                            "such as \">=0.3,<0.4\"")
+    if "loading anyway" in detail:
+        return _fix(detail, "install a release of the pack built for this cairndev, or a cairndev "
+                            "release inside the range the pack declares")
+    return detail
+
+
+#: composition conflict → what resolves it, keyed by a phrase of the reason the loader wrote. A
+#: reason that names its own ``fix:`` keeps it; one nobody listed here gets no hint.
+_COMPOSITION_FIXES = (
+    ("but no pack named", "install that pack, or correct the pick under [profile.capabilities]"),
+    ("but that pack doesn't provide it",
+     "pick one of the listed providers under [profile.capabilities]"),
+    ("provided by multiple packs",
+     "pick one of them under [profile.capabilities] in the profile CAIRN_PROFILE names"),
+    ("but no installed pack provides it", "install a pack that provides it"),
+    ("must be '<server>:<tool>'",
+     "write each tool in the pack's [requires.mcp].tools as '<server>:<tool>'"),
+    ("unprovided; richer behavior will not activate",
+     "install a pack that provides it; the richer behavior stays off until then"),
+)
+
+
+def _composition_fix(reason: str) -> str:
+    for phrase, how in _COMPOSITION_FIXES:
+        if phrase in reason:
+            return _fix(reason, how)
+    return reason
 
 
 def check_composition() -> list[CheckResult]:
@@ -480,8 +561,9 @@ def check_composition() -> list[CheckResult]:
     if not packs:
         out.append(CheckResult(
             "packs_loaded", "warn",
-            "no packs installed — install at least one via "
-            "the 'cairn.packs' entry-point group",
+            _fix("no packs installed — install at least one via the 'cairn.packs' entry-point group",
+                 "pip install a pack, or run `cairn pack add --dev <pack-dir>` for the CAIRN_PACK_PATH "
+                 "export that loads one from a directory"),
             category="packs",
         ))
         return out
@@ -519,7 +601,8 @@ def check_composition() -> list[CheckResult]:
         compat = engine_compat_status(p)
         if compat is not None:
             out.append(CheckResult(
-                f"pack_compat:{p.name}", compat[0], compat[1], category="packs",
+                f"pack_compat:{p.name}", compat[0],
+                compat[1] if compat[0] == "ok" else _pack_compat_fix(compat[1]), category="packs",
             ))
 
     # §Phase-2.8 — declared trigger sources per pack + which provider
@@ -579,9 +662,11 @@ def check_composition() -> list[CheckResult]:
         if md is None:
             out.append(CheckResult(
                 f"operator:{op_name}", "warn",
-                "no pack.toml metadata found "
-                "(operator class registered without a matching "
-                "[operator.\"<name>\"] table)",
+                _fix("no pack.toml metadata found "
+                     "(operator class registered without a matching "
+                     "[operator.\"<name>\"] table)",
+                     "run `cairn pack sync <pack-dir>` in the pack that ships it: it writes the "
+                     "missing table"),
                 category="packs",
             ))
             continue
@@ -605,9 +690,13 @@ def check_composition() -> list[CheckResult]:
             bits.append("verify")
         if md.supports_compensate:
             bits.append("compensate")
+        row = " | ".join(bits)
         out.append(CheckResult(
             f"operator:{op_name}", status,
-            " | ".join(bits), category="packs",
+            row if status == "ok" else _fix(
+                row, "declare an executor this engine implements in the operator class's `executors` "
+                     "(`cairn pack sync <pack-dir>` copies it to pack.toml)"),
+            category="packs",
         ))
 
     if report is None:
@@ -633,13 +722,17 @@ def check_composition() -> list[CheckResult]:
 
     for reason in report.conflicts:
         out.append(CheckResult(
-            "composition_conflict", "fail", reason, category="packs",
+            "composition_conflict", "fail", _composition_fix(reason), category="packs",
         ))
     for reason in report.warnings:
         out.append(CheckResult(
-            "composition_warning", "warn", reason, category="packs",
+            "composition_warning", "warn", _composition_fix(reason), category="packs",
         ))
     return out
+
+
+#: the builtin operators the shipped `secure` profile binds the governance capabilities to
+_GOVERNANCE_BINDING = {"audit.sink": "audit/store", "redact.text": "redact/text"}
 
 
 def check_profile() -> list[CheckResult]:
@@ -664,7 +757,9 @@ def check_profile() -> list[CheckResult]:
         profile = load_profile_from_env()
     except Exception as e:  # noqa: BLE001 — a broken profile is exactly what doctor reports
         out.append(CheckResult(
-            "profile", "fail", f"CAIRN_PROFILE={raw!r} failed to load: {e}",
+            "profile", "fail",
+            _fix(f"CAIRN_PROFILE={raw!r} failed to load: {e}",
+                 "set CAIRN_PROFILE to the path of a valid profile .toml file, or unset it"),
             category="profile",
         ))
         return out
@@ -686,8 +781,10 @@ def check_profile() -> list[CheckResult]:
         except Exception:  # noqa: BLE001
             out.append(CheckResult(
                 f"binding:{capability}", "fail",
-                f"→ {op_name!r} is not a registered operator — the service "
-                f"would silently no-op at runtime (fail-open)",
+                _fix(f"→ {op_name!r} is not a registered operator — the service "
+                     f"would silently no-op at runtime (fail-open)",
+                     f"install the pack that provides {op_name!r}, or remove the "
+                     f"{capability!r} binding from [profile.bindings]"),
                 category="profile",
             ))
 
@@ -705,7 +802,9 @@ def check_profile() -> list[CheckResult]:
         if capability not in profile.bindings:
             out.append(CheckResult(
                 f"binding:{capability}", "warn",
-                f"unbound under {raw!r} — {consequence}",
+                _fix(f"unbound under {raw!r} — {consequence}",
+                     f"add `\"{capability}\" = \"{_GOVERNANCE_BINDING[capability]}\"` under "
+                     "[profile.bindings] (the shipped secure profile binds both)"),
                 category="profile",
             ))
     return out
@@ -738,36 +837,50 @@ def check_production_readiness() -> list[CheckResult]:
     if str(pii.get("backend", "")).lower() == "presidio" and not _have("presidio_analyzer"):
         out.append(CheckResult(
             "pii-backend", "fail",
-            "profile requires PII backend=presidio but presidio isn't installed "
-            "(pip install 'cairndev[production]') — the governed PII gate degrades to regex "
-            "and can't certify a clean scrub (#889)", category=cat))
+            _fix("profile requires PII backend=presidio but presidio isn't installed "
+                 "— the governed PII gate degrades to regex "
+                 "and can't certify a clean scrub (#889)",
+                 "pip install 'cairndev[pii]'"), category=cat))
     # Benchmark: require_benchmark demands the lm-eval harness so the promote can
     # actually gate on task quality (#702/#898) — else no run can satisfy the gate.
     mg = (cfg.get("model/gate") or {}).get("thresholds") or {}
     if mg.get("require_benchmark") and not _have("lm_eval"):
         out.append(CheckResult(
             "benchmark-harness", "fail",
-            "profile requires benchmark scores to promote but lm-eval isn't installed "
-            "(pip install 'cairndev[production]') — no run can satisfy the gate (#898)", category=cat))
+            _fix("profile requires benchmark scores to promote but lm-eval isn't installed "
+                 "— no run can satisfy the gate (#898)",
+                 "pip install 'cairn-operator-eval-lm[harness]', or drop require_benchmark "
+                 "from the profile's model/gate thresholds"), category=cat))
     # Temporal: CAIRN_RUNTIME=temporal needs temporalio, else the durable runtime can't load.
     if _settings.runtime() == "temporal" and not _have("temporalio"):
         out.append(CheckResult(
             "runtime-temporal", "fail",
-            "CAIRN_RUNTIME=temporal but temporalio isn't installed (pip install 'cairndev[production]')",
+            _fix("CAIRN_RUNTIME=temporal but temporalio isn't installed",
+                 "pip install 'cairndev[runtime-temporal]'"),
             category=cat))
     # MLflow: a tracking URI set without mlflow means model/register silently falls
     # back to the LOCAL registry — no real MLflow promotion / lineage.
     if os.environ.get("MLFLOW_TRACKING_URI") and not _have("mlflow"):
         out.append(CheckResult(
             "registry-mlflow", "warn",
-            "MLFLOW_TRACKING_URI is set but mlflow isn't installed — model/register falls "
-            "back to the local registry (no MLflow lineage)", category=cat))
+            _fix("MLFLOW_TRACKING_URI is set but mlflow isn't installed — model/register falls "
+                 "back to the local registry (no MLflow lineage)",
+                 "pip install mlflow, or unset MLFLOW_TRACKING_URI"), category=cat))
     if not out:
         out.append(CheckResult(
             "production", "ok",
             "profile's governance backends resolve (presidio / lm-eval / temporal as declared)",
             category=cat))
     return out
+
+
+#: what connects a provider ``connected_llm_providers`` knows: the setting to give a value, by name
+_PROVIDER_FIX = {
+    "openai": "set OPENAI_API_KEY",
+    "anthropic": "set ANTHROPIC_API_KEY",
+    "gemini": "set GEMINI_API_KEY",
+    "gateway": "set LLM_GATEWAY to the gateway kind (not `direct`) and LLM_GATEWAY_URL to its URL",
+}
 
 
 def check_model_roles() -> list[CheckResult]:
@@ -787,9 +900,12 @@ def check_model_roles() -> list[CheckResult]:
         else:
             out.append(CheckResult(
                 f"model_role:{cfg.role}", "warn",
-                f"bound to '{cfg.provider}/{cfg.name}' but provider "
-                f"'{cfg.provider}' has no key configured — calls will fail; "
-                f"reassign on the LLM gateway page or set the key",
+                _fix(f"bound to '{cfg.provider}/{cfg.name}' but provider "
+                     f"'{cfg.provider}' has no key configured — calls will fail; "
+                     f"reassign on the LLM gateway page or set the key",
+                     _PROVIDER_FIX.get(cfg.provider) or
+                     "reassign the role to a provider this deployment can call "
+                     f"({', '.join(sorted(_PROVIDER_FIX))})"),
                 category="settings",
             ))
     return out
@@ -822,8 +938,11 @@ def check_required_services() -> list[CheckResult]:
             else:
                 out.append(CheckResult(
                     f"requires:{pack.name}:{cap}", "fail",
-                    f"pack '{pack.name}' requires '{cap}' but no provider is "
-                    f"bound in [profile.bindings]", category="profile",
+                    _fix(f"pack '{pack.name}' requires '{cap}' but no provider is "
+                         f"bound in [profile.bindings]",
+                         f"bind '{cap}' under [profile.bindings] of the profile CAIRN_PROFILE names, "
+                         "to an installed operator that provides it"),
+                    category="profile",
                 ))
     if not any_required:
         out.append(CheckResult(
@@ -837,6 +956,19 @@ def check_required_services() -> list[CheckResult]:
 # shared with the runtime fail-closed gate in the dispatcher so doctor and the
 # run path can never disagree about what counts as provisioned.
 _REQUIRES_BACKEND = REQUIRES_BACKEND
+
+
+#: drift kind → what resolves it. `cairn pack sync` derives the [operator] tables and the
+#: `cairn.operators` entry-point lines from the classes; it lists an orphaned table, it does not remove it.
+_DRIFT_FIX = {
+    "declared_not_registered":
+        "run `cairn pack sync <pack-dir>` in the pack that ships it (it adds a missing entry-point line and "
+        "lists an [operator] table whose class is gone, to delete by hand), then reinstall the pack "
+        "(pip install -e <pack-dir>)",
+    "pack_not_installed": "pip install -e <pack-dir> for the pack that declares it, or ignore it if intended",
+    "*": "run `cairn pack sync <pack-dir>` in the pack that ships it: it rewrites the [operator] table "
+         "from the class",
+}
 
 
 def check_manifest_drift() -> list[CheckResult]:
@@ -862,7 +994,7 @@ def check_manifest_drift() -> list[CheckResult]:
         # `pack_not_installed` is an environment fact (a dev machine or slim
         # deployment legitimately omits packs) — a warn, never a fail.
         CheckResult(f"drift[{f.kind}]", "fail" if f.is_drift else "warn",
-                    f.detail, category="packs")
+                    _fix(f.detail, _DRIFT_FIX.get(f.kind, _DRIFT_FIX["*"])), category="packs")
         for f in findings
     ]
 
@@ -900,9 +1032,9 @@ def check_pipeline_mandate() -> list[CheckResult]:
                             "every domain pack ships a pipeline", category="packs")]
     return [
         CheckResult(f"pipeline_mandate[{name}]", "fail",
-                    f"domain pack {name!r} has no pipelines/ — a domain pack's "
-                    f"runnable surface is mandatory (ADR-0084 D4). Add "
-                    f"pipelines/<name>.yaml composing its own flows.",
+                    _fix(f"domain pack {name!r} has no pipelines/ — a domain pack's "
+                         f"runnable surface is mandatory (ADR-0084 D4)",
+                         "add pipelines/<name>.yaml to the pack, composing its own flows"),
                     category="packs")
         for name in missing
     ]
@@ -928,10 +1060,10 @@ def check_pack_layout() -> list[CheckResult]:
                             "every pack keeps its flows in flows/", category="packs")]
     return [
         CheckResult(f"pack_layout[{name}]", "warn",
-                    f"pack {name!r} keeps flows in "
-                    f"{', '.join(a.replace('_dir', '/') for a in dirs)} — superseded "
-                    f"by flows/ (ADR-0084 D2). The alias still loads; move the "
-                    f"files when convenient (#1163).",
+                    _fix(f"pack {name!r} keeps flows in "
+                         f"{', '.join(a.replace('_dir', '/') for a in dirs)} — superseded "
+                         "by flows/ (ADR-0084 D2). The alias still loads (#1163)",
+                         "move the files into the pack's flows/ directory"),
                     category="packs")
         for name, dirs in sorted(stale.items())
     ]
@@ -967,8 +1099,9 @@ def check_flow_stem_collisions() -> list[CheckResult]:
                             category="packs")]
     return [
         CheckResult(f"flow_stem_collision[{pack}]", "warn",
-                    f"{reason} ADR-0106 D9 forbids it and the install door "
-                    f"refuses this pack until it is fixed (#1543, #2134).",
+                    _fix(f"{reason} ADR-0106 D9 forbids it and the install door "
+                         f"refuses this pack until it is fixed (#1543, #2134).",
+                         "rename one of the two flow files so the two stems differ"),
                     category="packs")
         for pack, reason in rows
     ]
@@ -1005,6 +1138,13 @@ def _backend_provenance_checks() -> list[CheckResult]:
         )
         for r in rows
     ]
+
+
+#: kind → the setting that provisions it (`memory` lives in the profile only; the vector store has an env var)
+_BACKEND_FIX = {
+    "memory": "set `memory = true` under [profile.backends] of the profile CAIRN_PROFILE names",
+    "rag": "set `rag_vector_store` under [profile.backends], or RAG_VECTOR_STORE in the environment",
+}
 
 
 def check_provisioned_backends() -> list[CheckResult]:
@@ -1046,8 +1186,9 @@ def check_provisioned_backends() -> list[CheckResult]:
             else:
                 out.append(CheckResult(
                     f"provisioned:{pack.name}:{kind}", "fail",
-                    f"pack '{pack.name}' requires {kind} but no {kind} backend is "
-                    f"enabled here — enable it in Environments → Backends",
+                    _fix(f"pack '{pack.name}' requires {kind} but no {kind} backend is "
+                         f"enabled here — enable it in Environments → Backends",
+                         _BACKEND_FIX[kind]),
                     category="profile",
                 ))
     if not any_required:
@@ -1088,7 +1229,8 @@ def check_operator_config() -> list[CheckResult]:
         if not default_registry.has(op_name):
             out.append(CheckResult(
                 f"config:{op_name}", "fail",
-                f"[profile.config.\"{op_name}\"] names an operator that isn't installed",
+                _fix(f"[profile.config.\"{op_name}\"] names an operator that isn't installed",
+                     f"install the pack that ships {op_name!r}, or remove [profile.config.\"{op_name}\"]"),
                 category="profile",
             ))
             continue
@@ -1096,8 +1238,8 @@ def check_operator_config() -> list[CheckResult]:
         if schema is None:
             out.append(CheckResult(
                 f"config:{op_name}", "fail",
-                f"operator '{op_name}' declares no config_schema (no tunable knobs) — "
-                f"remove [profile.config.\"{op_name}\"]",
+                _fix(f"operator '{op_name}' declares no config_schema (no tunable knobs)",
+                     f"remove [profile.config.\"{op_name}\"]"),
                 category="profile",
             ))
             continue
@@ -1107,7 +1249,8 @@ def check_operator_config() -> list[CheckResult]:
             fields = ", ".join(sorted(schema.model_fields.keys())) or "(none)"
             out.append(CheckResult(
                 f"config:{op_name}", "fail",
-                f"[profile.config.\"{op_name}\"] invalid: {e}. Accepts: {fields}",
+                _fix(f"[profile.config.\"{op_name}\"] invalid: {e}. Accepts: {fields}",
+                     f"edit [profile.config.\"{op_name}\"] to use only the accepted fields, with the right types"),
                 category="profile",
             ))
         else:
@@ -1143,14 +1286,16 @@ async def check_artifact_bytes() -> list[CheckResult]:
         "artifact_bytes", "ok", f"relaying registered artifacts to s3://{target[0]}/{target[1]}".rstrip("/"),
         category="store") if target else CheckResult(
         "artifact_bytes", "warn",
-        "no durable artifact byte store (CAIRN_ARTIFACT_STORE unset/local) — a registered "
-        "artifact whose URI is a box workdir is unfetchable once that box is gone",
+        _fix("no durable artifact byte store (CAIRN_ARTIFACT_STORE unset/local) — a registered "
+             "artifact whose URI is a box workdir is unfetchable once that box is gone",
+             "set CAIRN_ARTIFACT_STORE to s3://<bucket>[/<prefix>]"),
         category="store")
 
     store = build_artifact_store()
     if isinstance(store, _NullArtifactStore):
         return [CheckResult("artifact_bytes", "warn",
-                            "no artifact registry configured (CAIRN_STORAGE unset) — nothing to check",
+                            _fix("no artifact registry configured (CAIRN_STORAGE unset) — nothing to check",
+                                 "set CAIRN_STORAGE to postgres://… or sqlite:///path.db"),
                             category="store")]
     # The registry answers per workspace (ADR-0148); the CLI checks the process's
     # own workspace (CAIRN_WORKSPACE, else `default`), which owns every artifact
@@ -1162,7 +1307,9 @@ async def check_artifact_bytes() -> list[CheckResult]:
         health = await registry_health(store, workspace_id=ws)
     except Exception as e:  # noqa: BLE001 - a doctor probe reports, it never crashes
         return [backend, CheckResult("artifact_registry_bytes", "warn",
-                                     f"could not read the artifact registry: {e}", category="store")]
+                                     _fix(f"could not read the artifact registry: {e}",
+                                          "make sure the store CAIRN_STORAGE names is up and reachable"),
+                                     category="store")]
     finally:
         try:
             await store.close()
@@ -1173,6 +1320,8 @@ async def check_artifact_bytes() -> list[CheckResult]:
         names = ", ".join(f"{a['id'][:12]} ({a['uri']})" for a in health["dangling_sample"])
         detail = (f"{health['dangling']} dangling of {health['total']} registered in workspace {ws!r} "
                   f"({health['durable']} durable, {health['local']} local-only) — first: {names}")
+        detail = _fix(detail, "put the bytes back at those URIs, or re-run what produced them; "
+                              "set CAIRN_ARTIFACT_STORE so later ones are relayed off the box")
         status = "warn"
     else:
         detail = (f"{health['total']} registered artifacts in workspace {ws!r} resolve "
@@ -1206,7 +1355,11 @@ async def check_mcp_servers() -> list[CheckResult]:
             except Exception as e:  # noqa: BLE001 — unreachable is the finding
                 out.append(CheckResult(
                     f"mcp:{name}", "warn",
-                    f"unreachable ({type(e).__name__}: {e})", category="mcp",
+                    _fix(f"unreachable ({type(e).__name__}: {e})",
+                         f"start the {name!r} server, and check that its entry in CAIRN_MCP_SERVERS "
+                         f"(or CAIRN_MCP_{name.upper()}_URL / CAIRN_MCP_{name.upper()}_COMMAND) "
+                         "names its URL or command correctly"),
+                    category="mcp",
                 ))
 
     try:
@@ -1215,8 +1368,9 @@ async def check_mcp_servers() -> list[CheckResult]:
             if name not in conns:
                 out.append(CheckResult(
                     f"mcp:{name}", "warn",
-                    "declared in [profile.mcp_servers] but the MCP client reads "
-                    "env only — set CAIRN_MCP_SERVERS / CAIRN_MCP_<NAME>_* too",
+                    _fix("declared in [profile.mcp_servers] but the MCP client reads "
+                         "env only — set CAIRN_MCP_SERVERS / CAIRN_MCP_<NAME>_* too",
+                         f"add a {name!r} entry to the JSON object in CAIRN_MCP_SERVERS"),
                     category="mcp",
                 ))
     except Exception:  # noqa: BLE001 — profile errors reported elsewhere
@@ -1264,8 +1418,10 @@ async def check_compute_targets() -> list[CheckResult]:
         except Exception as e:  # noqa: BLE001 — an unreachable store is a warn, not a crash
             out.append(CheckResult(
                 f"compute_target:{key}", "warn",
-                f"{key} → {target!r} could not be resolved ({type(e).__name__}: {e}) "
-                f"— doctor cannot vouch for this target from here",
+                _fix(f"{key} → {target!r} could not be resolved ({type(e).__name__}: {e}) "
+                     f"— doctor cannot vouch for this target from here",
+                     "make sure the connection store CAIRN_STORAGE names is reachable; "
+                     "`cairn admin connect ls` lists the connections it holds"),
                 category="runtime"))
             continue
         cfg = dict(getattr(resolved, "config", None) or {}) if resolved is not None else None
