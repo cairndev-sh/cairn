@@ -140,6 +140,9 @@ env -u CAIRN_STORAGE .venv/bin/pytest tests/core -q
   README's Quickstart section with `scripts/check_quickstart.py`: it starts an engine, answers both gates, trips the data
   gate and verifies the audit log. It reads the commands from the README, so edit them there; a line the script can't
   run fails the check until the script is taught it.
+- **The Compose stack** — the `compose` workflow (`compose.yml`, not a required check) builds the engine image, starts
+  `deploy/light` from a clean checkout with `scripts/check_compose.py`, and runs a pipeline through it with and without
+  auth. It runs nightly and on changes to the stack.
 
 ## Documentation
 
