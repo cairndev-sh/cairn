@@ -26,6 +26,8 @@ A patch release: fixes to the CLI only, and one of them stops a secret being pri
 - `cairn status --replay` reads a run from the local engine. (#382)
 - A named endpoint is never replaced by local data in `cairn status --replay`. (#388)
 - `cairn admin lineage` says the chain is broken, not that the log was altered: a crash mid-write and racing writers look the same. (#385)
+- A dry run now reads a top-level `eval_cutoff` the way the holdout door does. It ignored it, so it could report an overlap the door would admit, or call a malformed cutoff ready where the door refuses it.
+- `cairn setup --check` and `cairn doctor` no longer print the path of a secret URL. A Slack webhook's token is in its path, and 0.3.2 through 0.4.0 printed it in full: `set: https://hooks.slack.com/services/...`. They now show `https://hooks.slack.com/***`. If you shared that output, for example in a bug report, rotate the webhook.
 
 ## [0.4.0] - 2026-11-02
 
