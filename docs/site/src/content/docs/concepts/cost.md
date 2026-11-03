@@ -37,6 +37,25 @@ series '<series>': this run's estimate $<estimate> would exceed the $<cap> cap
 A finished leg settles its reservation. A failed or cancelled leg releases it.
 A retried attempt reserves again, because a retry is new spend.
 
+## A cap on a template's model calls
+
+A template can cap what its own model calls spend:
+
+```yaml
+budget:
+  max_cost_usd: 0.50
+```
+
+Spend is checked after each call. The call that crosses the cap has been paid for, so a
+run can pass the cap by that call, or by the calls already in flight in a parallel `map`.
+No later call starts, the leg fails with the spend and the cap in its error, and the
+pipeline stops. What the leg spent still counts against its series. A leg that resumes
+after an approval counts what it spent before the pause.
+
+Under Temporal the worker only meters, so the run fails when it ends, with its calls
+already made. A flow or task leg isn't stopped partway through: its check is the
+reservation before it starts.
+
 ## A budget for the whole deployment
 
 A deployment owner can set a default and a ceiling in the profile, so no

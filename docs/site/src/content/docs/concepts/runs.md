@@ -91,6 +91,7 @@ metadata. Inputs, outputs, prompts and tokens are never written.
 | `leg.submitted` | a leg exists as its own run | `ref`, `kind`, `engine`, `compute_target`, `estimated_usd` |
 | `leg.retrying` | a flow leg starts another attempt | `attempt`, `reason` |
 | `leg.budget_refused` | the leg's reservation would pass the series cap | `estimated_usd`, `spent_usd`, `budget_usd`, outcome `deny` |
+| `leg.budget_exceeded` · `run.budget_exceeded` | a cost cap stopped a template leg's model calls · any other run's | `target`, `spent_usd`, `reason`, outcome `deny` |
 | `leg.finished` | a leg ends: `done`, `failed`, `cancelled` or `skipped` | `state`, `reason`, `attempts`, `engine`, `compute_target`, `settled_usd`, `llm_usd`, `gpu_usd` |
 | `leg.compute_acquired` · `leg.compute_released` · `leg.promoted` | a `compute/acquire`, `compute/release` or `artifact/promote` leg succeeds | `operator`, `capability` |
 | `leg.cancelled` · `run.cancelled` | `POST /runs/{id}/cancel` stops a leg's run · any other run (`actor`) | `prior_status` |

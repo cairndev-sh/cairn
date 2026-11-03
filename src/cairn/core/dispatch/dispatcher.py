@@ -164,6 +164,22 @@ def _aggregate_cost(payloads: list[dict]) -> dict[str, float]:
     }
 
 
+def _budget_exceeded_output(reason: str) -> dict[str, Any]:
+    """The output of a run a cost cap stopped, which `cairn gate` and scoring read."""
+    return {"type": "budget_exceeded", "budget_exceeded": True, "reason": reason, "output": ""}
+
+
+async def _audit_over_budget(run: Any, template_ref: str, reason: str, cost: dict[str, Any]) -> None:
+    """``leg.budget_exceeded`` · ``run.budget_exceeded`` (#395): a cost cap stopped this run."""
+    from cairn.core.obs.audit import audit_emit  # noqa: PLC0415 — keep obs off the import path
+
+    pipeline_id = run.bundle_pipeline_id or None
+    await audit_emit(
+        "leg.budget_exceeded" if pipeline_id else "run.budget_exceeded", outcome="deny",
+        target=template_ref, run_id=run.id, pipeline_id=pipeline_id, step_id=run.step_id or None,
+        spent_usd=float(cost.get("total_usd") or 0.0), reason=reason[:300])
+
+
 def _llm_cost_from_node_events(events: list) -> float:
     """Sum measured LLM spend from every node attempt."""
     return llm_cost_from_node_events(events)
@@ -1198,6 +1214,7 @@ class RunDispatcher:
                         "max_cost_usd",
                         None,
                     )
+                    over_budget = ""
                     with obs.cost_scope(
                         f"run-{template_ref}", max_cost_usd=run_cap
                     ) as cost_ctx, sandbox_ctx, \
@@ -1208,8 +1225,10 @@ class RunDispatcher:
                                            "__contract_invocations__": await self._contract_invocations(inv)}
                             )
                         except obs.BudgetExceeded as be:
-                            output = {"type": "budget_exceeded", "budget_exceeded": True,
-                                      "reason": str(be), "output": ""}
+                            # #395: a cap is a governance stop, so the run fails and
+                            # its pipeline stops. The output stays for what reads it.
+                            over_budget = str(be)
+                            output = _budget_exceeded_output(over_budget)
                     run_llm_usd = round(cost_ctx.cost_usd, 6)
 
                 paused = isinstance(output, dict) and "__interrupt__" in output
@@ -1240,6 +1259,10 @@ class RunDispatcher:
                 # template-run path previously computed `output` then discarded it.
                 # Only on completion; a paused run has no final output yet.
                 cost = {}
+                if paused and run_llm_usd:
+                    # The meter ends with this task, and the resume starts a new one
+                    # from this figure, or its cap would forget what's been spent (#395).
+                    update_fields["cost"] = _aggregate_cost([{"llm_cost_usd": run_llm_usd}])
                 if not paused:
                     # #530 — surface the captured LLM spend under the canonical
                     # `llm_cost_usd` key that _aggregate_cost scans, so the run's
@@ -1255,6 +1278,9 @@ class RunDispatcher:
                         llm_usd = max(run_llm_usd, worker_llm_usd)
                     else:
                         llm_usd = round(run_llm_usd + worker_llm_usd, 6)
+                    over_budget = over_budget or obs.over_cap_reason(cost_ctx, llm_usd)
+                    if over_budget:
+                        update_fields.update(status="failed", error=over_budget)
                     payloads = [{"template_name": template_ref,
                                  "output": _json_safe(output),
                                  "llm_cost_usd": llm_usd}]
@@ -1268,15 +1294,19 @@ class RunDispatcher:
                     # counterfactual (#481 Slice F) — best-effort, see _cost_baseline_best_effort.
                     update_fields["cost_baseline_usd"] = _cost_baseline_best_effort(cost)
                 await self.store.update(inv.id, **update_fields)
+                if over_budget:
+                    with workspace_scope(inv.workspace_id):
+                        await _audit_over_budget(inv, template_ref, over_budget, cost)
                 await self._emit(
                     inv.id,
-                    pause_status if paused else "done",
+                    pause_status if paused else update_fields["status"],
                     {"template": template_ref,
-                     **({"approval": pending} if pending is not None else {})},
+                     **({"approval": pending} if pending is not None else {}),
+                     **({"error": over_budget} if over_budget else {})},
                     pipeline_id=inv.bundle_pipeline_id,
                 )
                 if not paused:  # fleet metric on terminal completion (#242 P2)
-                    record_run("done", workspace=inv.workspace_id,
+                    record_run(update_fields["status"], workspace=inv.workspace_id,
                                duration_ms=_duration_ms(started_at, ended_at), cost=cost)
                 logger.info(
                     "dispatcher template run %s %s", inv.id,
@@ -1289,7 +1319,7 @@ class RunDispatcher:
                     await self._close_reservations(inv.id, settled=True,
                                                    actual_usd=float((cost or {}).get("total_usd") or 0.0))
                     # scoring (#474/#480, ADR-0060 D1) — terminal "done" only
-                    await self._terminal_hooks(inv.id)
+                    await self._terminal_hooks(inv.id, status=update_fields["status"])
         except asyncio.CancelledError:
             if self._preserve_on_shutdown(inv.id):
                 # The run SURVIVES in Temporal/DBOS and will finish under a later
@@ -1401,9 +1431,21 @@ class RunDispatcher:
             await self.store.update(run_id, owner=me)
         # keep streaming per-node events after the resume (ADR-0044).
         from cairn.core.operator.runtime import launch_scope  # noqa: PLC0415 — ADR-0120 D7 (#2455)
-        with workspace_scope(run.workspace_id), node_sink_scope(self._node_sink(run_id)), \
-                launch_scope(self.launch_handle()):
-            result = await runtime.resume(graph, decision, run_id=run_id)
+        from cairn.core import obs  # noqa: PLC0415 — matches the run path
+
+        # #395 — a resumed graph spends too, so it runs in a cost scope that starts from
+        # what the run spent before its pause. The template's cap is on its model
+        # clients (BudgetCallback), and the scope holds the deployment-wide one.
+        over_budget = ""
+        with obs.cost_scope(f"run-{template_name}") as cost_ctx, workspace_scope(run.workspace_id), \
+                node_sink_scope(self._node_sink(run_id)), launch_scope(self.launch_handle()):
+            cost_ctx.cost_usd = float((run.cost or {}).get("llm_usd") or 0.0)
+            try:
+                result = await runtime.resume(graph, decision, run_id=run_id)
+            except obs.BudgetExceeded as be:
+                over_budget = str(be)
+                result = _budget_exceeded_output(over_budget)
+        run_llm_usd = round(cost_ctx.cost_usd, 6)
         still_paused = isinstance(result, dict) and "__interrupt__" in result
         # ADR-0065: if the resume re-paused on a remote job, that's RUNNING, not
         # awaiting_approval.
@@ -1418,6 +1460,8 @@ class RunDispatcher:
             status=repause_status if still_paused else "done",
             ended_at=None if still_paused else _now(),
         )
+        if still_paused and run_llm_usd:
+            resume_update["cost"] = _aggregate_cost([{"llm_cost_usd": run_llm_usd}])
         # #738 — on resume-to-completion, PERSIST the final output as result_payloads
         # (+ results summary + cost), exactly like the initial template-run completion
         # (see the `if not paused` block above). Previously the resume path updated
@@ -1426,7 +1470,10 @@ class RunDispatcher:
         # the scoring hook had nothing to verdict (no report, no auto-eval/insight for
         # exactly the governed runs that paused for approval).
         if not still_paused:
-            llm_usd = _llm_cost_from_node_events(await self.store.get_events(run_id))
+            llm_usd = round(run_llm_usd + _llm_cost_from_node_events(await self.store.get_events(run_id)), 6)
+            over_budget = over_budget or obs.over_cap_reason(cost_ctx, llm_usd)
+            if over_budget:
+                resume_update.update(status="failed", error=over_budget)
             payloads = [{"template_name": template_name,
                          "output": _json_safe(result),
                          "llm_cost_usd": llm_usd}]
@@ -1439,6 +1486,9 @@ class RunDispatcher:
             resume_update["cost"] = cost
             resume_update["cost_baseline_usd"] = _cost_baseline_best_effort(cost)
         await self.store.update(run_id, **resume_update)
+        if over_budget:
+            with workspace_scope(run.workspace_id):
+                await _audit_over_budget(run, template_name, over_budget, resume_update["cost"])
         await self._emit(
             run_id, "resumed",
             {"runtime": rt_name, "still_paused": still_paused, **_decision_fields(decision)},
@@ -1449,14 +1499,15 @@ class RunDispatcher:
         # hang after the resume (an internal issue). A re-pause emits the new gate.
         await self._emit(
             run_id,
-            repause_status if still_paused else "done",
-            {"resumed": True},
+            resume_update["status"],
+            {"resumed": True, **({"error": over_budget} if over_budget else {})},
         )
         if not still_paused:
             # #1325 — the claim taken at admission outlived the pause (and, under
             # the shared backend, possibly the process that took it), so it is
             # looked up by run id rather than carried. A re-pause keeps holding.
-            await self._close_reservations(run_id, settled=True)
+            await self._close_reservations(run_id, settled=True,
+                                           actual_usd=float(resume_update["cost"].get("total_usd") or 0.0))
             # scoring (#474/#480, ADR-0060 D1) — resume-to-completion is terminal too
             _rec = await self.store.get(run_id)
             await self._terminal_hooks(run_id, status="failed" if getattr(_rec, "status", "") == "failed" else "done")

@@ -76,6 +76,7 @@ from cairn.core.operator import (
     load_binding,
     validate_operation_binding,
 )
+from cairn.core.obs.cost import BudgetExceeded
 from cairn.core.operator.elaborate import elaborate_binding  # 2b (#1107)
 from cairn.core.operator.effective import ContractConformanceError, ContractEnvelope  # #2241 C
 from cairn.core.engine.workflow_config import resolve_capability_binding  # #2241 C (D5)
@@ -1475,6 +1476,8 @@ def _compile_bt(bt: BTNode, graph: StateGraph, factory: _ActionNodeFactory, fres
         async def python_node_fn(state: dict) -> dict:
             try:
                 result = await py_fn(dict(state), **config)
+            except BudgetExceeded:
+                raise  # #395: a cap is a governed stop, not a finding
             except Exception as e:
                 return {
                     "last_action_status": "failure",
@@ -1739,6 +1742,8 @@ def _compile_bt(bt: BTNode, graph: StateGraph, factory: _ActionNodeFactory, fres
                 # governed failure, not probe data. The run fails; nothing else here
                 # changes.
                 raise
+            except BudgetExceeded:
+                raise  # #395: a cap is a governed stop, not probe data
             except Exception as e:
                 # #568: a JOB/ACTION operator (remote_job / docker) that fails is a
                 # REAL failure — the governed action (train, deploy, publish job)
@@ -1863,6 +1868,8 @@ def _compile_bt(bt: BTNode, graph: StateGraph, factory: _ActionNodeFactory, fres
                 call_state = {**dict(state), _as: item}
                 try:
                     out = await _fn(call_state, **_cfg)
+                except BudgetExceeded:
+                    raise  # #395: a cap stops the whole run, not one item
                 except Exception as e:  # noqa: BLE001 — surface per-item failure as data
                     return {
                         "map_results": [{"map_id": _mid, "item": item, "error": str(e)}],

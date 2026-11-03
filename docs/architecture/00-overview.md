@@ -65,7 +65,7 @@ Runtime        Engine      invocation      flow:     leg_executor.py:114 execute
                                            task:     pipeline_bridge.py:1294 _invoke_task_op → enforce_gate → Operation.run
       ↓
 Governance + persistence   approval/enforce.py (enforce_gate :116, enforce_flow_gate :173) · budget_reservations.py
-                           · services/llm/factory.py:97 build_chat_model (redaction, cost) · obs/audit.py:140 ·
+                           · services/llm/factory.py:108 build_chat_model (redaction, cost) · obs/audit.py:140 ·
                            RunStore · PipelineRecord · ArtifactStore · operator/pins.py
 ```
 
@@ -148,7 +148,7 @@ exceptions). The dotted edge is the one documented bidirectional coupling.
    `template:` → `run_template` (LangGraph).
 4. **Govern.** Every operator invocation passes `enforce_gate`
    (`src/cairn/core/approval/enforce.py:116`); every LLM call passes `build_chat_model`
-   (`src/cairn/services/llm/factory.py:97`) which redacts and meters cost; budget is
+   (`src/cairn/services/llm/factory.py:108`) which redacts and meters cost; budget is
    reserved at admission (`budget_reservations.py`).
 5. **Persist.** A `Run` (`src/cairn/core/storage/protocols.py:136`) per leg, append-only
    `RunEvent`s, content-addressed artifacts (`storage/artifacts.py`), the pipeline record

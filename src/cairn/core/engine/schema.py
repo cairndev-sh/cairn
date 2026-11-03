@@ -80,7 +80,10 @@ class BudgetConfig(BaseModel):
       - ``max_cost_usd`` — **ENFORCED**. The Runner runs each investigation inside
         an ``obs.cost_scope``; the ``BudgetCallback`` on every LLM client tallies
         token spend (``obs.record_llm``) and raises ``BudgetExceeded`` when the
-        running total crosses this cap (enforcement granularity: per-LLM-call).
+        running total crosses this cap (enforcement granularity: per-LLM-call, and
+        the call that crosses it has been paid for). The run fails and its pipeline
+        stops. Under Temporal the worker only meters, so the run fails when it ends,
+        with its calls already made.
       - ``max_iterations`` — **ENFORCED for the critique loop** (caps revise
         passes, see ``CritiqueConfig``). For agent_loop tool iteration the
         operative limit is still the per-flow/per-node ``max_iterations``.
