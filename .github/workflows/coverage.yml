@@ -43,7 +43,7 @@ jobs:
     - name: The report and the badge
       run: |
         .venv/bin/python -m coverage report --skip-covered --sort=cover | tail -25
-        .venv/bin/python -m coverage html -d site --title "cairn test coverage"
+        .venv/bin/python -m coverage html -d site --title "Test coverage of cairn"
         .venv/bin/python -m coverage json -o coverage.json
         .venv/bin/python scripts/coverage_badge.py coverage.json site/badge.json
         cat site/badge.json
