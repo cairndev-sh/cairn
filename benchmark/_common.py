@@ -26,6 +26,7 @@ RESULTS = REPO / "benchmark" / "results"
 #: what decides the behaviour being measured, and the measurement itself; a change here makes
 #: `code_clean` false
 _MEASURED_PATHS = ("src", "packages", "examples", "uv.lock", "pyproject.toml", "benchmark",
+                   "tests/e2e/hello/budget-pack", "tests/e2e/model_stub.py",
                    ":(exclude)benchmark/results")
 
 
@@ -98,10 +99,11 @@ def _free_port() -> int:
 
 class LocalEngine:
     """``cairn setup --foreground --engine-only`` in a scratch HOME on a free port, with the example pack, under
-    ``profile`` when one is given."""
+    ``profile`` when one is given. ``env`` adds to the engine's environment or overrides it."""
 
-    def __init__(self, profile: Optional[Path] = None) -> None:
+    def __init__(self, profile: Optional[Path] = None, env: Optional[dict[str, str]] = None) -> None:
         self.profile = profile
+        self.env = env or {}
         self._scratch = tempfile.TemporaryDirectory(prefix="cairn-benchmark-")
         self.home = Path(self._scratch.name)
         self.port = _free_port()
@@ -120,6 +122,7 @@ class LocalEngine:
                     "CAIRN_PACK_PATH": str(REPO / "examples" / "hello-cairn")})
         if self.profile is not None:
             env["CAIRN_PROFILE"] = str(self.profile)
+        env.update(self.env)
         log = open(self.home / "engine.log", "wb")
         start = time.monotonic()
         self._proc = subprocess.Popen(cmd, cwd=self.home, env=env, stdout=log, stderr=subprocess.STDOUT,

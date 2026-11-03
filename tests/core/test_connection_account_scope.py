@@ -542,7 +542,7 @@ async def test_an_in_process_resume_runs_in_its_records_workspace(world, monkeyp
     monkeypatch.setattr(RunDispatcher, "_recompile_graph", staticmethod(lambda name: object()))
     run = SimpleNamespace(id="r-a", status="awaiting_approval", workspace_id="ws-a",
                           results=[SimpleNamespace(template_name="demo/tmpl")],
-                          bundle_pipeline_id="", owner="")
+                          bundle_pipeline_id="", owner="", cost={})
     disp = RunDispatcher(runner=object(), store=_RunStore(run))
     with workspace_scope("default"):
         await disp.resume_run("r-a", {"approved": True})

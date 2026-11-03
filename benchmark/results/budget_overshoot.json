@@ -1,0 +1,88 @@
+{
+  "measurement": "budget_overshoot",
+  "title": "How far past a cost cap a template's spend gets",
+  "script": "benchmark/budget_overshoot.py",
+  "provenance": {
+    "cairndev_version": "0.4.0",
+    "uv_lock_sha256": "2f3a08bed7ab6e047e088d2185067267f6024637bbe0af1de3462c8729426faa",
+    "git_sha": "3f8c12773749edf7dd5994ebef8b64a2d22a85db",
+    "code_clean": true,
+    "machine": {
+      "os": "Linux",
+      "arch": "x86_64",
+      "cpus": 4,
+      "python": "3.13.13"
+    },
+    "measured_at": "2026-11-03",
+    "ci_run": "https://github.com/cairndev-sh/cairn/actions/runs/41629147497"
+  },
+  "inputs": {
+    "pipelines": [
+      "hello-budget/capped",
+      "hello-budget/capped-fan-out"
+    ],
+    "trials": 3,
+    "chat_delay_seconds": 0.2
+  },
+  "results": [
+    {
+      "runtime": "in-process",
+      "calls": "6 calls in a row",
+      "cap": "$0.000070",
+      "spent": "$0.000084",
+      "past": "$0.000014 (20%)",
+      "model": "3 of 6",
+      "ended": "failed, next leg never started"
+    },
+    {
+      "runtime": "in-process",
+      "calls": "8 calls at once",
+      "cap": "$0.000040",
+      "spent": "$0.000224",
+      "past": "$0.000184 (460%)",
+      "model": "8 of 8",
+      "ended": "failed, next leg never started"
+    },
+    {
+      "runtime": "DBOS on SQLite",
+      "calls": "6 calls in a row",
+      "cap": "$0.000070",
+      "spent": "$0.000084",
+      "past": "$0.000014 (20%)",
+      "model": "3 of 6",
+      "ended": "failed, next leg never started"
+    },
+    {
+      "runtime": "DBOS on SQLite",
+      "calls": "8 calls at once",
+      "cap": "$0.000040",
+      "spent": "$0.000224",
+      "past": "$0.000184 (460%)",
+      "model": "8 of 8",
+      "ended": "failed, next leg never started"
+    },
+    {
+      "runtime": "Temporal",
+      "calls": "not measured",
+      "cap": "n/a",
+      "spent": "n/a",
+      "past": "n/a",
+      "model": "n/a",
+      "ended": "n/a"
+    }
+  ],
+  "columns": {
+    "runtime": "Runtime",
+    "calls": "Template",
+    "cap": "Cap",
+    "spent": "Spend recorded",
+    "past": "Past the cap",
+    "model": "Calls the model received",
+    "ended": "Leg and pipeline"
+  },
+  "notes": [
+    "A cap can't take back the call that crosses it, so calls in a row pass it by at most one call. Here that's half a call, and it's 20% only because this test's cap is just 2.5 calls.",
+    "Calls sent at once can pass a cap by nearly all of them: all 8 reached the model before any answer came back, and the second answer is the one that crosses this cap. The percentage depends on how many calls there are and how small the cap is. A call answered after the run stops could be paid for without being counted. These runs didn't show that, but it would make the recorded spend too low.",
+    "Temporal isn't measured, because this script needs a Temporal server. From the code, the worker only meters, so the run should fail when it ends, with its calls already made."
+  ]
+}

@@ -22,6 +22,7 @@ that file or run `render.py`; pass `--out DIR` to keep your result separate.
 |---|---|---|
 | [`quickstart_path.py`](./quickstart_path.py) | The quickstart's pipeline on a local engine: time to the paused gate, approvals to done, the gates holding, each person's decision in the audit log, the audit chain verifying | a minute or two |
 | [`crash_matrix.py`](./crash_matrix.py) | What happens when the server is killed: what each crash cell saw, for each storage, runtime and bus. It adds no checks and needs Postgres; see [below](#what-happens-when-the-server-is-killed) | 3 min 33 s for the 20 crash cells, four at a time, measured once on the author's 8-CPU Intel Mac; other machines differ. In CI the script reads the `public-e2e` run instead of repeating it |
+| [`budget_overshoot.py`](./budget_overshoot.py) | How far past a cost cap a template's spend gets, on the in-process and DBOS runtimes, for calls in a row and calls at once. It needs `--extra runtime-sqlite --extra runtime-dbos` and a Python whose SQLite is 3.42 or newer, and Temporal isn't measured. | about 2 minutes |
 | [`audit_tamper.py`](./audit_tamper.py) | Alterations to a real audit log: the ones `cairn admin audit verify` detects and the row it names, the ones it can't detect, and what a saved head adds and misses | 3 min 45 s, measured once on the author's 8-CPU Intel Mac; other machines differ |
 
 ## Where the published numbers come from
@@ -30,16 +31,17 @@ The README's "Proof it works" table is generated from `benchmark/results/*.json`
 `tests/core/test_benchmark_results.py` fails if they differ, if a result doesn't record where it came
 from, or if its script is missing.
 
-The `public` CI job runs each measurement on the locked public install and uploads the result in its
-`test-results-public` artifact. The crash matrix needs Postgres, so the `public-e2e` job writes it, into
-`test-results-public-e2e`. To publish a number, commit that file and run `render.py`. Each result
+The `public` CI job runs the measurements on the locked public install and uploads the results in its
+`test-results-public` artifact. The crash matrix needs Postgres and the budget overshoot needs DBOS, so the
+`public-e2e` job writes those two, into `test-results-public-e2e`. To publish a number, commit that file and
+run `render.py`. Each result
 records:
 
 | Field | Meaning |
 |---|---|
 | `cairndev_version` | the version under test |
 | `uv_lock_sha256` | the exact locked dependencies |
-| `git_sha`, `code_clean` | the commit, and that `src`, `packages`, `examples`, `benchmark`, `uv.lock` and `pyproject.toml` had no uncommitted changes (a result without this is refused) |
+| `git_sha`, `code_clean` | the commit, and that `src`, `packages`, `examples`, `benchmark`, `uv.lock`, `pyproject.toml` and the test pack and stub model a measurement uses had no uncommitted changes (a result without this is refused) |
 | `machine` | operating system, architecture, CPU count and Python version; never a host name |
 | `measured_at` | the date |
 | `ci_run` | the CI run that produced it, if one did |

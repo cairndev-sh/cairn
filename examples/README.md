@@ -35,12 +35,12 @@ pack in this repository reads it.
 
 ## Budgets in a template
 
-A template can declare a `budget:` block. A template without one sets no limit of its own:
+A template can declare a `budget:` block. A template without one sets no limit of its own, though the deployment's `MAX_COST_USD` ($1 by default) still applies:
 
 | Field | Status |
 |---|---|
 | `max_wall_seconds` | Enforced. The run is cancelled at the limit and recorded as `budget_exceeded`. |
-| `max_cost_usd` | Enforced after each LLM call. The call's token spend is added to the running total, and `BudgetExceeded` is raised when the total crosses the cap, so a run can overshoot by the call that crossed it. |
+| `max_cost_usd` | Enforced after each LLM call. The call's token spend is added to the running total, and `BudgetExceeded` is raised when the total crosses the cap, so a run can overshoot by the call that crossed it. The run then fails, and its pipeline stops. |
 | `max_iterations` | Enforced for the critique loop. |
 | `max_tokens` | Declared only. Nothing stops a run on it. |
 

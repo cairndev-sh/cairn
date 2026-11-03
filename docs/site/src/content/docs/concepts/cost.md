@@ -34,8 +34,34 @@ series '<series>': this run's estimate $<estimate> would exceed the $<cap> cap
 ($<spent> spent, $<held> reserved by in-flight runs). Raise the budget or start a new series.
 ```
 
-A finished leg settles its reservation. A failed or cancelled leg releases it.
+A finished leg settles its reservation. A failed or cancelled leg releases it, except for
+spend it's known to have made: a flow or task leg's recorded spend, or a template leg's
+model calls when a cost cap stopped it.
 A retried attempt reserves again, because a retry is new spend.
+
+## A cap on a template's model calls
+
+A template can cap what its own model calls spend:
+
+```yaml
+budget:
+  max_cost_usd: 0.50
+```
+
+Spend is checked after each call. The call that crosses the cap has been paid for, so a
+run can pass the cap by that call. Calls in flight in a parallel `map` can pass it further,
+and one cancelled as the run stops can be billed without being counted. No later call
+starts, the leg fails with the spend and the cap in its error, and the pipeline stops. What
+the leg spent still counts against its series. A leg that resumes after an approval counts
+what it spent before the pause.
+
+**The deployment's limit applies too, and the lower figure wins.** `MAX_COST_USD` is $1 by
+default, so a template declaring `max_cost_usd: 5` still stops at $1 until you raise it. Set
+it to `0` to turn it off. It covers any model call in a cost scope, including a task leg's,
+and it's separate from `[profile.budget]` below.
+
+Under Temporal the worker only meters, so the run fails when it ends, with its calls
+already made. A flow's own `budget.max_cost_usd` is checked between stages, not per call.
 
 ## A budget for the whole deployment
 

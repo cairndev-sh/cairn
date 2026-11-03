@@ -18,6 +18,7 @@
   <a href="https://cairndev.sh"><img alt="Website" src="https://img.shields.io/badge/website-cairndev.sh-111827"></a>
   <a href="https://demo.cairndev.sh"><img alt="Live demo" src="https://img.shields.io/badge/live%20demo-demo.cairndev.sh-16a34a"></a>
   <a href="https://github.com/cairndev-sh/cairn/actions/workflows/ci.yml?query=branch%3Amain"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/cairndev-sh/cairn/ci.yml?branch=main&label=ci"></a>
+  <a href="https://github.com/cairndev-sh/cairn/actions/workflows/quickstart.yml?query=branch%3Amain"><img alt="Quickstart" src="https://img.shields.io/github/actions/workflow/status/cairndev-sh/cairn/quickstart.yml?branch=main&label=quickstart"></a>
   <a href="https://pypi.org/project/cairndev/"><img alt="PyPI" src="https://img.shields.io/pypi/v/cairndev"></a>
   <a href="https://pypi.org/project/cairndev/"><img alt="Python versions" src="https://img.shields.io/pypi/pyversions/cairndev"></a>
   <a href="./LICENSE"><img alt="License" src="https://img.shields.io/github/license/cairndev-sh/cairn"></a>
@@ -91,8 +92,10 @@ Walkthrough: [Fine-tune a model](https://docs.cairndev.sh/guides/fine-tune-a-mod
 This is what separates cairn from a bare agent loop or a black-box tool — the
 work runs behind deterministic guardrails you can inspect afterward:
 
-- **Hard budget** — every run accrues cost in a scope; over the cap it raises
-  `BudgetExceeded`, so a fine-tune can't quietly overspend.
+- **Hard budget** — a template's model calls stop at its `budget.max_cost_usd`, or at the
+  deployment's `MAX_COST_USD` ($1 by default) if that's lower: the call that crosses the cap
+  has been paid for, the leg fails, and the pipeline stops. A flow checks its own
+  `budget.max_cost_usd` between stages, and a leg in a series reserves its estimate first.
 - **Policy + human approval** — proposed actions pass declarative policy rules
   before any executor runs; high-risk ones (promote a model, destroy a
   resource) pause for a human and resume durably from a checkpoint.
@@ -135,6 +138,24 @@ measured on: see [`benchmark/`](./benchmark/README.md).
 | Limit: a head saved earlier, on a log that has grown since | reported as a mismatch: exit 2. The saved head has to be the latest one |
 | Cut the last 3 rows, with `--expect-head` given an empty or blank value | refused, nothing compared: exit 2 |
 | Cut the last 3 rows and tried values in the new last row until its hash began with the first 4 characters of the saved head | a prefix that short is refused: exit 2. With the full saved head: exit 2 |
+
+cairndev 0.4.0, `uv.lock` `2f3a08bed7ab`, Linux x86_64 with 4 CPUs and Python 3.13.13, 2026-11-03.
+
+**How far past a cost cap a template's spend gets** ([reproduce](./benchmark/budget_overshoot.py))
+
+| Runtime | Template | Cap | Spend recorded | Past the cap | Calls the model received | Leg and pipeline |
+|---|---|---|---|---|---|---|
+| in-process | 6 calls in a row | $0.000070 | $0.000084 | $0.000014 (20%) | 3 of 6 | failed, next leg never started |
+| in-process | 8 calls at once | $0.000040 | $0.000224 | $0.000184 (460%) | 8 of 8 | failed, next leg never started |
+| DBOS on SQLite | 6 calls in a row | $0.000070 | $0.000084 | $0.000014 (20%) | 3 of 6 | failed, next leg never started |
+| DBOS on SQLite | 8 calls at once | $0.000040 | $0.000224 | $0.000184 (460%) | 8 of 8 | failed, next leg never started |
+| Temporal | not measured | n/a | n/a | n/a | n/a | n/a |
+
+A cap can't take back the call that crosses it, so calls in a row pass it by at most one call. Here that's half a call, and it's 20% only because this test's cap is just 2.5 calls.
+
+Calls sent at once can pass a cap by nearly all of them: all 8 reached the model before any answer came back, and the second answer is the one that crosses this cap. The percentage depends on how many calls there are and how small the cap is. A call answered after the run stops could be paid for without being counted. These runs didn't show that, but it would make the recorded spend too low.
+
+Temporal isn't measured, because this script needs a Temporal server. From the code, the worker only meters, so the run should fail when it ends, with its calls already made.
 
 cairndev 0.4.0, `uv.lock` `2f3a08bed7ab`, Linux x86_64 with 4 CPUs and Python 3.13.13, 2026-11-03.
 
