@@ -27,6 +27,7 @@ The old command names are gone, and a cost cap now stops a run.
 - The failing and warning rows of `cairn setup --check` now end with `— fix:` and the command or setting that resolves it, on the same line, so the failures `cairn setup` prints carry it too. Rows that read `unset (optional)` are unchanged.
 
 ### Fixed
+- A run that ends while the reconciler is judging it keeps its own reason, where the reconciler's note could overwrite it and publish a second terminal event. A capped run on DBOS could lose `over budget` this way.
 - The example pack's `tiny-finetune` pipeline now gates `loss-ok` on the loss the trainer measures over the rows it held out. It used to gate on a figure that mostly re-scored training rows. Its training data now holds 48 distinct rows instead of 10 repeated ones, so no held-out row is also a training row, and the separate `eval` leg is gone (#252).
 - `cairn setup --seed` from a checkout no longer fails its checks: with no profile set, the example pack runs under its own `profiles/hello.toml`, which names the MCP server it requires. It also writes that profile's audit log to `./audit.jsonl`.
 - The pages written against an older tree describe this repository: the architecture overview's system description, `examples/README.md` (which said `max_cost_usd` is not enforced; it is) and the engine's test lists. The fine-tune guide says what the `finetune-ssh` profile's audit log records. (#255)

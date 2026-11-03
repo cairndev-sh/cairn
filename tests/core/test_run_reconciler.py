@@ -92,3 +92,88 @@ async def test_terminal_runs_are_never_touched():
     done = await reconcile_stale_runs(store, _fixed_status({"run-done": "failed"}), grace_seconds=120)
     assert done == []
     assert (await store.get("run-done")).status == "done"
+
+
+# ── a run that reached its own terminal while the sweep was looking at it ──
+
+
+def _finishes_during(store, *, result_fn=False, **terminal):
+    """A status_fn or result_fn where the run's own task records its end first, as a workflow
+    that has just ended and the dispatcher that was waiting on it do."""
+    async def fn(run_id: str):
+        await store.update(run_id, **terminal)
+        return {"output": "recovered"} if result_fn else terminal["status"]
+    return fn
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_ended_during_the_probe_keeps_its_own_reason():
+    store = _store()
+    reason = "session run-x over budget: $0.000084 > $0.000070"
+    await store.create(_run("run-x", "running", OLD))
+    await store.append_event("run-x", "running", {})
+
+    done = await reconcile_stale_runs(
+        store, _finishes_during(store, status="failed", error=reason), grace_seconds=120)
+
+    assert done == []
+    got = await store.get("run-x")
+    assert got.status == "failed" and got.error == reason
+    assert [e.type for e in await store.get_events("run-x")] == ["running"]
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_ended_during_the_probe_publishes_no_second_terminal():
+    store = _store()
+    emitted = []
+
+    async def emit(run_id, event_type, data):
+        emitted.append(event_type)
+
+    await store.create(_run("run-y", "running", OLD))
+    await reconcile_stale_runs(store, _finishes_during(store, status="failed", error="its own"),
+                               grace_seconds=120, emit_fn=emit)
+    assert emitted == []
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_finished_while_its_result_was_fetched_is_left_alone():
+    store = _store()
+    await store.create(_run("run-z", "running", OLD))
+    payloads = [{"output": {"answer": "its own"}}]
+
+    done = await reconcile_stale_runs(
+        store, _fixed_status({"run-z": "done"}), grace_seconds=120,
+        result_fn=_finishes_during(store, result_fn=True, status="done", result_payloads=payloads))
+
+    assert done == []
+    assert (await store.get("run-z")).result_payloads == payloads
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_only_moved_between_active_states_is_still_reconciled():
+    """A resume can flip awaiting_approval to running: the runtime's terminal verdict still stands."""
+    store = _store()
+    await store.create(_run("run-w", "awaiting_approval", OLD))
+
+    async def status_fn(run_id):
+        await store.update(run_id, status="running")
+        return "failed"
+
+    assert await reconcile_stale_runs(store, status_fn, grace_seconds=120) == ["run-w"]
+    assert (await store.get("run-w")).status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_a_run_the_store_no_longer_has_is_skipped():
+    store = _store()
+    await store.create(_run("run-v", "running", OLD))
+    real_get = store.get
+
+    async def gone(run_id):
+        return None
+
+    store.get = gone
+    assert await reconcile_stale_runs(store, _fixed_status({"run-v": "failed"}), grace_seconds=120) == []
+    store.get = real_get
+    assert (await store.get("run-v")).status == "running"
