@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - The example pack's `over-budget` pipeline shows a budget refusing a run before its engine starts, with no key and no spend, and `cairn run` now prints why a leg failed (#368).
 
 ### Fixed
+- `cairn deploy doctor --values` no longer fails a Helm values file with `ingress.enabled: false` and no host for a missing `CADDY_DOMAIN`; the chart renders that file, and an enabled ingress with no host still fails (#76).
 - A malformed `eval_cutoff` (`"last tuesday"`, `"06/01/2026"`, `5`) is now refused at launch and at run start, where it used to switch the holdout check off and admit overlapping data. Use an ISO-8601 date or timestamp, or leave it out. One holdout row with an unreadable `dated_at` no longer voids the check either: the row stays in the comparison, with a warning that also reaches the run's record.
 - A dry run now reads a top-level `eval_cutoff` the way the holdout door does. It ignored it, so it could report an overlap the door would admit, or call a malformed cutoff ready where the door refuses it.
 
