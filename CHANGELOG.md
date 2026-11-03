@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - The example pack's `over-budget` pipeline shows a budget refusing a run before its engine starts, with no key and no spend, and `cairn run` now prints why a leg failed (#368).
 
 ### Fixed
+- Following a run no longer retries forever with no message when the engine stops answering. It backs off for about two minutes, then says the run may still be live, prints the command to re-attach and exits 1. A 5xx on the status check counts as temporary, and a quiet run is never given up on while the status check answers. (#46)
 - A malformed `eval_cutoff` (`"last tuesday"`, `"06/01/2026"`, `5`) is now refused at launch and at run start, where it used to switch the holdout check off and admit overlapping data. Use an ISO-8601 date or timestamp, or leave it out. One holdout row with an unreadable `dated_at` no longer voids the check either: the row stays in the comparison, with a warning that also reaches the run's record.
 - A dry run now reads a top-level `eval_cutoff` the way the holdout door does. It ignored it, so it could report an overlap the door would admit, or call a malformed cutoff ready where the door refuses it.
 - `cairn setup --check` and `cairn doctor` no longer print the path of a secret URL. A Slack webhook's token is in its path, and 0.3.2 through 0.4.0 printed it in full: `set: https://hooks.slack.com/services/...`. They now show `https://hooks.slack.com/***`. If you shared that output, for example in a bug report, rotate the webhook.

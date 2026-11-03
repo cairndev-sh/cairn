@@ -276,3 +276,87 @@ def test_a_transport_error_at_the_end_of_a_stream_reconnects(monkeypatch):
     _offline(monkeypatch, 200, script)
     remote._tail("http://e", "tok", "run_x")
     assert script == []
+
+
+# ── a follow that keeps trying, then says so (#46) ───────────────────────────────────────────
+
+def _follow(kind: str):
+    if kind == "tail":
+        return remote._tail("http://e", "tok", "run_x")
+    return remote._watch_hitl("http://e", "tok", "run_x", approver=None, decision_opt=None, native=False,
+                              timeout=None, on_timeout=None, flow=None, dump=None)
+
+
+@pytest.fixture
+def waits(monkeypatch):
+    out: list[float] = []
+    monkeypatch.setattr(remote.time, "sleep", out.append)
+    return out
+
+
+@pytest.mark.parametrize("kind, reattach", [("tail", "cairn status run_x --logs --follow"),
+                                            ("watch_hitl", "cairn status run_x --follow")])
+def test_when_nothing_comes_back_it_says_how_to_reattach_and_exits_nonzero(monkeypatch, waits, capsys, kind, reattach):
+    import httpx
+    import typer
+
+    _offline(monkeypatch, 200, [httpx.ConnectError("down")] * (remote._RECONNECT_TRIES + 1))
+    with pytest.raises(typer.Exit) as exc:
+        _follow(kind)
+    assert exc.value.exit_code == 1
+    err = " ".join(capsys.readouterr().err.split())
+    assert "may still be live" in err and reattach in err
+    assert waits == [1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0, 30.0]
+
+
+def test_it_reconnects_when_the_engine_comes_back(monkeypatch, waits):
+    import httpx
+
+    script = [httpx.ConnectError("down")] * 3 + ["done"]
+    _offline(monkeypatch, 200, script)
+    _follow("tail")
+    assert script == [] and waits == [1.0, 2.0, 4.0]
+
+
+def test_a_502_on_the_status_check_is_transient(monkeypatch, waits):
+    from cairn_client import CairnAPIError
+
+    script = [CairnAPIError(502, "bad gateway", "get", "/runs/run_x"), "done"]
+    _offline(monkeypatch, 200, script)
+    _follow("tail")
+    assert script == [] and waits == [1.0]
+
+
+def test_a_client_error_on_the_status_check_is_still_said(monkeypatch, waits, capsys):
+    import typer
+    from cairn_client import CairnAPIError
+
+    _offline(monkeypatch, 200, [CairnAPIError(403, "not yours", "get", "/runs/run_x")])
+    with pytest.raises(typer.Exit) as exc:
+        _follow("tail")
+    assert exc.value.exit_code == 1 and "403" in capsys.readouterr().err
+
+
+def test_a_quiet_run_is_never_given_up_on(monkeypatch, waits):
+    """A proxy's idle timeout closes the stream during a long leg, again and again: while the status
+    check answers, the follow stays, however many times that happens."""
+    script = ["running"] * (remote._RECONNECT_TRIES * 3) + ["done"]
+    _offline(monkeypatch, 200, script)
+    _follow("tail")
+    assert script == [] and set(waits) == {1.0}
+
+
+def test_a_stream_refused_while_the_status_check_answers_gives_up_too(monkeypatch, waits, capsys):
+    """A stream route that keeps answering 500 would otherwise spin forever on a run that looks fine."""
+    import httpx
+    import typer
+
+    class _Refused(_Stream):
+        def raise_for_status(self):
+            raise httpx.HTTPStatusError("500", request=None, response=None)
+
+    _offline(monkeypatch, 500, ["running"] * (remote._RECONNECT_TRIES + 1))
+    monkeypatch.setattr(_Sse, "stream", lambda self, *a, **k: _Refused(self._code))
+    with pytest.raises(typer.Exit) as exc:
+        _follow("tail")
+    assert exc.value.exit_code == 1 and "Re-attach" in capsys.readouterr().err
