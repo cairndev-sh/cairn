@@ -13,7 +13,7 @@ a held-out loss a gate can read. It is what the `tiny-finetune` pipeline of
 `examples/hello-cairn` trains with, and it is the builtin provider of `train.finetune`, so a
 private or third-party trainer can implement the same contract and be bound in its place.
 
-It uses one CUDA GPU when one is available (`device`/`precision`, default `auto`; ADR-0153),
+It uses one CUDA GPU when one is available (`device`/`precision`, default `auto`; ADR-0166),
 so the same pack trains on a laptop CPU, a workstation GPU or a Colab T4. It deliberately does
 NOT: quantize (no bitsandbytes), use `Trainer`/`accelerate`/`trl`, run on several GPUs or
 distributed, stream checkpoints, push to a hub or register the model (promotion is the
@@ -161,4 +161,4 @@ until hello-cairn WP7 adds that cell.
 | Date | Change | PR |
 |---|---|---|
 | 2026-10-15 | Initial pack: `train/lora`, `train.lora`, `train/eval-loss`; contracts `train.finetune/1.0.0`, `train.eval_loss/1.0.0` (every builtin operator implements a contract) | #2572 WP3 |
-| 2026-11-03 | `device`/`precision` inputs: one CUDA GPU when available, fp16/bf16 by compute capability; contracts `train.finetune/1.1.0`, `train.eval_loss/1.1.0` (additive) | ADR-0153 |
+| 2026-11-03 | `device`/`precision` inputs: one CUDA GPU when available, fp16/bf16 by compute capability; contracts `train.finetune/1.1.0`, `train.eval_loss/1.1.0` (additive) | ADR-0166 |

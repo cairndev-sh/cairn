@@ -1,4 +1,4 @@
-# ADR-0153 — train-local uses an available CUDA GPU
+# ADR-0166 — train-local uses an available CUDA GPU
 
 - **Status:** PROPOSED 2026-11-03
 - **Date:** 2026-11-03

@@ -79,8 +79,9 @@ def test_cancelling_train_lora_stops_and_drains_its_worker(tiny_model, tmp_path,
             cancel_event = event
         return original_check(event)
 
-    def block_first_batch(tokenizer: Any, texts: list[str], max_seq_len: int) -> dict[str, Any]:
-        encoded = original_batch(tokenizer, texts, max_seq_len)
+    def block_first_batch(tokenizer: Any, texts: list[str], max_seq_len: int,
+                          device: Any = None) -> dict[str, Any]:
+        encoded = original_batch(tokenizer, texts, max_seq_len, device)
         batch_started.set()
         if not release_batch.wait(timeout=10):
             raise TimeoutError("test did not release the blocked training batch")

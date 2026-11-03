@@ -5,7 +5,7 @@ A plain LoRA fine-tune: ``transformers`` loads the base model, ``peft`` wraps it
 adapter (target modules inferred per architecture), and a torch AdamW loop runs ``steps``
 optimizer steps over batches of the training rows. On a machine without CUDA it is the fp32
 CPU run it always was; with ``device``/``precision`` at ``auto`` it uses a CUDA GPU when one
-is available, in fp16 or bf16 by the GPU's compute capability (ADR-0153). No ``Trainer``, no
+is available, in fp16 or bf16 by the GPU's compute capability (ADR-0166). No ``Trainer``, no
 ``accelerate``, no ``trl``, no ``bitsandbytes``: the point is a real loss curve and a real
 adapter on any laptop or a single GPU, in seconds on the ``sshleifer/tiny-gpt2`` stand-in and
 minutes on the ``Qwen/Qwen2.5-0.5B`` default.
@@ -196,8 +196,10 @@ def _batch(tokenizer, texts: list[str], max_seq_len: int, device=None) -> dict:
     batch = {"input_ids": enc["input_ids"], "attention_mask": enc["attention_mask"], "labels": labels}
     return {k: v.to(device) for k, v in batch.items()} if device is not None else batch
 
-def _mean_loss(model, tokenizer, texts: list[str], max_seq_len: int,
-               device=None, dtype=None ) -> tuple[float, int]:
+
+def _mean_loss(model: Any, tokenizer: Any, texts: list[str], max_seq_len: int,
+               cancel_event: threading.Event | None = None, device=None,
+               dtype=None) -> tuple[float, int]:
     """Token-weighted mean causal-LM loss over ``texts`` and the non-padding tokens scored."""
     import torch  # noqa: PLC0415 - optional dependency: the [train] extra
     device = device if device is not None else torch.device("cpu")
@@ -205,12 +207,16 @@ def _mean_loss(model, tokenizer, texts: list[str], max_seq_len: int,
     total, targets, tokens = 0.0, 0, 0
     with torch.no_grad():
         for i in range(0, len(texts), BATCH_SIZE):
+            _check_cancelled(cancel_event)
             enc = _batch(tokenizer, texts[i:i + BATCH_SIZE], max_seq_len, device)
+            _check_cancelled(cancel_event)
             n = int((enc["labels"][:, 1:] != -100).sum())  # the shifted positions the loss averages
             if n == 0:
                 continue
             with _autocast(device, dtype or torch.float32):
-                total += float(model(**enc).loss) * n
+                batch_loss = model(**enc).loss
+            _check_cancelled(cancel_event)
+            total += float(batch_loss) * n
             targets += n
             tokens += int(enc["attention_mask"].sum())
     if targets == 0:
@@ -240,6 +246,7 @@ def _snapshot(directory: Path) -> dict[str, tuple[int, int]]:
 def finetune(*, dataset: str, base_model: str, lora_rank: int, steps: int, max_samples: int,
              learning_rate: float, max_seq_len: int, output_dir: str,
              on_step: Optional[Callable[[int, float], None]] = None,
+             cancel_event: threading.Event | None = None,
              written: Optional[list[str]] = None, device: str = "auto",
              precision: str = "auto") -> dict[str, Any]:
     """Run the LoRA fine-tune and save the adapter to ``output_dir``; the contract's output.
@@ -256,23 +263,29 @@ def finetune(*, dataset: str, base_model: str, lora_rank: int, steps: int, max_s
     if dev.type == "cuda":
         torch.cuda.reset_peak_memory_stats(dev)
     train, held = split_holdout(load_texts(dataset, max_samples))
+    _check_cancelled(cancel_event)
     tokenizer, model = _load(base_model, dev, dtype)
+    _check_cancelled(cancel_event)
     model = get_peft_model(model, LoraConfig(r=lora_rank, lora_alpha=2 * lora_rank, lora_dropout=0.0,
                                              task_type="CAUSAL_LM"))
     optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=learning_rate)
-    scaler = torch.amp.GradScaler("cuda", enabled =(dtype == torch.float16))
+    scaler = torch.amp.GradScaler("cuda", enabled=(dtype == torch.float16))
     model.train()
     losses: list[float] = []
     tokens = 0
     size = min(BATCH_SIZE, len(train))
     for step in range(steps):
+        _check_cancelled(cancel_event)
         enc = _batch(tokenizer, [train[(step * size + i) % len(train)] for i in range(size)], max_seq_len, dev)
+        _check_cancelled(cancel_event)
         with _autocast(dev, dtype):
             loss = model(**enc).loss
+        _check_cancelled(cancel_event)
         value = float(loss.detach())
         if not math.isfinite(value):
             raise RuntimeError(f"train loss is {value} at step {step}; refusing to save the adapter")
         scaler.scale(loss).backward()
+        _check_cancelled(cancel_event)
         scaler.step(optimizer)
         scaler.update()
         optimizer.zero_grad()
@@ -281,7 +294,9 @@ def finetune(*, dataset: str, base_model: str, lora_rank: int, steps: int, max_s
         tokens += int(enc["attention_mask"].sum())
         if on_step is not None:
             on_step(step, value)
-    eval_loss = _mean_loss(model, tokenizer, held, max_seq_len, dev, dtype)[0] if held else None
+    _check_cancelled(cancel_event)
+    eval_loss = _mean_loss(model, tokenizer, held, max_seq_len, cancel_event, device=dev, dtype=dtype)[0] if held else None
+    _check_cancelled(cancel_event)
     out = Path(output_dir)
     _check_cancelled(cancel_event)
     out.mkdir(parents=True, exist_ok=True)
@@ -320,5 +335,5 @@ def evaluate(*, adapter_path: str, base_model: str, dataset: str, max_samples: i
     texts = load_texts(dataset, max_samples)
     tokenizer, model = _load(base_model, dev, dtype)
     model = PeftModel.from_pretrained(model, adapter_path)
-    loss, tokens = _mean_loss(model, tokenizer, texts, max_seq_len, dev, dtype)
+    loss, tokens = _mean_loss(model, tokenizer, texts, max_seq_len, device=dev, dtype=dtype)
     return {"eval_loss": loss, "tokens_seen": tokens}

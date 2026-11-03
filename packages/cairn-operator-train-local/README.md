@@ -37,7 +37,7 @@ see one, in bf16 on compute capability 8.0+ (Ampere and later) and fp16 below (a
 the CPU in fp32 otherwise; a Mac stays on the CPU unless `device: mps` is asked for. Naming
 `cuda` where it is unavailable, or `fp16`/`bf16` off CUDA, is refused. Findings report where a
 run trained: `device`, `precision`, `peak_gpu_mem_gb`. One GPU only: pick it with
-`CUDA_VISIBLE_DEVICES`. Verified on a Colab T4 (ADR-0153).
+`CUDA_VISIBLE_DEVICES`. Verified on a Colab T4 (ADR-0166).
 
 **Platforms.** The `[train]` extra pins `torch>=2.11,<2.12`
 (the private training pack's floor), which publishes wheels for Linux x86_64/aarch64, macOS

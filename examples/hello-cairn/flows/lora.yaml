@@ -7,10 +7,10 @@
 # `mock: true` runs the torch-free stand-in: no training stack, deterministic numbers.
 #
 # The real fine-tune needs the `[train]` extra of cairn-operator-train-local (torch,
-# transformers, peft, datasets) on the box the ml engine runs on; CPU is enough. The
-# stage writes the adapter to `output_dir`, or under the leg's temp workdir when it's
-# empty, and reports `kind: model`, so the leg registers a model artifact the pipeline
-# can promote.
+# transformers, peft, datasets) on the box the ml engine runs on; CPU is enough, and a
+# CUDA GPU is used when present (`device`, `precision`). The stage writes the adapter to
+# `output_dir`, or under the leg's temp workdir when it's empty, and reports `kind: model`,
+# so the leg registers a model artifact the pipeline can promote.
 name: lora
 kind: ml
 description: >
@@ -25,6 +25,5 @@ stages:
       max_samples: $config.max_samples
       device: $config.device
       precision: $config.precision
-      output_dir: $config.output_dir
       mock: $config.mock
       output_dir: $config.output_dir

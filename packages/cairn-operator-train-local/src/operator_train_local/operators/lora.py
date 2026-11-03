@@ -64,8 +64,24 @@ class TrainLoraOp(Operation[TrainLoraInput, TrainLoraOutput]):
         worker = asyncio.create_task(asyncio.to_thread(
             F.finetune, dataset=inp.dataset, base_model=inp.base_model, lora_rank=inp.lora_rank,
             steps=inp.steps, max_samples=inp.max_samples, learning_rate=inp.learning_rate,
-            max_seq_len=inp.max_seq_len, output_dir=inp.output_dir or default_output_dir(ctx), on_step=_on_step,
-            device = inp.device, precision = inp.precision)
+            max_seq_len=inp.max_seq_len, output_dir=inp.output_dir or default_output_dir(ctx),
+            on_step=_on_step, cancel_event=cancel_event, device=inp.device, precision=inp.precision))
+        try:
+            out = await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            cancel_event.set()
+            while not worker.done():
+                try:
+                    await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            if not worker.cancelled():
+                error = worker.exception()
+                if error is not None and not isinstance(error, F.TrainingCancelled):
+                    ctx.logger.warning("train/lora worker failed while cancelling: %s", error)
+            raise
         ctx.report.stage("train", percent=100.0)
         ctx.report.scalars(**{k: out[k] for k in ("train_loss", "eval_loss", "tokens_seen", "steps_run")})
         return TrainLoraOutput(**out)
