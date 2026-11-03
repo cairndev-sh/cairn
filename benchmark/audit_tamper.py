@@ -202,6 +202,11 @@ def _head_refused(what: str, verdict: HeadVerdict) -> None:
                            f"chain_ok={verdict.chain_ok}")
 
 
+def _value_refused(what: str, exit_code: int) -> None:
+    if exit_code != BROKEN_EXIT:
+        raise RuntimeError(f"{what}: expected the value to be refused: exit {exit_code}")
+
+
 def _write_altered(scratch: Path, name: str, altered: list[str], original: list[str]) -> Path:
     if altered == original:
         raise RuntimeError(f"the alteration {name!r} changed nothing")
@@ -228,15 +233,15 @@ def _measure(untouched: Path, verify: Callable[[Path], Verdict], check_head: Cal
     head = baseline.head
     _head_matches("the untouched log", check_head(untouched, head))
     without_json = head_exit_without_json(untouched, head)
-    if without_json != 1:
-        raise RuntimeError(f"the untouched log with its own head, without --json: exit {without_json}, expected 1; "
-                           "the docs tell readers to pass --json because of this")
+    if without_json != 0:
+        raise RuntimeError(f"the untouched log with its own head, without --json: exit {without_json}, expected 0: "
+                           "a head check gives one answer in both forms")
     results = [
         {"what": f"The untouched log, {total} rows, with `cairn admin audit verify`", "result": "verifies: exit 0"},
         {"what": "The untouched log against its own head, with `cairn admin lineage --expect-head`",
          "result": "matches: exit 0"},
         {"what": "The same, without `--json`, on a log with no lineage records",
-         "result": "exit 1, because it has no lineage records, though the head matches"},
+         "result": "matches: exit 0"},
     ]
 
     for name, what, altered, rows, breaks in (
@@ -280,18 +285,18 @@ def _measure(untouched: Path, verify: Callable[[Path], Verdict], check_head: Cal
                                             "The saved head has to be the latest one"})
 
     # what `--expect-head` is given matters as much as what the log holds
-    what = f"Limit: cut the last {CUT} rows, with `--expect-head` given an empty or blank value"
+    what = f"Cut the last {CUT} rows, with `--expect-head` given an empty or blank value"
     for value in ("", "  "):
-        _head_matches(what, check_head(older, value))
-    results.append({"what": what, "result": "NOT detected: exit 0. The check compares nothing"})
+        _value_refused(what, head_exit_without_json(older, value))
+    results.append({"what": what, "result": f"refused, nothing compared: exit {BROKEN_EXIT}"})
 
-    what = (f"Limit: cut the last {CUT} rows and tried values in the new last row until its hash began with "
+    what = (f"Cut the last {CUT} rows and tried values in the new last row until its hash began with "
             f"the first {PREFIX} characters of the saved head")
     matched = _write_altered(scratch, "prefix-matched", _matching_prefix(lines[:-CUT], head[:PREFIX]), lines)
     _passes(what, verify(matched), rows=total - CUT)
-    _head_matches(what, check_head(matched, head[:PREFIX]))
+    _value_refused(what, head_exit_without_json(matched, head[:PREFIX]))
     _head_refused(what, check_head(matched, head))
-    results.append({"what": what, "result": f"NOT detected with that prefix: exit 0. "
+    results.append({"what": what, "result": f"a prefix that short is refused: exit {BROKEN_EXIT}. "
                                             f"With the full saved head: exit {BROKEN_EXIT}"})
     return results
 

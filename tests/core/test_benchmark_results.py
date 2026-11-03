@@ -285,12 +285,15 @@ def test_each_alteration_is_reported_at_its_row_and_each_limit_is_stated(audit_t
     assert any(what.startswith("Inserted") and result == "detected: exit 2, row 6 (prev_hash)"
                for what, result in answers.items())
     limits = [what for what in answers if what.startswith("Limit:")]
-    assert len(limits) == 9
-    assert sum(answers[what].startswith("NOT detected") for what in limits) == 8
+    assert len(limits) == 7
+    assert sum(answers[what].startswith("NOT detected") for what in limits) == 6
     assert answers["Limit: emptied the file"].startswith("NOT detected by the chain")
     appended = answers["Limit: appended a forged approval at the end, correctly linked"]
     assert appended.startswith("NOT detected by the chain") and "only grew" in appended
-    assert answers["The same, without `--json`, on a log with no lineage records"].startswith("exit 1")
+    assert answers["The same, without `--json`, on a log with no lineage records"] == "matches: exit 0"
+    assert any("empty or blank" in what and result.startswith("refused") for what, result in answers.items())
+    assert any("first 4 characters" in what and result.startswith("a prefix that short is refused")
+               for what, result in answers.items())
 
 
 @pytest.mark.parametrize("stem", CAUGHT)
@@ -357,30 +360,27 @@ def test_the_limits_of_a_saved_head_are_measured_too(audit_tamper, untouched, ru
 
 
 @pytest.mark.parametrize("value", ["", "  "])
-def test_an_empty_head_that_starts_checking_fails_the_measurement(audit_tamper, untouched, rule, value) -> None:
-    """The published limit would be out of date, so the docs and the script must change with it."""
-    def refuses_it(log: Path, head: str):
-        return audit_tamper.HeadVerdict(2, False) if head == value else rule.check_head(log, head)
+def test_an_empty_head_that_stops_being_refused_fails_the_measurement(audit_tamper, untouched, rule, value) -> None:
+    """A check that compares nothing would pass a cut log again, so the measurement must say so."""
+    def accepts_it(log: Path, head: str) -> int:
+        return 0 if head == value else rule.head_exit(log, head)
 
-    with pytest.raises(RuntimeError, match="empty or blank value: expected the head to match"):
-        audit_tamper._measure(untouched, rule.verify, refuses_it, rule.head_exit)
+    with pytest.raises(RuntimeError, match="empty or blank value: expected the value to be refused"):
+        audit_tamper._measure(untouched, rule.verify, rule.check_head, accepts_it)
 
 
 def test_a_prefix_match_is_checked_three_ways(audit_tamper, untouched, rule) -> None:
-    """The forged log verifies, the prefix accepts it, and the full head refuses it."""
+    """The forged log verifies, the prefix is refused, and the full head refuses it."""
     measure = audit_tamper._measure
     broken = lambda v: type(v)(2, v.rows, v.head, False, ((1, "hash"),))  # noqa: E731
     with pytest.raises(RuntimeError, match="expected the chain to verify"):
         measure(untouched, _when("prefix-matched", broken, rule.verify), rule.check_head, rule.head_exit)
 
-    full = rule.verify(untouched).head
+    def accepts_the_prefix(log: Path, head: str) -> int:
+        return 0 if log.stem == "prefix-matched" else rule.head_exit(log, head)
 
-    def refuses_the_prefix(log: Path, head: str):
-        return (audit_tamper.HeadVerdict(2, False) if log.stem == "prefix-matched" and head != full
-                else rule.check_head(log, head))
-
-    with pytest.raises(RuntimeError, match="expected the head to match"):
-        measure(untouched, rule.verify, refuses_the_prefix, rule.head_exit)
+    with pytest.raises(RuntimeError, match="expected the value to be refused"):
+        measure(untouched, rule.verify, rule.check_head, accepts_the_prefix)
 
     def accepts_the_forgery(log: Path, head: str):
         return (audit_tamper.HeadVerdict(0, True) if log.stem == "prefix-matched"
@@ -396,8 +396,8 @@ def test_a_prefix_nothing_matches_fails_the_measurement(audit_tamper, untouched,
         audit_tamper._matching_prefix(untouched.read_text(encoding="utf-8").splitlines(), "not-hex")
 
 
-@pytest.mark.parametrize("exit_code", [0, 2, 3])
-def test_a_head_check_without_json_that_stops_exiting_1_fails_the_measurement(audit_tamper, untouched, rule,
+@pytest.mark.parametrize("exit_code", [1, 2, 3])
+def test_a_head_check_without_json_that_stops_exiting_0_fails_the_measurement(audit_tamper, untouched, rule,
                                                                               exit_code) -> None:
     with pytest.raises(RuntimeError, match="without --json"):
         audit_tamper._measure(untouched, rule.verify, rule.check_head, lambda log, head: exit_code)
@@ -450,7 +450,9 @@ def test_the_real_commands_answer_as_the_measurement_reads_them(audit_tamper, un
 
     assert audit_tamper._check_head(untouched, good.head) == audit_tamper.HeadVerdict(0, True)
     assert audit_tamper._check_head(cut, good.head) == audit_tamper.HeadVerdict(2, False)
-    assert audit_tamper._head_exit_without_json(untouched, good.head) == 1
+    assert audit_tamper._head_exit_without_json(untouched, good.head) == 0
+    assert audit_tamper._head_exit_without_json(cut, "") == 2
+    assert audit_tamper._head_exit_without_json(cut, good.head[:4]) == 2
 
 
 def test_an_alteration_that_changes_nothing_fails_the_measurement(audit_tamper, tmp_path: Path) -> None:
@@ -544,4 +546,4 @@ def test_a_run_where_every_check_holds_publishes_its_limits(audit_tamper, untouc
     assert _main(audit_tamper, untouched, out, monkeypatch, rule.verify, rule.check_head) == 0
     result = json.loads((out / "audit_tamper.json").read_text(encoding="utf-8"))
     assert result["script"] == "benchmark/audit_tamper.py"
-    assert sum(row["result"].startswith("NOT detected") for row in result["results"]) == 8
+    assert sum(row["result"].startswith("NOT detected") for row in result["results"]) == 6
