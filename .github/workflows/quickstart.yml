@@ -1,0 +1,32 @@
+# The README's Quickstart, run as written (#330). `ci.yml` is one workflow, and GitHub's badge
+# reports a whole workflow, so this check has its own file: its badge is the Quickstart's alone.
+# It is not one of the required checks (those are `public`, `public-e2e` and `dco`).
+# scripts/check_quickstart.py reads the commands out of README.md, so they cannot drift.
+name: quickstart
+'on':
+  push:
+    branches:
+    - main
+  pull_request: {}
+permissions:
+  contents: read
+concurrency:
+  group: quickstart-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  quickstart:
+    runs-on: ubuntu-latest
+    # no OPENAI_API_KEY here: the Quickstart needs none, and the script removes any it finds
+    env:
+      UV_PYTHON: '3.13'
+    steps:
+    - uses: actions/checkout@v6
+    - uses: astral-sh/setup-uv@v7
+      with:
+        version: 0.11.9
+        enable-cache: true
+        cache-dependency-glob: uv.lock
+    - name: Locked install of what `pip install 'cairndev[hello]'` gives
+      run: uv sync --locked --extra hello
+    - name: Run the README's Quickstart commands, answer both gates, check the audit trail
+      run: .venv/bin/python scripts/check_quickstart.py --cairn .venv/bin/cairn

@@ -132,6 +132,10 @@ env -u CAIRN_STORAGE .venv/bin/pytest tests/core -q
 - **The wheels** — `scripts/check_folded_wheels.py` builds the five wheels and
   checks that `cairndev` carries the builtin operators and the core contracts.
 - **The engine image** — the `image` job builds `Dockerfile.engine` and starts it.
+- **The Quickstart** — the `quickstart` workflow (`quickstart.yml`, not a required check) runs the commands in the
+  README's Quickstart section with `scripts/check_quickstart.py`: it starts an engine, answers both gates, trips the data
+  gate and verifies the audit log. It reads the commands from the README, so edit them there; a line the script can't
+  run fails the check until the script is taught it.
 
 ## Documentation
 
