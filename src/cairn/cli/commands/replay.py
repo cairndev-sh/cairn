@@ -334,7 +334,7 @@ def cmd(
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="cairn replay",
+        prog="cairn status --replay",
         description="Print what a past run recorded: its inputs, operators and events. Nothing runs again.",
     )
     parser.add_argument("run_id")

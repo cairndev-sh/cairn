@@ -860,7 +860,7 @@ def _render_operator_readme(name: str, ops: list[str]) -> str:
         ```bash
         pip install -e .              # registers every operator with the engine
         cairn pack ls             # confirm discovery
-        cairn doctor
+        cairn setup --check
         cairn pack test .         # the smoke tests in tests/
         ```
 

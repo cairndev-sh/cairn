@@ -1,7 +1,8 @@
-"""``cairn remote reject`` (ADR-0156 D6): both forms, against the real in-process server.
+"""``cairn decide <id> reject`` (ADR-0156 D6): both forms, against the real in-process server.
 
-``reject <pipeline_id> <step> --reason TEXT`` rejects a pipeline gate; ``reject <run_id>`` is the
-unchanged run-level verb; a lone ``pl_…`` argument is refused.
+``decide <pipeline_id> reject --step S --reason TEXT`` rejects a pipeline gate; ``decide <run_id>
+reject`` is the run-level verb; a pipeline's only gate is rejected without ``--step``, still with
+a reason.
 """
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ os.environ.setdefault("OPENAI_API_KEY", "sk-test-dummy")
 import pytest
 from typer.testing import CliRunner
 
-from cairn.cli.commands import remote
+from cairn.cli.main import app
 from cairn.core.engine.bundle_pipeline import PipelinePlan, PipelinePlanStep
 from cairn.core.engine.runner import Runner
 from cairn.core.storage.pipeline_store import InMemoryPipelineStore, PipelineRecord, StepState
@@ -52,8 +53,8 @@ def served(monkeypatch):
 
 
 def test_pipeline_form_rejects_the_gate(served):
-    res = cli.invoke(remote.app, ["reject", "pl_cli1", "review", "--reason", "eval regressed",
-                                  "--approver", "dana", *EP])
+    res = cli.invoke(app, ["decide", "pl_cli1", "reject", "--step", "review", "--reason", "eval regressed",
+                           "--approver", "dana", *EP])
     assert res.exit_code == 0, res.output
     assert "rejected" in res.output and "failed" in res.output
     rec = asyncio.run(served.get("pl_cli1"))
@@ -63,34 +64,34 @@ def test_pipeline_form_rejects_the_gate(served):
 
 
 def test_reason_is_required_with_a_step(served):
-    res = cli.invoke(remote.app, ["reject", "pl_cli1", "review", *EP])
+    res = cli.invoke(app, ["decide", "pl_cli1", "reject", "--step", "review", *EP])
     assert res.exit_code == 1
     assert "--reason is required" in res.output
     assert asyncio.run(served.get("pl_cli1")).status == "paused"
 
 
-def test_a_lone_pipeline_id_is_refused(served):
-    res = cli.invoke(remote.app, ["reject", "pl_cli1", *EP])
+def test_a_lone_pipeline_id_rejects_its_only_gate_and_still_needs_a_reason(served):
+    res = cli.invoke(app, ["decide", "pl_cli1", "reject", *EP])
     assert res.exit_code == 1
-    assert "name the gate step" in res.output
+    assert "--reason is required" in res.output
     assert asyncio.run(served.get("pl_cli1")).status == "paused"
 
 
 def test_run_form_is_unchanged(served):
-    res = cli.invoke(remote.app, ["reject", "no-such-run", *EP])
+    res = cli.invoke(app, ["decide", "no-such-run", "reject", *EP])
     assert res.exit_code == 1
     assert "404" in res.output          # POST /runs/{id}/resume, as before
-    res = cli.invoke(remote.app, ["approve", "no-such-run", *EP])
+    res = cli.invoke(app, ["decide", "no-such-run", "approve", *EP])
     assert res.exit_code == 1 and "404" in res.output
 
 
 def test_unknown_pipeline_is_reported_as_404(served):
-    res = cli.invoke(remote.app, ["reject", "pl_missing", "review", "--reason", "x", *EP])
+    res = cli.invoke(app, ["decide", "pl_missing", "reject", "--step", "review", "--reason", "x", *EP])
     assert res.exit_code == 1 and "404" in res.output
 
 
 def test_a_step_that_is_not_a_gate_wait_is_reported_as_409(served):
-    res = cli.invoke(remote.app, ["reject", "pl_cli1", "prep", "--reason", "x", *EP])
+    res = cli.invoke(app, ["decide", "pl_cli1", "reject", "--step", "prep", "--reason", "x", *EP])
     assert res.exit_code == 1 and "409" in res.output
 
 
@@ -100,6 +101,6 @@ def test_a_caller_the_gate_does_not_name_is_reported_as_403(served, monkeypatch)
     monkeypatch.setenv("OBS_API_PASSWORD", "maya-pw")
     _patch_client(monkeypatch, build_app(Runner(), enable_scheduler=False, enable_spec_routes=False))
     tok = create_access_token({"sub": "carol"})
-    res = cli.invoke(remote.app, ["reject", "pl_cli1", "review", "--reason", "x", "--token", tok, *EP])
+    res = cli.invoke(app, ["decide", "pl_cli1", "reject", "--step", "review", "--reason", "x", "--token", tok, *EP])
     assert res.exit_code == 1 and "403" in res.output
     assert asyncio.run(served.get("pl_cli1")).status == "paused"

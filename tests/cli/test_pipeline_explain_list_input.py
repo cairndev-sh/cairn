@@ -1,7 +1,7 @@
-"""#197 — `cairn pipeline explain -i` types a `list` input as the launch door does.
+"""#197 — `cairn run --dry-run -i` types a `list` input as the launch door does.
 
 `-i report_to=mlflow,wandb` reaches the door as a string; the door splits it on
-commas. `explain` shows the value the launch will use, by calling the door's own
+commas. `--dry-run` shows the value the launch will use, by calling the door's own
 typing function, so the two cannot disagree.
 """
 from __future__ import annotations
@@ -10,7 +10,7 @@ import json
 
 from typer.testing import CliRunner
 
-from cairn.cli.commands import pipeline
+from cairn.cli.main import app
 
 _PIPELINE = """\
 name: tracked
@@ -25,10 +25,10 @@ steps:
 
 
 def _explain(*inputs: str) -> dict:
-    args = ["explain", "scratch-list/tracked", "--json"]
+    args = ["run", "--dry-run", "scratch-list/tracked", "--json"]
     for i in inputs:
         args += ["-i", i]
-    res = CliRunner().invoke(pipeline.app, args)
+    res = CliRunner().invoke(app, args)
     assert res.exit_code == 0, res.output
     return json.loads(res.stdout)
 

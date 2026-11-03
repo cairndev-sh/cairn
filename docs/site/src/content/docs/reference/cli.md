@@ -35,6 +35,8 @@ set them first when you run outside `cairn setup`:
 
 <!-- old-names -->
 
+These names were removed in 0.5.0, and typing one says what's here:
+
 | Old name | New name |
 |---|---|
 | `cairn init` | `cairn pack new` |
@@ -86,7 +88,7 @@ refused: a flow runs as a leg of a pipeline.
 
 <!-- old-names -->
 
-The old names keep working for one more minor version, and each says its new name on stderr: `cairn pipeline run` and `cairn remote launch` are now `cairn run`, `cairn pipeline explain` and `cairn preflight` are `cairn run --dry-run`, `cairn gate` is `cairn run --check`, and `cairn remote submit` is `cairn run --skill`. `cairn dev` is `cairn setup --foreground` (it keeps its default port, 8000, and like `cairn setup` it listens on this machine only unless `CAIRN_TRIGGER_HOST` is set), `cairn doctor` is `cairn setup --check`, and `cairn remote login` is `cairn setup --server`. They keep their own exit codes: `cairn pipeline run` still exits `3` on a refused launch and `130` on Ctrl-C, and now `2` at a human gate it has no way to ask about.
+The old names were removed in 0.5.0. Typing one runs nothing, says its new name on stderr, and exits 2: `cairn doctor` says `cairn setup --check`, `cairn pipeline run` and `cairn remote launch` say `cairn run`, and `cairn gate` says `cairn run --check`.
 
 <!-- /old-names -->
 
@@ -163,12 +165,6 @@ running on the server; log in again and re-attach with `cairn status <id> --foll
 | `cairn admin trigger enable <id>` / `disable <id>` | Turns a stored trigger on or pauses it. A trigger a pipeline declares starts paused; an event trigger applies to the next event, a webhook trigger at the next server start. |
 
 `cairn run`, `cairn status`, `cairn decide` and `cairn admin trigger`, `preset` and `console` take `--endpoint`, `--token` and `--profile`, long form only. `-e` is the environment on `cairn run`.
-
-<!-- old-names -->
-
-The older names `cairn replay`, and `cairn remote pipelines`, `pipeline`, `ps`, `status`, `watch`, `findings`, `logs`, `advance`, `approve`, `reject`, `cancel` and `cancel-pipeline`, still work for one minor version. They print the new spelling on stderr.
-
-<!-- /old-names -->
 
 ## Deploy and workers
 

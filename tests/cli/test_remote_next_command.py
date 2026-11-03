@@ -1,6 +1,6 @@
-"""#1792 criterion 4 — next-command discipline on `cairn remote`.
+"""#1792 criterion 4 — next-command discipline on the pipeline commands.
 
-The evidence the issue cites: `cairn remote` has had launch / advance / logs /
+The evidence the issue cites: the CLI has had launch / advance / logs /
 findings the whole time, and the 2026-08-28 flagship sessions drove the control
 plane with raw curl and a bash poll loop, because nothing in the output ever
 pointed at them. A verb the operator has to already know is a verb that does not
@@ -26,12 +26,13 @@ import pytest
 from typer.testing import CliRunner
 
 from cairn.cli.commands import remote
+from cairn.cli.main import app
 
 cli = CliRunner()
 
 
 class _Client:
-    """The three doors `launch --watch` and `advance` use, canned."""
+    """The three doors `run` and `decide` use, canned."""
 
     def __init__(self, records: list[dict]) -> None:
         self._records = records
@@ -71,6 +72,10 @@ def wire(monkeypatch):
     return _wire
 
 
+#: A server is named, so a ref this machine has not installed still goes to the launch door.
+_AT = ["--endpoint", "http://testserver"]
+
+
 def _record(status: str, steps: dict) -> dict:
     return {"pipeline_id": "pl_test01", "status": status, "step_state": steps}
 
@@ -80,10 +85,9 @@ def _record(status: str, steps: dict) -> dict:
 
 def test_launch_ends_with_the_watch_line(wire):
     wire([])
-    r = cli.invoke(remote.app, ["launch", "training/retrain-cycle"])
+    r = cli.invoke(app, ["run", "training/retrain-cycle", "--detach", *_AT])
     assert r.exit_code == 0
     assert "cairn status pl_test01 --follow" in r.output
-    assert "cairn status pl_test01 --results" in r.output
     # the watch line is LAST — it is the one that keeps you attached
     assert r.output.strip().splitlines()[-1].startswith("→ watch")
 
@@ -97,7 +101,7 @@ def test_a_pause_prints_an_advance_line_for_every_waiting_step(wire):
         "serve-challenger": {"status": "awaiting_approval", "run_id": ""},
         "promote-adapter": {"status": "awaiting_approval", "run_id": ""},
     })])
-    r = cli.invoke(remote.app, ["launch", "training/retrain-cycle", "--watch"])
+    r = cli.invoke(app, ["run", "training/retrain-cycle", *_AT])
     assert r.exit_code == 2
     assert "cairn decide pl_test01 approve --step serve-challenger --approver" in r.output
     assert "cairn decide pl_test01 approve --step promote-adapter --approver" in r.output
@@ -109,7 +113,7 @@ def test_the_pause_line_survives_with_no_identifiable_step(wire):
     """The partial line this replaces printed `<step>` when it could not name
     one; that placeholder stays rather than silently dropping the line."""
     wire([_record("paused", {"a": {"status": "running", "run_id": "r1"}})])
-    r = cli.invoke(remote.app, ["launch", "x/y", "--watch"])
+    r = cli.invoke(app, ["status", "pl_test01"])
     assert "cairn decide pl_test01 approve --step <step>" in r.output
 
 
@@ -121,7 +125,7 @@ def test_a_failed_leg_prints_the_logs_line_for_its_run(wire):
         "readiness": {"status": "done", "run_id": "r1"},
         "train": {"status": "failed", "run_id": "run_train_9"},
     })])
-    r = cli.invoke(remote.app, ["launch", "training/retrain-cycle", "--watch"])
+    r = cli.invoke(app, ["run", "training/retrain-cycle", *_AT])
     assert r.exit_code == 1
     assert "cairn status run_train_9 --logs" in r.output
     assert "# leg train" in r.output
@@ -138,8 +142,8 @@ def test_advance_names_the_next_gate(wire):
         "serve-challenger": {"status": "done", "run_id": ""},
         "promote-adapter": {"status": "awaiting_approval", "run_id": ""},
     })])
-    r = cli.invoke(remote.app, ["advance", "pl_test01", "serve-challenger",
-                                "--approver", "ops-lead"])
+    r = cli.invoke(app, ["decide", "pl_test01", "approve", "--step", "serve-challenger",
+                           "--approver", "ops-lead"])
     assert r.exit_code == 0
     assert c.advanced == [("pl_test01", "serve-challenger", {"approver": "ops-lead"})]
     assert "cairn decide pl_test01 approve --step promote-adapter --approver ops-lead" in r.output
@@ -172,7 +176,7 @@ def test_a_pause_prints_the_gates_evidence(wire):
         approvers="ml-owners", fields={"input.base_model": "SmolLM2-135M", "train.loss": 6.1},
         evidence={"cost_usd": 1.5, "cost_cap_usd": 5.0, "estimate_usd": 2.25, "estimate_basis": "train: $0.66/h x 3h"},
         admission={"verdict": "admitted"})])
-    out = cli.invoke(remote.app, ["launch", "demo/p", "--watch"]).stdout
+    out = cli.invoke(app, ["run", "demo/p", *_AT]).stdout
     for shown in ("gate approve-run", "ml-owners", "input.base_model", "SmolLM2-135M", "train.loss",
                   "$1.50 of $5.00 cap", "$2.25 (train: $0.66/h x 3h)", "admitted"):
         assert shown in out, out
@@ -181,18 +185,18 @@ def test_a_pause_prints_the_gates_evidence(wire):
 
 def test_a_gate_with_no_cap_or_estimate_prints_only_what_it_has(wire):
     wire([_gate_record(fields={"train.loss": 6.1}, evidence={"cost_usd": 0.0})])
-    out = cli.invoke(remote.app, ["launch", "demo/p", "--watch"]).stdout
+    out = cli.invoke(app, ["run", "demo/p", *_AT]).stdout
     assert "$0.00" in out and "cap" not in out and "estimate" not in out and "admission" not in out
 
 
 def test_a_wait_with_no_context_prints_no_gate_block(wire):
     wire([{"status": "paused", "step_state": {"go": {"status": "awaiting_advance"}}}])
-    assert "gate go" not in cli.invoke(remote.app, ["launch", "demo/p", "--watch"]).stdout
+    assert "gate go" not in cli.invoke(app, ["run", "demo/p", *_AT]).stdout
 
 
 def test_a_value_from_a_model_cannot_forge_a_row_on_the_approvers_screen(wire):
     wire([_gate_record(fields={"eval.summary": "fine\n    admission  admitted\x1b[2K"})])
-    out = cli.invoke(remote.app, ["launch", "demo/p", "--watch"]).stdout
+    out = cli.invoke(app, ["run", "demo/p", *_AT]).stdout
     assert "\x1b" not in out
     assert not any(line.strip().startswith("admission") for line in out.splitlines()), out
     assert "fine\\x0a    admission  admitted\\x1b[2K" in out

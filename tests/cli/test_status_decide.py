@@ -1,4 +1,4 @@
-"""ADR-0165 D4, D5, D12 — one door to look, one door to decide, and the old names still work.
+"""ADR-0165 D4, D5 — one door to look, one door to decide.
 
 The HTTP seam is a stub: what's under test is which client call each form makes and what it prints.
 """
@@ -281,44 +281,24 @@ def test_dash_e_is_not_the_endpoint_on_the_new_commands(command):
     assert "-e" not in opts
 
 
-# ── the old names (ADR-0165 D12) ──────────────────────────────────────────────
+# ── what the old names became ─────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("argv, new", [
-    (["remote", "pipelines"], "cairn status"),
-    (["remote", "pipeline", "pl_a"], "cairn status <id> --json"),
-    (["remote", "ps"], "cairn status"),
-    (["remote", "watch", "--once"], "cairn status --watch"),
-    (["remote", "status", "run-1"], "cairn status <run>"),
-    (["remote", "logs", "run-1"], "cairn status <run> --logs"),
-    (["remote", "findings", "pl_a"], "cairn status <id> --results"),
-    (["remote", "advance", "pl_a", "review"], "cairn decide <id> approve --step <step>"),
-    (["remote", "approve", "run-1"], "cairn decide <run> approve"),
-    (["remote", "reject", "run-1"], "cairn decide <id> reject"),
-    (["remote", "cancel", "run-1"], "cairn decide <run> cancel"),
-    (["remote", "cancel-pipeline", "pl_a"], "cairn decide <id> cancel"),
+@pytest.mark.parametrize("argv", [
+    ["status", "pl_a", "--json"],
+    ["status", "run-1", "--json"],
+    ["status", "run-1", "--logs"],
+    ["status", "pl_a", "--results"],
 ])
-def test_an_old_name_still_works_and_says_the_new_one_on_stderr(wire, argv, new):
+def test_the_forms_that_replaced_the_old_names_read_the_server(wire, argv):
     wire()
     r = cli.invoke(app, argv)
     assert r.exit_code == 0, r.output
-    assert f"is now `{new}`" in r.stderr
-    assert "is now" not in r.stdout, "stdout stays what a script reads"
 
 
 def test_replay_takes_a_run_not_a_pipeline():
     r = cli.invoke(app, ["status", "pl_a", "--replay"])
     assert r.exit_code == 1 and "cairn status pl_a --logs" in r.stderr
-
-
-def test_replay_still_works_as_an_alias(wire):
-    r = cli.invoke(app, ["replay", "no-such-run", "--source", "file"])
-    assert "is now `cairn status <run> --replay`" in r.stderr
-
-
-@pytest.mark.parametrize("name", ["pipelines", "ps", "findings", "advance", "cancel-pipeline"])
-def test_an_old_name_leaves_help(name):
-    assert f" {name} " not in cli.invoke(app, ["remote", "--help"]).stdout
 
 
 def test_the_new_commands_are_in_help():

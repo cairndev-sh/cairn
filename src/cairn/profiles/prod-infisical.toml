@@ -9,7 +9,7 @@
 # process environment. This is the engine half of the deploy `--profile
 # infisical` service (compose stands up Infisical; THIS points the engine at
 # it). Without it, the Infisical service runs but the engine never reads from
-# it. `cairn deploy doctor` fails loud on that mismatch.
+# it. `cairn admin deploy doctor` fails loud on that mismatch.
 #
 #   CAIRN_PROFILE=$(python -c "import cairn.profiles as p, pathlib; print(pathlib.Path(p.__file__).parent / 'prod-infisical.toml')") cairn-server
 #
@@ -19,8 +19,8 @@
 #   environment slug) · INFISICAL_HOST (self-host URL)
 # and `pip install 'cairndev[infisical]'` in the image.
 #
-# Verify with `cairn doctor` (the profile category checks every binding
-# resolves to a registered operator) and `cairn deploy doctor`.
+# Verify with `cairn setup --check` (the profile category checks every binding
+# resolves to a registered operator) and `cairn admin deploy doctor`.
 
 [profile]
 # #1570 — deployment VARIANT selected via CAIRN_PROFILE, not per run (#408)

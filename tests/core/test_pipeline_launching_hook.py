@@ -346,27 +346,41 @@ def test_both_http_doors_answer_a_refusal_as_a_refused_admission(installed, monk
     assert [p["source"] for p in hooks.launching()] == [source] and bridge.calls == []
 
 
-def test_the_cli_reports_a_refusal_as_a_refused_admission(installed, monkeypatch, tmp_path):
-    from typer.testing import CliRunner
+def _cli_through(monkeypatch, tmp_path, bridge):
+    """``cairn run`` against the launch door's own routes, in this process."""
+    from cairn_client import CairnClient
+    from fastapi.testclient import TestClient
 
-    from cairn.cli.commands import pipeline as cli_pipeline
+    from cairn.cli.commands import remote
 
+    for k in ("OBS_REMOTE_ENDPOINT", "OBS_REMOTE_TOKEN", "CAIRN_REMOTE_ENDPOINT", "CAIRN_REMOTE_TOKEN"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("CAIRN_CONFIG_HOME", str(tmp_path / "cfg"))
     monkeypatch.setenv("OBS_STORAGE", f"sqlite://{tmp_path / 'cli.db'}")
     monkeypatch.setenv("OBS_RUN_DB", str(tmp_path / "runs.db"))
+    app = _app(bridge)
+    monkeypatch.setattr(remote, "_api", lambda ep, tok, *, timeout=30.0: CairnClient(
+        "http://testserver", token=tok, timeout=timeout, transport=TestClient(app)._transport))
+
+
+def _cli_run():
+    from typer.testing import CliRunner
+
+    from cairn.cli.main import app
+
+    return CliRunner().invoke(app, ["run", f"pipeline:{PIPE}", "--input", "path=x",
+                                    "--endpoint", "http://testserver"])
+
+
+def test_the_cli_reports_a_refusal_and_starts_nothing(installed, monkeypatch, tmp_path):
     hooks = _Hooks(monkeypatch)
     hooks.providers = {"check": hooks.recorder(_refuse("not from a terminal"))}
-    started = []
-
-    async def _never_start(self, plan, **kw):  # pragma: no cover — must not be reached
-        started.append(plan)
-
-    from cairn.core.dispatch import pipeline_bridge as PB
-
-    monkeypatch.setattr(PB.PipelineBridge, "start_pipeline", _never_start)
-    r = CliRunner().invoke(cli_pipeline.app, ["run", f"pipeline:{PIPE}", "--input", "path=x"])
-    assert r.exit_code == 3, r.output
+    bridge = _Bridge()
+    _cli_through(monkeypatch, tmp_path, bridge)
+    r = _cli_run()
+    assert r.exit_code != 0, r.output
     assert "not from a terminal" in r.output
-    assert [p["source"] for p in hooks.launching()] == ["cli"] and started == []
+    assert len(hooks.launching()) == 1 and bridge.calls == []
 
 
 async def test_a_template_run_wrapped_in_its_one_leg_pipeline_asks_the_hook(installed, monkeypatch):

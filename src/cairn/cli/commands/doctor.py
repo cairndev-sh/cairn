@@ -1499,7 +1499,7 @@ def format_report(results: list[CheckResult]) -> str:
 
     # Known core categories first, then any pack-contributed categories.
     extra = [c for c in by_cat if c not in _CATEGORY_ORDER]
-    lines: list[str] = ["cairn doctor", ""]
+    lines: list[str] = ["cairn setup --check", ""]
     for cat in (*_CATEGORY_ORDER, *sorted(extra)):
         rows = by_cat.get(cat)
         if not rows:
@@ -1556,7 +1556,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     suite, both of which pre-date Typer.
     """
     parser = argparse.ArgumentParser(
-        prog="cairn doctor",
+        prog="cairn setup --check",
         description="Preflight: report on env config + reachability of configured services.",
     )
     parser.add_argument(

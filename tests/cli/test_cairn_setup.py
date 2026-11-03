@@ -13,7 +13,6 @@ from types import SimpleNamespace
 os.environ.setdefault("OPENAI_API_KEY", "sk-test-dummy")
 
 import pytest
-from typer.main import get_command
 from typer.testing import CliRunner
 
 from cairn.cli.commands import dev as dev_cli
@@ -264,7 +263,7 @@ def test_the_checks_show_what_failed_and_the_count_not_the_whole_report(world, m
     def run(argv, **kw):
         seen.update(env=kw["env"], argv=argv)
         return SimpleNamespace(returncode=1, stderr="", stdout=(
-            "cairn doctor\n\n[store]\n  ✓ A: fine\n  ⚠ B: unset (optional)\n  ✗ C: broken\n\nSummary: 1 ok, 1 warn, 1 fail"))
+            "cairn setup --check\n\n[store]\n  ✓ A: fine\n  ⚠ B: unset (optional)\n  ✗ C: broken\n\nSummary: 1 ok, 1 warn, 1 fail"))
 
     monkeypatch.setattr(setup.subprocess, "run", run)
     assert setup._run_checks({"K": "the engine's"}) == 1
@@ -434,30 +433,10 @@ def test_an_explicit_host_wins(world, monkeypatch):
 
 
 def test_every_local_engine_listens_on_this_machine_by_default(monkeypatch):
-    """`cairn dev`, `cairn setup` and the temporary engine `cairn run` starts all come through here."""
+    """`cairn setup --foreground`, `cairn setup` and the temporary engine `cairn run` starts all come through here."""
     monkeypatch.delenv("CAIRN_TRIGGER_HOST", raising=False)
     assert dev_cli.dev_env(1)["CAIRN_TRIGGER_HOST"] == "127.0.0.1"
     monkeypatch.setenv("CAIRN_TRIGGER_HOST", "")
     assert dev_cli.dev_env(1)["CAIRN_TRIGGER_HOST"] == "127.0.0.1"
     monkeypatch.setenv("CAIRN_TRIGGER_HOST", "0.0.0.0")
     assert dev_cli.dev_env(1)["CAIRN_TRIGGER_HOST"] == "0.0.0.0"
-
-
-# ── the old names (ADR-0165 D12) ─────────────────────────────────────────────────────────────
-
-@pytest.mark.parametrize("old, new", [
-    (["dev"], "cairn setup --foreground"),
-    (["doctor"], "cairn setup --check"),
-    (["remote", "login"], "cairn setup --server"),
-])
-def test_an_old_name_is_hidden_and_warns(world, monkeypatch, old, new):
-    command = get_command(app)
-    for name in old:
-        command = command.commands[name]
-    assert command.hidden
-    monkeypatch.setattr(doctor, "_run_and_exit_code", lambda strict: 0)
-    monkeypatch.setattr(dev_cli, "run_attached", lambda **k: None)
-    extra = ["-u", "a", "-p", "b", "--endpoint", "http://x"] if old[0] == "remote" else []
-    r = cli.invoke(app, [*old, *extra])
-    assert f"is now `{new}" in " ".join(r.stderr.split()), r.output
-    assert "is now" not in r.stdout

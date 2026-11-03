@@ -46,7 +46,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
-import inspect
 import json
 import sys
 import tempfile
@@ -196,7 +195,7 @@ def _print_summary(run_id: str, exit_code: int) -> None:
     print()
     print(f"run_id:  {run_id}")
     print(f"trace:   {location}")
-    print(f"replay:  cairn replay {run_id}")
+    print(f"replay:  cairn status {run_id} --replay")
     print(f"status:  {'ok' if exit_code == 0 else 'failed'}")
 
 
@@ -868,7 +867,7 @@ def cmd(
     if dry_run:
         with _inputs_file(values) as path:
             if _names_a_pipeline(target):
-                inspect.unwrap(pipeline_cli.explain_cmd)(
+                pipeline_cli.explain_cmd(
                     ref=target, input_=[f"{k}={json.dumps(v)}" for k, v in values.items()],
                     environment=environment or "", preset=preset or "", workspace=workspace or "default",
                     json_out=json_out)
@@ -1064,33 +1063,6 @@ def _run_pipeline_file_sync(
             pass
 
 
-def preflight_cmd(
-    template_ref: str = typer.Argument(
-        ..., help="Namespaced agentic template reference, e.g. 'hello-cairn/assistant'. "
-                  "A pipeline is checked with `cairn run <pipeline> --dry-run`.",
-    ),
-    input_file: Optional[str] = typer.Option(
-        None, "--input", "-i",
-        help="Path to a JSON object of input values. Optional — with no inputs "
-             "the verdict just lists what's missing.",
-    ),
-    profile: Optional[str] = typer.Option(
-        None, "--profile", "-p",
-        help="Environment/profile the plan resolves under. Default: the env-default profile.",
-    ),
-    no_connections: bool = typer.Option(
-        False, "--no-connections",
-        help="Skip the advisory connection-health check (faster; offline).",
-    ),
-) -> None:
-    """Preflight a workflow: the side-effect-free ready/blocked verdict — cost,
-    gates, and blockers — without starting a run. Exit 0=ready, 1=blocked."""
-    from cairn.profiles import default_dev_profile  # noqa: PLC0415 — #2241 D: local compiles get local-dev
-
-    default_dev_profile()
-    raise typer.Exit(_preflight_sync(
-        template_ref, input_file, profile=profile, check_connections=not no_connections,
-    ))
 
 
 def main(argv: Optional[list[str]] = None) -> int:

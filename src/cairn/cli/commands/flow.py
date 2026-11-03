@@ -1,4 +1,4 @@
-"""``cairn flow`` — inspect flows, split them at in-flow approval gates (#1079),
+"""What ``cairn pack ls``, ``show --split`` and ``export --to metaflow`` run — inspect flows, split them at in-flow approval gates (#1079),
 and export them as native orchestrator files (ADR-0087 P4, #1256).
 
 The split is what makes in-flow HITL engine-independent: rather than asking each
@@ -22,7 +22,6 @@ from typing import Optional
 import typer
 from rich.console import Console
 
-from cairn.cli.aliases import renamed
 from cairn.core.dataflow.defs import load_flow_defs
 from cairn.core.dataflow.export import EXPORT_TARGETS, FlowExportError, export_flow
 from cairn.core.dataflow.gate_split import (
@@ -31,11 +30,6 @@ from cairn.core.dataflow.gate_split import (
     split_at_gates,
 )
 
-# #1079; the commands are `cairn pack`'s now, and these names are its aliases (ADR-0165 D12)
-app = typer.Typer(
-    help="Inspect flows; split them at in-flow approval gates.",
-    no_args_is_help=True,
-)
 console = Console()
 
 
@@ -197,8 +191,3 @@ def export_cmd(
     )
     console.print("[dim]Generated — do not edit; re-export instead. Governance "
                   "(gates/budgets/admission/audit) stays in cairn.[/]")
-
-
-app.command("ls", hidden=True)(renamed("cairn flow ls", "cairn pack ls --flows")(ls_cmd))
-app.command("split", hidden=True)(renamed("cairn flow split", "cairn pack show --split")(split_cmd))
-app.command("export", hidden=True)(renamed("cairn flow export", "cairn pack export --to metaflow")(export_cmd))

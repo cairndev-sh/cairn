@@ -96,5 +96,5 @@ def doctor(
     # and refuses to start without it. Say whose requirement that is (#2536).
     if any(r.status == "fail" and r.name in REQUIRED for r in results):
         print("\nrequired = what the compose stack refuses to start without; a local "
-              "`cairn` install (CLI, `cairn dev`) needs none of them.")
+              "`cairn` install (CLI, `cairn setup`) needs none of them.")
     raise typer.Exit(code=exit_code(results, strict=strict))

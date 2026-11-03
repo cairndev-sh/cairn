@@ -3989,7 +3989,7 @@ class PipelineBridge:
                     pipeline_name=rec.pipeline_name or rec.bundle_ref,
                     reason=reason,
                     cost=self._budget_context(rec),
-                    commands=(f"cairn remote findings {rec.pipeline_id}",),
+                    commands=(f"cairn status {rec.pipeline_id} --results",),
                     dedupe_key=failure_dedupe_key(rec.pipeline_id, rec.ended_at or ""),
                 ),
                 registry=getattr(self, "_notify_registry", None),

@@ -118,19 +118,6 @@ def flow_body(monkeypatch) -> list[dict]:
     return seen
 
 
-@pytest.fixture(autouse=True)
-def _fast_polls(monkeypatch):
-    """The contract is ownership and ordering, not cadence (2s in production)."""
-    import cairn.cli.commands.pipeline as pipeline_cli
-
-    orig = pipeline_cli._drive_until_terminal
-
-    async def _fast(bridge, pid, *, poll_s=0.02):
-        return await orig(bridge, pid, poll_s=0.02)
-
-    monkeypatch.setattr(pipeline_cli, "_drive_until_terminal", _fast)
-
-
 def _records(bridges: list) -> list:
     return [r for b in bridges for r in b.store._by_id.values()]
 

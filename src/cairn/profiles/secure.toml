@@ -7,7 +7,7 @@
 #
 #   CAIRN_PROFILE=cairn/profiles/secure.toml cairn-server
 #
-# Verify with `cairn doctor` — the profile category checks every binding
+# Verify with `cairn setup --check` — the profile category checks every binding
 # resolves to a registered operator.
 
 [profile]

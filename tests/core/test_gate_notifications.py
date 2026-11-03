@@ -194,7 +194,7 @@ def test_the_message_carries_the_exact_release_commands():
         rec, _step(), SimpleNamespace(id="run-1"), _req()))
 
     body = sink.events[0].render()
-    assert "cairn remote advance pl_test promote" in body
+    assert "cairn decide pl_test approve --step promote" in body
     assert "/pipelines/pl_test/steps/promote/approve" in body
 
 
@@ -230,7 +230,7 @@ def test_a_manual_step_notifies_as_awaiting_advance():
 
     assert [e.kind for e in sink.events] == ["awaiting_advance"]
     assert sink.events[0].authority == ("pipeline plan: trigger: manual",)
-    assert "cairn remote advance pl_test promote" in sink.events[0].render()
+    assert "cairn decide pl_test approve --step promote" in sink.events[0].render()
 
 
 def test_a_declared_approval_gate_notifies_and_names_its_audience():
@@ -339,7 +339,7 @@ def test_a_failed_pipeline_notifies_when_the_profile_opts_in(monkeypatch):
 
     assert [e.kind for e in sink.events] == ["pipeline_failed"]
     body = sink.events[0].render()
-    assert "acc > 0.8" in body and "cairn remote findings pl_test" in body
+    assert "acc > 0.8" in body and "cairn status pl_test --results" in body
 
 
 def test_the_profile_can_mute_an_event_kind(monkeypatch):

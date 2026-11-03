@@ -51,7 +51,7 @@ def _no_writer_lines() -> list[str]:
         "no lineage records: they are written by the platform's lineage operator, which "
         "this install does not have.",
         "  For a run's graph (the runs it came from and the runs derived from it) ask the "
-        "server: GET /runs/{id}/lineage; `cairn remote status <run>` shows the run itself.",
+        "server: GET /runs/{id}/lineage; `cairn status <run>` shows the run itself.",
     ]
 
 
@@ -137,7 +137,7 @@ def _render_record(row: dict) -> str:
             continue
         lines.append(_field(k, _fmt_value(v)))
     lines.append(_field("receipt", f"{(row.get('hash') or '?')[:19]}…  (audit-chain hash)"))
-    lines.append(_field("replay", f"cairn replay {run_id}"))
+    lines.append(_field("replay", f"cairn status {run_id} --replay"))
     return "\n".join(lines)
 
 
@@ -255,7 +255,7 @@ def cmd(
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="cairn lineage",
+        prog="cairn admin lineage",
         description="Show the content-addressed provenance record(s) for a subject.",
     )
     parser.add_argument("subject", nargs="?", default=None)

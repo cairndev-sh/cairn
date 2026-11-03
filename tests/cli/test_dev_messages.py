@@ -1,5 +1,5 @@
-"""``cairn dev`` and ``cairn demo`` point at what the public core has (0.1.2
-verification, bug 12): ``cairn dev`` said "the engine serves the built console at
+"""``cairn setup --foreground`` and ``cairn admin demo`` point at what the public core has (0.1.2
+verification, bug 12): the dev command said "the engine serves the built console at
 /console" (a 404 in the public core), and the seed told people to "open the console".
 """
 from __future__ import annotations
@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typer.testing import CliRunner
 
 from cairn.cli.commands import demo, dev
+from cairn.cli.main import app
 
 
 class _Exited:
@@ -32,7 +33,7 @@ class _Exited:
 def test_dev_without_a_console_does_not_promise_one(monkeypatch, tmp_path):
     monkeypatch.setattr(dev, "_web_dir", lambda: None)
     monkeypatch.setattr(dev.subprocess, "Popen", _Exited)
-    res = CliRunner().invoke(dev.app, ["--db", str(tmp_path / "dev.db")])
+    res = CliRunner().invoke(app, ["setup", "--foreground", "--db", str(tmp_path / "dev.db")])
     assert res.exit_code == 0, res.output
     assert "/console" not in res.output
     assert "not part of the public core" in res.output
@@ -45,7 +46,7 @@ def test_the_seed_says_how_to_see_the_demo_workspace(monkeypatch):
                                completed_runs=[], pending_gates=[], providers=[],
                                skipped=[])
     monkeypatch.setattr(demo, "seed_demo_workspace", _seed)
-    res = CliRunner().invoke(demo.app, [])
+    res = CliRunner().invoke(app, ["admin", "demo"])
     assert res.exit_code == 0, res.output
     out = " ".join(res.output.split())
     assert "Open the console" not in out
