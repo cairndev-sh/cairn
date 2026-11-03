@@ -164,6 +164,11 @@ def _aggregate_cost(payloads: list[dict]) -> dict[str, float]:
     }
 
 
+def _template_cost_cap(compiled: Any) -> Optional[float]:
+    """A compiled template's ``budget.max_cost_usd``, or ``None``."""
+    return getattr(getattr(getattr(compiled, "spec", None), "budget", None), "max_cost_usd", None)
+
+
 def _budget_exceeded_output(reason: str) -> dict[str, Any]:
     """The output of a run a cost cap stopped, which `cairn gate` and scoring read."""
     return {"type": "budget_exceeded", "budget_exceeded": True, "reason": reason, "output": ""}
@@ -171,13 +176,18 @@ def _budget_exceeded_output(reason: str) -> dict[str, Any]:
 
 async def _audit_over_budget(run: Any, template_ref: str, reason: str, cost: dict[str, Any]) -> None:
     """``leg.budget_exceeded`` · ``run.budget_exceeded`` (#395): a cost cap stopped this run."""
+    spent_usd = float(cost.get("total_usd") or 0.0)
+    if run.bundle_pipeline_id:
+        from cairn.core.dispatch.leg_hooks import audit_pipeline_event  # noqa: PLC0415 — same shape as every leg row
+
+        await audit_pipeline_event(
+            "leg.budget_exceeded", pipeline_id=run.bundle_pipeline_id, step_id=run.step_id or "",
+            outcome="deny", run_id=run.id, ref=template_ref, spent_usd=spent_usd, reason=reason)
+        return
     from cairn.core.obs.audit import audit_emit  # noqa: PLC0415 — keep obs off the import path
 
-    pipeline_id = run.bundle_pipeline_id or None
-    await audit_emit(
-        "leg.budget_exceeded" if pipeline_id else "run.budget_exceeded", outcome="deny",
-        target=template_ref, run_id=run.id, pipeline_id=pipeline_id, step_id=run.step_id or None,
-        spent_usd=float(cost.get("total_usd") or 0.0), reason=reason[:300])
+    await audit_emit("run.budget_exceeded", outcome="deny", target=template_ref, run_id=run.id,
+                     spent_usd=spent_usd, reason=reason[:300])
 
 
 def _llm_cost_from_node_events(events: list) -> float:
@@ -1171,8 +1181,7 @@ class RunDispatcher:
                     # spend on the template-run path. The skill path (Runner.run)
                     # already does this; without it record_llm no-ops here (no
                     # ambient RequestCtx) → cost.total_usd was ALWAYS $0.00 for a
-                    # real-LLM template run (e.g. incident-rca). Mirrors the skill
-                    # path's graceful BudgetExceeded handling.
+                    # real-LLM template run (e.g. incident-rca).
                     # ADR-0070/0071 (#748/#788) — thread the workflow config layer:
                     # the marked default PRESET over the saved per-workflow config
                     # (run > preset > workflow > env). Resolved for EVERY run incl.
@@ -1209,11 +1218,7 @@ class RunDispatcher:
                                 co.setdefault(_op, {}).setdefault("model", eval_model)
                         run_inputs = {**inputs, "config_overrides": co}
                     from cairn.core.operator.runtime import launch_scope  # noqa: PLC0415 — ADR-0120 D7 (#2455)
-                    run_cap = getattr(
-                        getattr(getattr(compiled, "spec", None), "budget", None),
-                        "max_cost_usd",
-                        None,
-                    )
+                    run_cap = _template_cost_cap(compiled)
                     over_budget = ""
                     with obs.cost_scope(
                         f"run-{template_ref}", max_cost_usd=run_cap
@@ -1318,7 +1323,7 @@ class RunDispatcher:
                     # this method's docstring); resume_run owns that terminal.
                     await self._close_reservations(inv.id, settled=True,
                                                    actual_usd=float((cost or {}).get("total_usd") or 0.0))
-                    # scoring (#474/#480, ADR-0060 D1) — terminal "done" only
+                    # scoring (#474/#480, ADR-0060 D1) — not a pause
                     await self._terminal_hooks(inv.id, status=update_fields["status"])
         except asyncio.CancelledError:
             if self._preserve_on_shutdown(inv.id):
@@ -1401,7 +1406,7 @@ class RunDispatcher:
             raise NotResumableError(
                 f"cannot resume in_process run {run_id}: no template_name on record"
             )
-        graph = self._recompile_graph(template_name)
+        graph, run_cap = self._recompile_for_resume(template_name)
         runtime = InProcessRuntime()
         # #365 — a gate whose checkpoint died with a previous process (or the
         # volatile memory saver) cannot actually resume: invoking would restart
@@ -1433,11 +1438,11 @@ class RunDispatcher:
         from cairn.core.operator.runtime import launch_scope  # noqa: PLC0415 — ADR-0120 D7 (#2455)
         from cairn.core import obs  # noqa: PLC0415 — matches the run path
 
-        # #395 — a resumed graph spends too, so it runs in a cost scope that starts from
-        # what the run spent before its pause. The template's cap is on its model
-        # clients (BudgetCallback), and the scope holds the deployment-wide one.
+        # #395 — a resumed graph spends too, so it runs in the same capped scope as the
+        # run path, starting from what the run spent before its pause.
         over_budget = ""
-        with obs.cost_scope(f"run-{template_name}") as cost_ctx, workspace_scope(run.workspace_id), \
+        with obs.cost_scope(f"run-{template_name}", max_cost_usd=run_cap) as cost_ctx, \
+                workspace_scope(run.workspace_id), \
                 node_sink_scope(self._node_sink(run_id)), launch_scope(self.launch_handle()):
             cost_ctx.cost_usd = float((run.cost or {}).get("llm_usd") or 0.0)
             try:
@@ -1543,9 +1548,9 @@ class RunDispatcher:
                            run_id, exc_info=True)
 
     @staticmethod
-    def _recompile_graph(template_name: str):
-        """Recompile a template by name → its plain compiled graph (for
-        in_process resume; the durable checkpointer holds the paused state)."""
+    def _recompile_for_resume(template_name: str) -> tuple[Any, Optional[float]]:
+        """Recompile a template by name → its plain compiled graph and its cost cap
+        (for in_process resume; the durable checkpointer holds the paused state)."""
         from cairn.core.engine.compiler import compile_template  # noqa: PLC0415
         from cairn.core.engine.skill_engine import resolve_template_path  # noqa: PLC0415
 
@@ -1554,7 +1559,7 @@ class RunDispatcher:
         graph = getattr(compiled.runnable, "_compiled_graph", None)
         if graph is None:
             raise ValueError(f"template {template_name!r} has no compiled graph")
-        return graph
+        return graph, _template_cost_cap(compiled)
 
     def launch_handle(self):
         """The ``OperationContext.launch`` closure (ADR-0120 D7, #2455): how an operator

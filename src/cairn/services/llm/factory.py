@@ -16,9 +16,9 @@ NOT do, now centralized here:
    ceiling. This is what turns ``budget.max_cost_usd`` from a declared-but-dead field
    into an enforced one. Enforcement granularity is per-LLM-call: the call that
    crosses the cap has been paid for, so it raises ``BudgetExceeded`` as it ends and
-   no later call starts. Calls already in flight alongside it still finish, so a
-   parallel ``map`` can pass the cap by more than one call (the wall-clock budget
-   remains the hard mid-call abort).
+   no later call starts. Calls in flight alongside it can pass the cap further, and
+   one cancelled as the run stops can be billed without being counted (the wall-clock
+   budget remains the hard mid-call abort).
 
 The cost tally only happens inside an ``obs.cost_scope`` (opened by the runner);
 outside one, ``record_llm`` is a no-op, so unit tests that build a model without a
@@ -97,7 +97,7 @@ class BudgetCallback(BaseCallbackHandler):
             if self.cap and ctx is not None and ctx.enforce_cap and ctx.cost_usd > self.cap:
                 raise obs.BudgetExceeded(
                     f"investigation over budget.max_cost_usd: "
-                    f"${ctx.cost_usd:.4f} > ${self.cap:.4f}"
+                    f"${ctx.cost_usd:.6f} > ${self.cap:.6f}"
                 )
         except obs.BudgetExceeded:
             raise

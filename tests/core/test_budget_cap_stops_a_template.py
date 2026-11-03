@@ -30,6 +30,7 @@ from cairn.core.obs import audit as audit_module  # noqa: E402
 from cairn.core.obs import cost as obs_cost  # noqa: E402
 from cairn.core.operator import Operation, OperationContext  # noqa: E402
 from cairn.core.operator import default_registry as op_registry  # noqa: E402
+from cairn.core.operator.registry import OperatorEntry  # noqa: E402
 from cairn.core.runtime.inprocess import InProcessRuntime  # noqa: E402
 from cairn.core.storage import InMemoryRunStore  # noqa: E402
 from cairn.core.storage.protocols import Run  # noqa: E402
@@ -258,6 +259,7 @@ async def test_a_capped_template_fails_its_run_and_keeps_what_it_spent(
     (row,) = trail.audit
     assert row["action"] == "leg.budget_exceeded" and row["outcome"] == "deny"
     assert row["run_id"] == "r1" and row["pipeline_id"] == "pl_1" and row["step_id"] == "calls"
+    assert row["target"] == "pl_1/calls" and row["ref"] == "demo/capped"
     assert row["spent_usd"] == pytest.approx(one_call_usd * 3)
     terminal = [e for e in await harness.store.get_events("r1") if e.type in ("done", "failed")]
     assert [e.type for e in terminal] == ["failed"] and "over budget" in terminal[0].data["error"]
@@ -332,13 +334,13 @@ async def _paused_run(harness, monkeypatch, *, spend_tokens: int = 1000) -> tupl
     return run, spent
 
 
-def _resume_with(monkeypatch, resume) -> None:
+def _resume_with(monkeypatch, resume, cap: float | None = None) -> None:
     async def _pending(self, graph, run_id):
         return True
 
     monkeypatch.setattr(InProcessRuntime, "has_pending_interrupt", _pending)
     monkeypatch.setattr(InProcessRuntime, "resume", resume)
-    monkeypatch.setattr(RunDispatcher, "_recompile_graph", staticmethod(lambda name: object()))
+    monkeypatch.setattr(RunDispatcher, "_recompile_for_resume", staticmethod(lambda name: (object(), cap)))
 
 
 async def test_a_resumed_run_meters_from_what_it_spent_before_its_pause(harness, trail, monkeypatch):
@@ -381,6 +383,63 @@ async def test_a_template_cap_counts_the_spend_before_the_pause(harness, stub, o
     assert (await harness.store.get_events("r1"))[-1].type == "failed"
 
 
+async def test_a_template_cap_holds_after_a_pause_for_spend_outside_a_model_client(harness, trail, monkeypatch):
+    """An operator's direct ``record_llm`` has no BudgetCallback to carry the cap."""
+    _, spent = await _paused_run(harness, monkeypatch)
+
+    async def _resume(self, graph, decision, *, run_id):
+        obs.record_llm(MODEL, 1000, 1000, 0.0)
+        return {"output": "should not get here"}
+
+    _resume_with(monkeypatch, _resume, cap=spent * 1.5)
+    await harness.resume_run("r1", {"approved": True})
+
+    run = await harness.store.get("r1")
+    assert run.status == "failed" and "over budget" in run.error
+    assert run.result_payloads[0]["output"]["budget_exceeded"] is True
+
+
+async def test_spend_swallowed_after_a_pause_still_fails_the_run(harness, trail, monkeypatch):
+    _, spent = await _paused_run(harness, monkeypatch)
+
+    async def _swallowing(self, graph, decision, *, run_id):
+        try:
+            obs.record_llm(MODEL, 1000, 1000, 0.0)
+        except obs.BudgetExceeded:
+            pass
+        return {"output": "looks fine"}
+
+    _resume_with(monkeypatch, _swallowing, cap=spent * 1.5)
+    await harness.resume_run("r1", {"approved": True})
+
+    run = await harness.store.get("r1")
+    assert run.status == "failed" and "over budget" in run.error
+    assert [r["action"] for r in trail.audit] == ["run.budget_exceeded"]
+
+
+async def test_scoring_sees_a_capped_run_as_failed(harness, trail, monkeypatch):
+    _stub_compile(monkeypatch)
+    statuses = []
+
+    async def _hooks(self, run_id, *, status="done"):
+        statuses.append(status)
+
+    async def _over(compiled, inputs):
+        raise obs.BudgetExceeded("over the cap")
+
+    monkeypatch.setattr(RunDispatcher, "_terminal_hooks", _hooks)
+    monkeypatch.setattr(runner_module, "run_within_budget", _over)
+    await _run(harness)
+    assert statuses == ["failed"]
+
+
+async def test_the_recompiled_template_brings_its_cap(tmp_path, monkeypatch):
+    path = _template(tmp_path, "    type: python_node\n    function: _over_the_cap\n", "  nodes: {}\n", budget_usd=0.25)
+    monkeypatch.setattr(skill_engine, "resolve_template_path", lambda ref: path)
+    _, cap = RunDispatcher._recompile_for_resume("demo/capped")
+    assert cap == 0.25
+
+
 async def test_a_second_pause_keeps_the_running_total(harness, trail, monkeypatch):
     _, spent = await _paused_run(harness, monkeypatch)
 
@@ -395,3 +454,89 @@ async def test_a_second_pause_keeps_the_running_total(harness, trail, monkeypatc
     assert run.status == "awaiting_approval"
     assert run.cost["llm_usd"] == pytest.approx(spent * 2)
     assert trail.reservations == []
+
+
+# ── the same, through a real gate and a real resume ──────────────────
+
+
+class _Empty(BaseModel):
+    pass
+
+
+class _Done(BaseModel):
+    did_run: bool = True
+
+
+class _GatedOp(Operation[_Empty, _Done]):
+    name = "test/gated"
+    version = "0.1.0"
+    input_schema = _Empty
+    output_schema = _Done
+
+    async def run(self, inp, ctx: OperationContext) -> _Done:
+        return _Done()
+
+
+@python_function("_spend_directly")
+async def _spend_directly(state, **_config):
+    """What ``llm_complete`` does after its model call: no BudgetCallback carries a cap."""
+    obs.record_llm(MODEL, 1_000_000, 1_000_000, 0.0)
+    return {"findings": {"spent": True}}
+
+
+@pytest.fixture
+def gated(tmp_path):
+    """Build a template with a person's gate between ``before`` and ``after``."""
+    snapshot = op_registry.all()
+    op_registry.register(_GatedOp)
+    op_registry.attach_metadata(OperatorEntry(name="test/gated", requires_approval=True))
+    (tmp_path / "operations").mkdir()
+    (tmp_path / "operations" / "gate.yaml").write_text(
+        "operator: test/gated\ninput: {}\noutput:\n  did_run: $state.findings.gate\n", encoding="utf-8")
+    templates = tmp_path / "templates"
+    templates.mkdir()
+
+    def child(ref: str) -> str:
+        if ref == "SPEND":
+            return "      - type: python_node\n        function: _spend_directly\n"
+        return f"      - type: action\n        ref: {ref}\n"
+
+    def build(cap: float, before: list[str], after: list[str]) -> Path:
+        children = "".join(map(child, before)) + "      - type: operation\n        ref: gate\n" + "".join(map(child, after))
+        nodes = "".join(f"    {r}:\n      type: prompt\n      model: {MODEL}\n      capabilities: []\n"
+                        for r in before + after if r != "SPEND")
+        return _template(templates, f"    type: sequence\n    children:\n{children}",
+                         f"  nodes:\n{nodes}" if nodes else "  nodes: {}\n", budget_usd=cap)
+
+    yield build
+    op_registry.clear()
+    for cls in snapshot.values():
+        op_registry.register(cls)
+
+
+async def test_a_real_resume_stops_on_the_call_that_crosses_the_cap(
+        harness, stub, one_call_usd, trail, gated, monkeypatch):
+    _use_template(monkeypatch, gated(round(one_call_usd * 2.5, 6), ["c0"], ["c1", "c2", "c3"]))
+    run = await _run(harness, inputs={"question": "q"}, bundle_pipeline_id="pl_1", step_id="s")
+    assert run.status == "awaiting_approval" and stub.calls[CHAT] == 1
+
+    await harness.resume_run("r1", {"approved": True, "approver": "a"})
+
+    run = await harness.store.get("r1")
+    assert stub.calls[CHAT] == 3
+    assert run.status == "failed" and "over budget" in run.error
+    assert run.cost["llm_usd"] == pytest.approx(one_call_usd * 3, abs=2e-6)
+    assert trail.reservations == [{"settled": True, "actual_usd": pytest.approx(one_call_usd * 3, abs=2e-6)}]
+    assert [r["action"] for r in trail.audit if "budget" in r["action"]] == ["leg.budget_exceeded"]
+
+
+async def test_a_real_resume_holds_the_template_cap_for_direct_spend(harness, trail, gated, monkeypatch):
+    _use_template(monkeypatch, gated(0.01, [], ["SPEND"]))
+    run = await _run(harness)
+    assert run.status == "awaiting_approval"
+
+    await harness.resume_run("r1", {"approved": True, "approver": "a"})
+
+    run = await harness.store.get("r1")
+    assert run.status == "failed" and "over budget" in run.error
+    assert [r["action"] for r in trail.audit if "budget" in r["action"]] == ["run.budget_exceeded"]
