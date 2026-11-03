@@ -28,6 +28,7 @@ The old command names are gone, and a cost cap now stops a run.
 
 ### Fixed
 - The example pack's `tiny-finetune` pipeline now gates `loss-ok` on the loss the trainer measures over the rows it held out. It used to gate on a figure that mostly re-scored training rows. Its training data now holds 48 distinct rows instead of 10 repeated ones, so no held-out row is also a training row, and the separate `eval` leg is gone (#252).
+- `cairn setup --seed` from a checkout no longer fails its checks: with no profile set, the example pack runs under its own `profiles/hello.toml`, which names the MCP server it requires. It also writes that profile's audit log to `./audit.jsonl`.
 - The pages written against an older tree describe this repository: the architecture overview's system description, `examples/README.md` (which said `max_cost_usd` is not enforced; it is) and the engine's test lists. The fine-tune guide says what the `finetune-ssh` profile's audit log records. (#255)
 - `examples/ci` gates on a check that ships. It named a pack that isn't in the public install, so every run exited 2; it now uses `examples/ci/templates/dataset-check.md`, which needs only `pip install cairndev`. (#255)
 - Following a run no longer retries forever with no message when the engine stops answering. It backs off for about two minutes, then says the run may still be live, prints the command to re-attach and exits 1. A 5xx on the status check counts as temporary, and a quiet run is never given up on while the status check answers. (#46)

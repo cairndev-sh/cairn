@@ -1,9 +1,11 @@
 ---
 title: What is cairn
-description: cairn is a self-hosted control plane for the work behind AI models. It decides when each step may run, holds spend to a budget, pauses for data checks and people, and records what happened.
+description: Cairn runs your AI and ML pipelines behind budgets, policy, approvals and an audit trail.
 ---
 
-cairn is a self-hosted control plane for the work behind AI models: preparing
+Cairn runs your AI and ML pipelines behind budgets, policy, approvals and an audit trail.
+
+It's a self-hosted control plane for the work behind AI models: preparing
 datasets, fine-tuning, evaluating and running jobs against models. It decides
 when each step may run, holds the spend to a budget, pauses for a data check
 or a person, and keeps a record of what happened. Your engines and providers
