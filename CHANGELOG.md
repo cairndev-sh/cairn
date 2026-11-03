@@ -4,12 +4,6 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
-### Added
-- The example pack ships a `sample` preset, so the Quickstart runs on its own rows with `--preset sample`, from an installed wheel, without downloading a file. `cairn-pack-hello` needs the release that carries it. (#317)
-- The example pack's `tiny-finetune` takes an `output_dir`, so its promoted adapter can live somewhere the system won't delete. Without it the adapter stays in the engine's temp workdir, and the README says so. (#253)
-- A page on the holdout door and eval cutoff, and `examples/holdout`, which you can run to see it refuse. The `noop` stage takes `register_role`, so a file can be registered as a test set without a pack of your own. (#333)
-- A GitHub Action for gating CI on a check: `uses: cairndev-sh/cairn/actions/gate@<ref>` installs a pinned `cairndev`, runs `cairn run --check` and fails the job with the check's own exit code, 2 included. Inputs `check`, `set`, `fail-on`, `working-directory`, `cairndev-version`, `python-version`; outputs `verdict`, `exit-code`, `report`. (#350)
-
 ## [0.5.0] - 2026-11-03
 
 The old command names are gone, and a cost cap now stops a run.
@@ -26,6 +20,10 @@ The old command names are gone, and a cost cap now stops a run.
 - The old command names, after their one minor version of warning (ADR-0165 D12). (#415)
 
 ### Added
+- The example pack ships a `sample` preset, so the Quickstart runs on its own rows with `--preset sample`, from an installed wheel, without downloading a file. `cairn-pack-hello` needs the release that carries it. (#317)
+- The example pack's `tiny-finetune` takes an `output_dir`, so its promoted adapter can live somewhere the system won't delete. Without it the adapter stays in the engine's temp workdir, and the README says so. (#253)
+- A page on the holdout door and eval cutoff, and `examples/holdout`, which you can run to see it refuse. The `noop` stage takes `register_role`, so a file can be registered as a test set without a pack of your own. (#333)
+- A GitHub Action for gating CI on a check: `uses: cairndev-sh/cairn/actions/gate@<ref>` installs a pinned `cairndev`, runs `cairn run --check` and fails the job with the check's own exit code, 2 included. Inputs `check`, `set`, `fail-on`, `working-directory`, `cairndev-version`, `python-version`; outputs `verdict`, `exit-code`, `report`. (#350)
 - A `pipeline.finished` run-hook event. An installed `cairn.run_hooks` provider learns when a pipeline reaches `done`, `failed` or `cancelled`, including a pipeline that ends on a gate, a cancel or a deferred failure. The payload is `pipeline_id`, `pipeline_ref`, `status` and `workspace_id`. The in-process pipeline bridge fires it once per pipeline per process, after the record is stored with its final status and, on `done`, its resolved `outputs`. It is notify-only: a failing provider is logged and never affects the pipeline. (#306)
 - **A registered directory artifact gets a durable copy.** When an artifact object store is configured, registering a directory (a LoRA adapter, for example) copies its tree to `…/artifacts/<content_hash>/<name>/` and records that root as `durable_uri`, the way a file was already copied. The artifact then reads `durable` in `cairn doctor` and the registry health check after the producing machine is gone. The `CAIRN_ARTIFACT_RELAY_MAX_BYTES` cap counts the whole tree. A tree that holds a symlink is not copied. File relay is unchanged (#286).
 - `benchmark/budget_overshoot.py` publishes how far past a cost cap a template's spend gets, on the in-process and DBOS runtimes. (#325)
