@@ -5,7 +5,7 @@
   "provenance": {
     "cairndev_version": "0.4.0",
     "uv_lock_sha256": "2f3a08bed7ab6e047e088d2185067267f6024637bbe0af1de3462c8729426faa",
-    "git_sha": "aa27363546895ac0fe1406b7e2081e9a31170ea1",
+    "git_sha": "4cc91cf51fd0506af356a04d0167b3830ad3b2b6",
     "code_clean": true,
     "machine": {
       "os": "Linux",
@@ -13,8 +13,8 @@
       "cpus": 4,
       "python": "3.13.13"
     },
-    "measured_at": "2026-11-02",
-    "ci_run": "https://github.com/cairndev-sh/cairn/actions/runs/41511935945"
+    "measured_at": "2026-11-03",
+    "ci_run": "https://github.com/cairndev-sh/cairn/actions/runs/41618091098"
   },
   "inputs": {
     "pipeline": "hello-cairn/profile-and-publish",
@@ -34,7 +34,7 @@
     },
     {
       "what": "The same, without `--json`, on a log with no lineage records",
-      "result": "exit 1, because it has no lineage records, though the head matches"
+      "result": "matches: exit 0"
     },
     {
       "what": "Changed who gave an approval, row 11",
@@ -81,12 +81,12 @@
       "result": "reported as a mismatch: exit 2. The saved head has to be the latest one"
     },
     {
-      "what": "Limit: cut the last 3 rows, with `--expect-head` given an empty or blank value",
-      "result": "NOT detected: exit 0. The check compares nothing"
+      "what": "Cut the last 3 rows, with `--expect-head` given an empty or blank value",
+      "result": "refused, nothing compared: exit 2"
     },
     {
-      "what": "Limit: cut the last 3 rows and tried values in the new last row until its hash began with the first 4 characters of the saved head",
-      "result": "NOT detected with that prefix: exit 0. With the full saved head: exit 2"
+      "what": "Cut the last 3 rows and tried values in the new last row until its hash began with the first 4 characters of the saved head",
+      "result": "a prefix that short is refused: exit 2. With the full saved head: exit 2"
     }
   ]
 }

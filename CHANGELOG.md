@@ -5,11 +5,31 @@ All notable changes to this project are documented here. The format follows [Kee
 ## [Unreleased]
 ### Added
 - The example pack's `over-budget` pipeline shows a budget refusing a run before its engine starts, with no key and no spend, and `cairn run` now prints why a leg failed (#368).
+- The failing and warning rows of `cairn setup --check` now end with `— fix:` and the command or setting that resolves it, on the same line, so the failures `cairn setup` prints carry it too. Rows that read `unset (optional)` are unchanged.
 
 ### Fixed
 - Following a run no longer retries forever with no message when the engine stops answering. It backs off for about two minutes, then says the run may still be live, prints the command to re-attach and exits 1. A 5xx on the status check counts as temporary, and a quiet run is never given up on while the status check answers. (#46)
+- `cairn deploy doctor --values` no longer fails a Helm values file with `ingress.enabled: false` and no host for a missing `CADDY_DOMAIN`; the chart renders that file, and an enabled ingress with no host still fails (#76).
 - A malformed `eval_cutoff` (`"last tuesday"`, `"06/01/2026"`, `5`) is now refused at launch and at run start, where it used to switch the holdout check off and admit overlapping data. Use an ISO-8601 date or timestamp, or leave it out. One holdout row with an unreadable `dated_at` no longer voids the check either: the row stays in the comparison, with a warning that also reaches the run's record.
 - A dry run now reads a top-level `eval_cutoff` the way the holdout door does. It ignored it, so it could report an overlap the door would admit, or call a malformed cutoff ready where the door refuses it.
+
+## [0.4.1] - 2026-11-03
+
+A patch release: fixes to the CLI only, and one of them stops a secret being printed.
+
+### Upgrade notes
+- **If you shared `cairn setup --check` or `cairn doctor` output from 0.3.2 through 0.4.0 with `SLACK_WEBHOOK_URL` set, rotate the webhook.** Its token was printed in full.
+- **`cairn gate` and `cairn run --check` now exit 2 when a check doesn't finish:** a failed step, a pause at an approval, or no usable verdict. They used to exit 0. A job gating on them can now fail where it passed before, and that failure is real.
+- **`--expect-head` on `cairn admin lineage` needs the full hash or at least 12 characters.** Anything shorter, or an empty value, used to pass on a log with rows cut from its end, and now exits 2.
+- No storage migration, no route changed. The example pack `cairn-pack-hello` is 0.2.8.
+
+### Fixed
+- `cairn setup --check` and `cairn doctor` no longer print the path of a secret URL. They show `https://hooks.slack.com/***`; a database URL keeps its name. (#402)
+- `cairn gate` and `cairn run --check` no longer pass a check that didn't finish. A step that failed (on a missing file, say), a pause at an approval, no verdict, or a verdict word that isn't a pass, a warning or a failure used to exit 0 with PASS; all now exit 2 with the reason. So a check that gives no verdict fails CI where it used to pass: it has to write `$state.verdict` or `$state.outcome`. A FAIL verdict still exits 1, even if a step also failed, and an `outcome` list with no verdict item now gates on how its items are graded. A selector of single steps still recovers from a failed step; a selector with a compound child doesn't count as recovering, so some real recoveries exit 2. A failure inside a `subgraph_node` still isn't detected. (#386)
+- `--expect-head` refuses a value that can't mean anything, and a match exits 0 in both the plain and `--json` forms when the log has no lineage records. (#380)
+- `cairn status --replay` reads a run from the local engine. (#382)
+- A named endpoint is never replaced by local data in `cairn status --replay`. (#388)
+- `cairn admin lineage` says the chain is broken, not that the log was altered: a crash mid-write and racing writers look the same. (#385)
 - `cairn setup --check` and `cairn doctor` no longer print the path of a secret URL. A Slack webhook's token is in its path, and 0.3.2 through 0.4.0 printed it in full: `set: https://hooks.slack.com/services/...`. They now show `https://hooks.slack.com/***`. If you shared that output, for example in a bug report, rotate the webhook.
 
 ## [0.4.0] - 2026-11-02
@@ -40,7 +60,6 @@ The CLI is five commands: `cairn setup`, `run`, `status`, `decide` and `pack` (A
 - The pages written against an older tree describe this repository: the architecture overview's system description, `examples/README.md` (which said `max_cost_usd` is not enforced; it is) and the engine's test lists. The fine-tune guide says what the `finetune-ssh` profile's audit log records. (#255)
 
 ### Fixed
-- `cairn gate` and `cairn run --check` no longer pass a check that didn't finish. A step that failed (on a missing file, say), a pause at an approval, no verdict, or a verdict word that isn't a pass, a warning or a failure used to exit 0 with PASS; all now exit 2 with the reason. So a check that gives no verdict fails CI where it used to pass: it has to write `$state.verdict` or `$state.outcome`. A FAIL verdict still exits 1, even if a step also failed, and an `outcome` list with no verdict item now gates on how its items are graded. A selector of single steps still recovers from a failed step; a selector with a compound child doesn't count as recovering, so some real recoveries exit 2. A failure inside a `subgraph_node` still isn't detected. (#386)
 - `cairn dev` and the temporary engine `cairn run` starts now listen on `127.0.0.1`, as `cairn setup` does. They run with the fixed `dev`/`dev` login and used to listen on every interface. To reach one from outside this machine, a container or a VM, set `CAIRN_TRIGGER_HOST`. (#359)
 - `cairn pipeline run` no longer polls forever at a human gate it has no way to answer: it says so and exits 2, with the record kept. (#260)
 - `examples/ci` gates on a check that ships. It named a pack that isn't in the public install, so every run exited 2; it now uses `examples/ci/templates/dataset-check.md`, which needs only `pip install cairndev`. (#255)
