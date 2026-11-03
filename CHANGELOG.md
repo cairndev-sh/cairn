@@ -3,11 +3,24 @@
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
-### Added
-- The example pack's `over-budget` pipeline shows a budget refusing a run before its engine starts, with no key and no spend, and `cairn run` now prints why a leg failed (#368).
+
+## [0.4.1] - 2026-11-03
+
+A patch release: fixes to the CLI only, and one of them stops a secret being printed.
+
+### Upgrade notes
+- **If you shared `cairn setup --check` or `cairn doctor` output from 0.3.2 through 0.4.0 with `SLACK_WEBHOOK_URL` set, rotate the webhook.** Its token was printed in full.
+- **`cairn gate` and `cairn run --check` now exit 2 when a check doesn't finish:** a failed step, a pause at an approval, or no usable verdict. They used to exit 0. A job gating on them can now fail where it passed before, and that failure is real.
+- **`--expect-head` on `cairn admin lineage` needs the full hash or at least 12 characters.** Anything shorter, or an empty value, used to pass on a log with rows cut from its end, and now exits 2.
+- No storage migration, no route changed. The example pack `cairn-pack-hello` is 0.2.8.
 
 ### Fixed
-- `cairn setup --check` and `cairn doctor` no longer print the path of a secret URL. A Slack webhook's token is in its path, and 0.3.2 through 0.4.0 printed it in full: `set: https://hooks.slack.com/services/...`. They now show `https://hooks.slack.com/***`. If you shared that output, for example in a bug report, rotate the webhook.
+- `cairn setup --check` and `cairn doctor` no longer print the path of a secret URL. They show `https://hooks.slack.com/***`; a database URL keeps its name. (#402)
+- `cairn gate` and `cairn run --check` don't pass a check that didn't finish. (#394)
+- `--expect-head` refuses a value that can't mean anything, and a match exits 0 in both the plain and `--json` forms when the log has no lineage records. (#380)
+- `cairn status --replay` reads a run from the local engine. (#382)
+- A named endpoint is never replaced by local data in `cairn status --replay`. (#388)
+- `cairn admin lineage` says the chain is broken, not that the log was altered: a crash mid-write and racing writers look the same. (#385)
 
 ## [0.4.0] - 2026-11-02
 
