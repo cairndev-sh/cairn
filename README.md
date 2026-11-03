@@ -139,7 +139,7 @@ measured on: see [`benchmark/`](./benchmark/README.md).
 | Cut the last 3 rows, with `--expect-head` given an empty or blank value | refused, nothing compared: exit 2 |
 | Cut the last 3 rows and tried values in the new last row until its hash began with the first 4 characters of the saved head | a prefix that short is refused: exit 2. With the full saved head: exit 2 |
 
-cairndev 0.4.0, `uv.lock` `2f3a08bed7ab`, Linux x86_64 with 4 CPUs and Python 3.13.13, 2026-11-03.
+cairndev 0.5.0, `uv.lock` `b71bfd534f0d`, Linux x86_64 with 4 CPUs and Python 3.13.13, 2026-11-03.
 
 **How far past a cost cap a template's spend gets** ([reproduce](./benchmark/budget_overshoot.py))
 
@@ -157,7 +157,7 @@ Calls sent at once can pass a cap by nearly all of them: all 8 reached the model
 
 Temporal isn't measured, because this script needs a Temporal server. From the code, the worker only meters, so the run should fail when it ends, with its calls already made.
 
-cairndev 0.4.0, `uv.lock` `2f3a08bed7ab`, Linux x86_64 with 4 CPUs and Python 3.13.13, 2026-11-03.
+cairndev 0.5.0, `uv.lock` `b71bfd534f0d`, Linux x86_64 with 4 CPUs and Python 3.13.13, 2026-11-03.
 
 **What happens when the server is killed** ([reproduce](./benchmark/crash_matrix.py))
 
@@ -174,21 +174,21 @@ cairndev 0.4.0, `uv.lock` `2f3a08bed7ab`, Linux x86_64 with 4 CPUs and Python 3.
 
 Each entry is what that cell's test required and saw in this run. Of these cells, only the template leg on DBOS resumes; a flow leg killed on the builtin engine fails, and so does its pipeline. What each cell checks, where this holds, and what no cell tests: [What happens when the server is killed](./benchmark/README.md#what-happens-when-the-server-is-killed).
 
-cairndev 0.4.0, `uv.lock` `2f3a08bed7ab`, Linux x86_64 with 4 CPUs and Python 3.13.13, 2026-11-02.
+cairndev 0.5.0, `uv.lock` `b71bfd534f0d`, Linux x86_64 with 4 CPUs and Python 3.13.13, 2026-11-03.
 
 **The quickstart's path on a local engine** ([reproduce](./benchmark/quickstart_path.py))
 
 | Measured | Result |
 |---|---|
-| Engine start to answering | 2.3 s |
-| Launch to a pipeline paused at its person gate | 1.6 s (median of 5, after one warm-up run) |
-| Both approvals to a finished pipeline, nobody waiting | 0.9 s (median of 5, after one warm-up run) |
+| Engine start to answering | 3.3 s |
+| Launch to a pipeline paused at its person gate | 1.9 s (median of 5, after one warm-up run) |
+| Both approvals to a finished pipeline, nobody waiting | 1.0 s (median of 5, after one warm-up run) |
 | Nothing published before the person gate | held on all 6 runs |
 | A false data gate stops the pipeline before any later step starts, and is logged | held |
 | Each decision a person made is in the audit log with the signed-in user | held for all 12 decisions |
 | Audit chain verifies at the end | held (143 rows) |
 
-cairndev 0.4.0, `uv.lock` `2f3a08bed7ab`, Linux x86_64 with 4 CPUs and Python 3.13.13, 2026-11-02.
+cairndev 0.5.0, `uv.lock` `b71bfd534f0d`, Linux x86_64 with 4 CPUs and Python 3.13.13, 2026-11-03.
 
 <!-- benchmark:end -->
 

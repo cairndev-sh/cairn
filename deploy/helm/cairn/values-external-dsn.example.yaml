@@ -5,7 +5,7 @@
 
 image:
   repository: ghcr.io/cairndev-sh/cairn-engine
-  tag: "0.4.0"
+  tag: "0.5.0"
 
 runtime: dbos
 checkpointer: postgres
