@@ -284,7 +284,7 @@ async def check_metaflow_service() -> Optional[CheckResult]:
     if not url:
         return None
     ok, detail = await _probe_url(url.rstrip("/") + "/ping")
-    row = f"{url} — {detail}" + ("" if ok else " (run resolution falls back to CWD-scoped local "
+    row = f"{_settings.redacted_url(url)} — {detail}" + ("" if ok else " (run resolution falls back to CWD-scoped local "
                                               "metadata: cross-box resume and detached runs break, #1358)")
     return CheckResult(
         "metaflow_service",
@@ -1204,6 +1204,14 @@ def check_provisioned_backends() -> list[CheckResult]:
     return out
 
 
+def _config_errors(e: Exception) -> str:
+    """Which field is wrong and why, never the value it holds: a pydantic error quotes its input."""
+    errors = getattr(e, "errors", None)
+    if not callable(errors):
+        return type(e).__name__
+    return "; ".join(f"{'.'.join(str(p) for p in x['loc'])}: {x['msg']}" for x in errors(include_input=False))
+
+
 def check_operator_config() -> list[CheckResult]:
     """ADR-0068 (#742): every ``[profile.config."<op>"]`` table must validate
     against that operator's declared ``config_schema``. An unknown key, wrong
@@ -1249,7 +1257,7 @@ def check_operator_config() -> list[CheckResult]:
             fields = ", ".join(sorted(schema.model_fields.keys())) or "(none)"
             out.append(CheckResult(
                 f"config:{op_name}", "fail",
-                _fix(f"[profile.config.\"{op_name}\"] invalid: {e}. Accepts: {fields}",
+                _fix(f"[profile.config.\"{op_name}\"] invalid: {_config_errors(e)}. Accepts: {fields}",
                      f"edit [profile.config.\"{op_name}\"] to use only the accepted fields, with the right types"),
                 category="profile",
             ))

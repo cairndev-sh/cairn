@@ -806,3 +806,28 @@ def test_every_cairndev_extra_doctor_names_exists():
     named = set(re.findall(r"cairndev\[([a-z0-9-]+)\]", "\n".join(_strings_in_doctor())))
     assert {"runtime-temporal", "pii", "metaflow"} <= named
     assert named <= set(extras), named - set(extras)
+
+
+def test_the_metaflow_row_never_prints_a_login_or_a_query_in_its_url(monkeypatch):
+    async def down(url):
+        return False, "ConnectError"
+
+    url = "https://bob:s3cret@mf.invalid:8080/path?token=abc123"
+    monkeypatch.setattr("cairn.core.backend_selection.selected", lambda key, default="": url)
+    monkeypatch.setattr(doctor_mod, "_probe_url", down)
+    detail = asyncio.run(doctor_mod.check_metaflow_service()).detail
+    assert "s3cret" not in detail and "abc123" not in detail and "bob" not in detail
+    assert "mf.invalid:8080" in detail
+
+
+def test_a_config_error_names_the_field_and_never_quotes_its_value():
+    from pydantic import BaseModel, ValidationError
+
+    class _Config(BaseModel):
+        retries: int
+
+    with pytest.raises(ValidationError) as caught:
+        _Config(retries="s3cret-value")
+    text = doctor_mod._config_errors(caught.value)
+    assert "retries" in text and "s3cret-value" not in text
+    assert doctor_mod._config_errors(ValueError("s3cret-value")) == "ValueError"
