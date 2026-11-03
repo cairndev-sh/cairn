@@ -34,7 +34,8 @@ class EvalLossOp(Operation[EvalLossInput, EvalLossOutput]):
         F.require_train_stack()
         out = await asyncio.to_thread(F.evaluate, adapter_path=inp.adapter_path, base_model=inp.base_model,
                                       dataset=inp.dataset, max_samples=inp.max_samples,
-                                      max_seq_len=inp.max_seq_len)
+                                      max_seq_len=inp.max_seq_len, device=inp.device,
+                                      precision=inp.precision)
         ctx.report.scalars(**out)
         return EvalLossOutput(**out)
 

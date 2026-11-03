@@ -22,6 +22,20 @@
       "minimum": 8,
       "title": "Max Seq Len",
       "type": "integer"
+    },
+    "device": {
+      "default": "auto",
+      "description": "Where to run: auto is CUDA when available, else the CPU.",
+      "enum": ["auto", "cpu", "cuda", "mps"],
+      "title": "Device",
+      "type": "string"
+    },
+    "precision": {
+      "default": "auto",
+      "description": "Weights and compute dtype: auto is bf16 or fp16 on CUDA (by GPU), fp32 elsewhere.",
+      "enum": ["auto", "fp32", "fp16", "bf16"],
+      "title": "Precision",
+      "type": "string"
     }
   },
   "required": ["adapter_path", "dataset"],

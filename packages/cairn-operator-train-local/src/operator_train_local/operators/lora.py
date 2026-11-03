@@ -61,7 +61,8 @@ class TrainLoraOp(Operation[TrainLoraInput, TrainLoraOutput]):
         out = await asyncio.to_thread(
             F.finetune, dataset=inp.dataset, base_model=inp.base_model, lora_rank=inp.lora_rank,
             steps=inp.steps, max_samples=inp.max_samples, learning_rate=inp.learning_rate,
-            max_seq_len=inp.max_seq_len, output_dir=inp.output_dir or default_output_dir(ctx), on_step=_on_step)
+            max_seq_len=inp.max_seq_len, output_dir=inp.output_dir or default_output_dir(ctx), on_step=_on_step,
+            device = inp.device, precision = inp.precision)
         ctx.report.stage("train", percent=100.0)
         ctx.report.scalars(**{k: out[k] for k in ("train_loss", "eval_loss", "tokens_seen", "steps_run")})
         return TrainLoraOutput(**out)

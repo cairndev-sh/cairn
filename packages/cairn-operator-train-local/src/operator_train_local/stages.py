@@ -51,13 +51,15 @@ def train_lora(workdir: Path, config: dict, inputs: list[str]) -> dict:
     output_dir = params.output_dir or str(Path(workdir) / "adapter")
     if mock:
         out = F.mock_result(run=Path(workdir).name, **params.model_dump())
-        return {**TrainLoraOutput(**out).model_dump(), "mock": True, "cost_usd": 0.0}
+        return {**TrainLoraOutput(**out).model_dump(),  "mock": True, "cost_usd": 0.0}
     written: list[str] = []
     out = F.finetune(dataset=params.dataset, base_model=params.base_model, lora_rank=params.lora_rank,
                      steps=params.steps, max_samples=params.max_samples, learning_rate=params.learning_rate,
-                     max_seq_len=params.max_seq_len, output_dir=output_dir, written=written)
+                     max_seq_len=params.max_seq_len, output_dir=output_dir, written=written,
+                     device=params.device, precision=params.precision)
     digest, size = F.adapter_digest(output_dir, written)
-    return {**TrainLoraOutput(**out).model_dump(), "kind": "model", "cost_usd": 0.0,
+    ran_on = {k: out[k] for k in ("device", "precision", "peak_gpu_mem_gb")}
+    return {**TrainLoraOutput(**out).model_dump(), **ran_on, "kind": "model", "cost_usd": 0.0,
             "output": str(Path(output_dir).resolve()), "content_hash": digest, "bytes": size}
 
 
