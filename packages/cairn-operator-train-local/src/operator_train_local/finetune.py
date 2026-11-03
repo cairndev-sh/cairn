@@ -68,7 +68,7 @@ def resolve_device(device: str = "auto"):
 
 def resolve_dtype(precision: str, device) -> tuple[Any, str]:
     """``(torch dtype, name)`` for ``precision`` on ``device``. ``auto`` is bf16 on a CUDA GPU
-    that supports it (Ampere and later), fp16 on one that does not (a T4), and fp32 anywhere
+    with native bf16 (compute capability 8.0+, Ampere and later), fp16 on an older one (a T4), and fp32 anywhere
     else. fp16 and bf16 are refused off CUDA."""
     import torch  # noqa: PLC0415 - optional dependency: the [train] extra
 
@@ -76,7 +76,10 @@ def resolve_dtype(precision: str, device) -> tuple[Any, str]:
         if device.type != "cuda":
             precision = "fp32"
         else:
-            precision = "bf16" if torch.cuda.is_bf16_supported() else "fp16"
+            # Native bf16 starts at Ampere (8.0); is_bf16_supported() also counts emulation
+            # and reports True on a T4 (7.5), where bf16 runs slowly.
+            major, _ = torch.cuda.get_device_capability(device)
+            precision = "bf16" if major >= 8 else "fp16"
     dtypes = {"fp32": torch.float32, "fp16": torch.float16, "bf16": torch.bfloat16}
     if precision not in dtypes:
         raise ValueError(f"unknown precision {precision!r}: use auto, fp32, fp16 or bf16")

@@ -20,7 +20,7 @@ from _train_local_tiny import ROWS, build_tiny_model  # noqa: E402
 
 def _fake_cuda(monkeypatch, *, available: bool, bf16: bool = False) -> None:
     monkeypatch.setattr(torch.cuda, "is_available", lambda: available)
-    monkeypatch.setattr(torch.cuda, "is_bf16_supported", lambda *a, **k: bf16)
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda *a, **k: (8, 0) if bf16 else (7, 5))
 
 
 def test_auto_is_the_cpu_without_cuda_and_never_mps(monkeypatch):
@@ -77,7 +77,8 @@ def test_two_steps_train_on_the_gpu_in_half_precision(tmp_path):
     model = build_tiny_model(tmp_path / "m")
     out = F.finetune(dataset=str(ROWS), base_model=model, lora_rank=2, steps=2, max_samples=8,
                      learning_rate=1e-3, max_seq_len=32, output_dir=str(tmp_path / "a"))
-    assert out["device"] == "cuda" and out["precision"] in ("fp16", "bf16")
+    expected = "bf16" if torch.cuda.get_device_capability()[0] >= 8 else "fp16"
+    assert out["device"] == "cuda" and out["precision"] == expected
     assert math.isfinite(out["train_loss"]) and out["peak_gpu_mem_gb"] > 0
     back = F.evaluate(adapter_path=out["adapter_path"], base_model=model, dataset=str(ROWS), max_samples=8,
                       max_seq_len=32)
