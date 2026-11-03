@@ -3,9 +3,9 @@
   "title": "How far past a cost cap a template's spend gets",
   "script": "benchmark/budget_overshoot.py",
   "provenance": {
-    "cairndev_version": "0.4.0",
-    "uv_lock_sha256": "2f3a08bed7ab6e047e088d2185067267f6024637bbe0af1de3462c8729426faa",
-    "git_sha": "3f8c12773749edf7dd5994ebef8b64a2d22a85db",
+    "cairndev_version": "0.5.0",
+    "uv_lock_sha256": "b71bfd534f0d8180fe71a967d6079853e7c110d27abd6c7c4ca0ce8e10333cd2",
+    "git_sha": "5f6769f4a07933a642b7f79a2db16b24a3d613e3",
     "code_clean": true,
     "machine": {
       "os": "Linux",
@@ -14,7 +14,7 @@
       "python": "3.13.13"
     },
     "measured_at": "2026-11-03",
-    "ci_run": "https://github.com/cairndev-sh/cairn/actions/runs/41629147497"
+    "ci_run": "https://github.com/cairndev-sh/cairn/actions/runs/41642348580"
   },
   "inputs": {
     "pipelines": [

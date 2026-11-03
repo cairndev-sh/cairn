@@ -4,18 +4,32 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-03
+
+The old command names are gone, and a cost cap now stops a run.
+
 ### Upgrade notes
 - **The old command names are gone, as 0.4 warned.** `cairn dev`, `doctor`, `gate`, `preflight`, `replay`, `ls`, `validate`, `export`, `test`, `lock`, `visualize`, `lineage`, `init`, `audit`, `compute`, `config`, `connect`, `demo`, `deploy`, `worker`, `flow`, `pipeline` and `remote` run nothing now. Each says its new name on stderr and exits 2, so a script still using one fails where it used to warn. `cairn --help` and the CLI reference have the new names.
 - **Approval notifications and failure messages name the new commands.** Anything that matches their text sees `cairn decide <id> approve --step <step>` and `cairn status <id> --results`.
+- **A template or task leg that spends more than $1 now stops, unless you raise `MAX_COST_USD`.** The deployment's limit is $1 by default and wins over a higher `budget.max_cost_usd`. It always existed, but LangChain swallowed it. Set `MAX_COST_USD` to the most a run may spend, or to `0` to turn it off. A template's own cap still applies.
+- **A leg over its cost cap now ends `failed` and stops its pipeline,** where it could end `done` and the next leg ran. A skill run ends `failed` too. Anything that reads a capped run's status sees the change, and a capped run fires `run.failed` rather than `run.finished`. The `budget_exceeded` output is still there.
+- **A malformed `eval_cutoff` is now refused** at launch and at run start, where it switched the holdout check off.
+- No storage migration, no route changed. The example pack `cairn-pack-hello` is 0.2.9.
 
 ### Removed
 - The old command names, after their one minor version of warning (ADR-0165 D12). (#415)
 
 ### Added
+- A `pipeline.finished` run-hook event. An installed `cairn.run_hooks` provider learns when a pipeline reaches `done`, `failed` or `cancelled`, including a pipeline that ends on a gate, a cancel or a deferred failure. The payload is `pipeline_id`, `pipeline_ref`, `status` and `workspace_id`. The in-process pipeline bridge fires it once per pipeline per process, after the record is stored with its final status and, on `done`, its resolved `outputs`. It is notify-only: a failing provider is logged and never affects the pipeline. (#306)
+- **A registered directory artifact gets a durable copy.** When an artifact object store is configured, registering a directory (a LoRA adapter, for example) copies its tree to `…/artifacts/<content_hash>/<name>/` and records that root as `durable_uri`, the way a file was already copied. The artifact then reads `durable` in `cairn doctor` and the registry health check after the producing machine is gone. The `CAIRN_ARTIFACT_RELAY_MAX_BYTES` cap counts the whole tree. A tree that holds a symlink is not copied. File relay is unchanged (#286).
+- `benchmark/budget_overshoot.py` publishes how far past a cost cap a template's spend gets, on the in-process and DBOS runtimes. (#325)
 - The example pack's `over-budget` pipeline shows a budget refusing a run before its engine starts, with no key and no spend, and `cairn run` now prints why a leg failed (#368).
 - The failing and warning rows of `cairn setup --check` now end with `— fix:` and the command or setting that resolves it, on the same line, so the failures `cairn setup` prints carry it too. Rows that read `unset (optional)` are unchanged.
 
 ### Fixed
+- `cairn setup --seed` from a checkout no longer fails its checks: with no profile set, the example pack runs under its own `profiles/hello.toml`, which names the MCP server it requires. It also writes that profile's audit log to `./audit.jsonl`.
+- The pages written against an older tree describe this repository: the architecture overview's system description, `examples/README.md` (which said `max_cost_usd` is not enforced; it is) and the engine's test lists. The fine-tune guide says what the `finetune-ssh` profile's audit log records. (#255)
+- `examples/ci` gates on a check that ships. It named a pack that isn't in the public install, so every run exited 2; it now uses `examples/ci/templates/dataset-check.md`, which needs only `pip install cairndev`. (#255)
 - Following a run no longer retries forever with no message when the engine stops answering. It backs off for about two minutes, then says the run may still be live, prints the command to re-attach and exits 1. A 5xx on the status check counts as temporary, and a quiet run is never given up on while the status check answers. (#46)
 - `cairn deploy doctor --values` no longer fails a Helm values file with `ingress.enabled: false` and no host for a missing `CADDY_DOMAIN`; the chart renders that file, and an enabled ingress with no host still fails (#76).
 - A malformed `eval_cutoff` (`"last tuesday"`, `"06/01/2026"`, `5`) is now refused at launch and at run start, where it used to switch the holdout check off and admit overlapping data. Use an ISO-8601 date or timestamp, or leave it out. One holdout row with an unreadable `dated_at` no longer voids the check either: the row stays in the comparison, with a warning that also reaches the run's record.
@@ -35,12 +49,11 @@ A patch release: fixes to the CLI only, and one of them stops a secret being pri
 
 ### Fixed
 - `cairn setup --check` and `cairn doctor` no longer print the path of a secret URL. They show `https://hooks.slack.com/***`; a database URL keeps its name. (#402)
-- `cairn gate` and `cairn run --check` no longer pass a check that didn't finish. A step that failed (on a missing file, say), a pause at an approval, no verdict, or a verdict word that isn't a pass, a warning or a failure used to exit 0 with PASS; all now exit 2 with the reason. So a check that gives no verdict fails CI where it used to pass: it has to write `$state.verdict` or `$state.outcome`. A FAIL verdict still exits 1, even if a step also failed, and an `outcome` list with no verdict item now gates on how its items are graded. A selector of single steps still recovers from a failed step; a selector with a compound child doesn't count as recovering, so some real recoveries exit 2. A failure inside a `subgraph_node` still isn't detected. (#386)
+- `cairn gate` and `cairn run --check` don't pass a check that didn't finish. (#394)
 - `--expect-head` refuses a value that can't mean anything, and a match exits 0 in both the plain and `--json` forms when the log has no lineage records. (#380)
 - `cairn status --replay` reads a run from the local engine. (#382)
 - A named endpoint is never replaced by local data in `cairn status --replay`. (#388)
 - `cairn admin lineage` says the chain is broken, not that the log was altered: a crash mid-write and racing writers look the same. (#385)
-- `cairn setup --check` and `cairn doctor` no longer print the path of a secret URL. A Slack webhook's token is in its path, and 0.3.2 through 0.4.0 printed it in full: `set: https://hooks.slack.com/services/...`. They now show `https://hooks.slack.com/***`. If you shared that output, for example in a bug report, rotate the webhook.
 
 ## [0.4.0] - 2026-11-02
 
@@ -66,19 +79,9 @@ The CLI is five commands: `cairn setup`, `run`, `status`, `decide` and `pack` (A
 - `cairn status [id]` and `cairn decide <id> approve|reject|cancel`: one door to look and one to decide, for a pipeline or a run (ADR-0165). `cairn status --follow` stays with a pipeline and asks at each gate. `cairn replay`, and `cairn remote pipelines`, `pipeline`, `ps`, `status`, `watch`, `findings`, `logs`, `advance`, `approve`, `reject`, `cancel` and `cancel-pipeline`, still work for one minor version and print the new spelling on stderr; they leave `--help` now. What the CLI suggests next uses the new names. (#357)
 - A pipeline gate's evidence is on its step: `step_state.<gate>.gate_context` holds the `show:` fields, the approvers, the spend against the budget cap, the cost estimate and the admission decision, so `GET /pipelines/{id}` and `cairn remote pipeline <id>` carry it, and `cairn remote launch --watch` and `cairn remote advance` print it at each pause. Before, it reached only the audit event and the review record, so someone approving from the CLI decided without the numbers. Under the Temporal owner, a gate carries no evidence yet (#212). (#258)
 
-### Changed
-- The pages written against an older tree describe this repository: the architecture overview's system description, `examples/README.md` (which said `max_cost_usd` is not enforced; it is) and the engine's test lists. The fine-tune guide says what the `finetune-ssh` profile's audit log records. (#255)
-
 ### Fixed
 - `cairn dev` and the temporary engine `cairn run` starts now listen on `127.0.0.1`, as `cairn setup` does. They run with the fixed `dev`/`dev` login and used to listen on every interface. To reach one from outside this machine, a container or a VM, set `CAIRN_TRIGGER_HOST`. (#359)
 - `cairn pipeline run` no longer polls forever at a human gate it has no way to answer: it says so and exits 2, with the record kept. (#260)
-- `examples/ci` gates on a check that ships. It named a pack that isn't in the public install, so every run exited 2; it now uses `examples/ci/templates/dataset-check.md`, which needs only `pip install cairndev`. (#255)
-
-### Added
-- A `pipeline.finished` run-hook event. An installed `cairn.run_hooks` provider learns when a pipeline reaches `done`, `failed` or `cancelled`, including a pipeline that ends on a gate, a cancel or a deferred failure. The payload is `pipeline_id`, `pipeline_ref`, `status` and `workspace_id`. The in-process pipeline bridge fires it once per pipeline per process, after the record is stored with its final status and, on `done`, its resolved `outputs`. It is notify-only: a failing provider is logged and never affects the pipeline. (#306)
-
-### Added
-- **A registered directory artifact gets a durable copy.** When an artifact object store is configured, registering a directory (a LoRA adapter, for example) copies its tree to `…/artifacts/<content_hash>/<name>/` and records that root as `durable_uri`, the way a file was already copied. The artifact then reads `durable` in `cairn doctor` and the registry health check after the producing machine is gone. The `CAIRN_ARTIFACT_RELAY_MAX_BYTES` cap counts the whole tree. A tree that holds a symlink is not copied. File relay is unchanged (#286).
 
 ## [0.3.3] - 2026-10-30
 
