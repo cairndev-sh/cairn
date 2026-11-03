@@ -539,7 +539,7 @@ async def test_an_in_process_resume_runs_in_its_records_workspace(world, monkeyp
 
     monkeypatch.setattr(InProcessRuntime, "has_pending_interrupt", _pending)
     monkeypatch.setattr(InProcessRuntime, "resume", _resume)
-    monkeypatch.setattr(RunDispatcher, "_recompile_for_resume", staticmethod(lambda name: (object(), None)))
+    monkeypatch.setattr(RunDispatcher, "_recompile_graph", staticmethod(lambda name: object()))
     run = SimpleNamespace(id="r-a", status="awaiting_approval", workspace_id="ws-a",
                           results=[SimpleNamespace(template_name="demo/tmpl")],
                           bundle_pipeline_id="", owner="", cost={})

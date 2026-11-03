@@ -1406,7 +1406,7 @@ class RunDispatcher:
             raise NotResumableError(
                 f"cannot resume in_process run {run_id}: no template_name on record"
             )
-        graph, run_cap = self._recompile_for_resume(template_name)
+        graph = self._recompile_graph(template_name)
         runtime = InProcessRuntime()
         # #365 — a gate whose checkpoint died with a previous process (or the
         # volatile memory saver) cannot actually resume: invoking would restart
@@ -1441,6 +1441,7 @@ class RunDispatcher:
         # #395 — a resumed graph spends too, so it runs in the same capped scope as the
         # run path, starting from what the run spent before its pause.
         over_budget = ""
+        run_cap = getattr(graph, "_cairn_cost_cap", None)
         with obs.cost_scope(f"run-{template_name}", max_cost_usd=run_cap) as cost_ctx, \
                 workspace_scope(run.workspace_id), \
                 node_sink_scope(self._node_sink(run_id)), launch_scope(self.launch_handle()):
@@ -1548,9 +1549,10 @@ class RunDispatcher:
                            run_id, exc_info=True)
 
     @staticmethod
-    def _recompile_for_resume(template_name: str) -> tuple[Any, Optional[float]]:
-        """Recompile a template by name → its plain compiled graph and its cost cap
-        (for in_process resume; the durable checkpointer holds the paused state)."""
+    def _recompile_graph(template_name: str):
+        """Recompile a template by name → its plain compiled graph (for
+        in_process resume; the durable checkpointer holds the paused state), carrying
+        the template's cost cap for the resume's scope."""
         from cairn.core.engine.compiler import compile_template  # noqa: PLC0415
         from cairn.core.engine.skill_engine import resolve_template_path  # noqa: PLC0415
 
@@ -1559,7 +1561,8 @@ class RunDispatcher:
         graph = getattr(compiled.runnable, "_compiled_graph", None)
         if graph is None:
             raise ValueError(f"template {template_name!r} has no compiled graph")
-        return graph, _template_cost_cap(compiled)
+        graph._cairn_cost_cap = _template_cost_cap(compiled)
+        return graph
 
     def launch_handle(self):
         """The ``OperationContext.launch`` closure (ADR-0120 D7, #2455): how an operator

@@ -35,7 +35,7 @@ pack in this repository reads it.
 
 ## Budgets in a template
 
-A template can declare a `budget:` block. A template without one sets no limit of its own:
+A template can declare a `budget:` block. A template without one sets no limit of its own, though the deployment's `MAX_COST_USD` ($1 by default) still applies:
 
 | Field | Status |
 |---|---|

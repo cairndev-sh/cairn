@@ -35,8 +35,8 @@ series '<series>': this run's estimate $<estimate> would exceed the $<cap> cap
 ```
 
 A finished leg settles its reservation. A failed or cancelled leg releases it, except for
-spend it's known to have made: a flow leg's reported spend, or a template leg's model calls
-when a cost cap stopped it.
+spend it's known to have made: a flow or task leg's recorded spend, or a template leg's
+model calls when a cost cap stopped it.
 A retried attempt reserves again, because a retry is new spend.
 
 ## A cap on a template's model calls

@@ -340,7 +340,8 @@ def _resume_with(monkeypatch, resume, cap: float | None = None) -> None:
 
     monkeypatch.setattr(InProcessRuntime, "has_pending_interrupt", _pending)
     monkeypatch.setattr(InProcessRuntime, "resume", resume)
-    monkeypatch.setattr(RunDispatcher, "_recompile_for_resume", staticmethod(lambda name: (object(), cap)))
+    graph = SimpleNamespace(_cairn_cost_cap=cap)
+    monkeypatch.setattr(RunDispatcher, "_recompile_graph", staticmethod(lambda name: graph))
 
 
 async def test_a_resumed_run_meters_from_what_it_spent_before_its_pause(harness, trail, monkeypatch):
@@ -409,12 +410,19 @@ async def test_spend_swallowed_after_a_pause_still_fails_the_run(harness, trail,
             pass
         return {"output": "looks fine"}
 
+    statuses = []
+
+    async def _hooks(self, run_id, *, status="done"):
+        statuses.append(status)
+
+    monkeypatch.setattr(RunDispatcher, "_terminal_hooks", _hooks)
     _resume_with(monkeypatch, _swallowing, cap=spent * 1.5)
     await harness.resume_run("r1", {"approved": True})
 
     run = await harness.store.get("r1")
     assert run.status == "failed" and "over budget" in run.error
     assert [r["action"] for r in trail.audit] == ["run.budget_exceeded"]
+    assert statuses == ["failed"]
 
 
 async def test_scoring_sees_a_capped_run_as_failed(harness, trail, monkeypatch):
@@ -436,8 +444,7 @@ async def test_scoring_sees_a_capped_run_as_failed(harness, trail, monkeypatch):
 async def test_the_recompiled_template_brings_its_cap(tmp_path, monkeypatch):
     path = _template(tmp_path, "    type: python_node\n    function: _over_the_cap\n", "  nodes: {}\n", budget_usd=0.25)
     monkeypatch.setattr(skill_engine, "resolve_template_path", lambda ref: path)
-    _, cap = RunDispatcher._recompile_for_resume("demo/capped")
-    assert cap == 0.25
+    assert RunDispatcher._recompile_graph("demo/capped")._cairn_cost_cap == 0.25
 
 
 async def test_a_second_pause_keeps_the_running_total(harness, trail, monkeypatch):
