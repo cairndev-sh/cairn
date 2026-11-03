@@ -140,6 +140,7 @@ export default defineConfig({
             { label: 'Quickstart', slug: 'quickstart' },
             { label: 'Install and deploy', slug: 'install' },
             { label: 'FAQ', slug: 'faq' },
+            { label: 'Releases', link: '/releases/' },
           ],
         },
         {
