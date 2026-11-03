@@ -148,6 +148,7 @@ def test_disabled_ingress_without_a_host_passes():
     results = _full(values)
     assert _fails(results) == set(), [(r.name, r.detail) for r in results if r.status == "fail"]
     assert exit_code(results) == 0
+    assert next(r.detail for r in results if r.name == "CADDY_DOMAIN") == "not needed: the ingress is disabled"
 
 
 def test_enabled_ingress_without_a_host_still_fails():

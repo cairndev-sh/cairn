@@ -115,7 +115,8 @@ def check_deploy(env: dict[str, str], profiles: set[str]) -> list[CheckResult]:
         val = _env(env, var).strip()
         out.append(
             CheckResult(var, "ok" if val else "fail",
-                        "set" if val else f"REQUIRED — {desc}", category="required")
+                        ("not needed: the ingress is disabled" if val == INGRESS_DISABLED else "set") if val
+                        else f"REQUIRED — {desc}", category="required")
         )
 
     # ── password hash must PARSE, not just be set (#1853) ────────────────
