@@ -8,6 +8,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 - A malformed `eval_cutoff` (`"last tuesday"`, `"06/01/2026"`, `5`) is now refused at launch and at run start, where it used to switch the holdout check off and admit overlapping data. Use an ISO-8601 date or timestamp, or leave it out. One holdout row with an unreadable `dated_at` no longer voids the check either: the row stays in the comparison, with a warning that also reaches the run's record.
+- A dry run now reads a top-level `eval_cutoff` the way the holdout door does. It ignored it, so it could report an overlap the door would admit, or call a malformed cutoff ready where the door refuses it.
 - `cairn setup --check` and `cairn doctor` no longer print the path of a secret URL. A Slack webhook's token is in its path, and 0.3.2 through 0.4.0 printed it in full: `set: https://hooks.slack.com/services/...`. They now show `https://hooks.slack.com/***`. If you shared that output, for example in a bug report, rotate the webhook.
 
 ## [0.4.0] - 2026-11-02

@@ -783,7 +783,6 @@ async def test_a_valid_cutoff_with_no_dataset_ref_is_unchanged(registry):
 
 
 async def test_preflight_blocks_a_nested_malformed_cutoff_and_does_not_call_it_an_overlap(registry, monkeypatch):
-    """The nested form is the one preflight can see today; the top-level form is the #397 xfail."""
     await registry.version("eval-set", HOLDOUT, role="test")
     clean = await registry.version("corpus", TRAIN)
     verdict = await _preflight(monkeypatch, {"train": clean, "params": {"eval_cutoff": "last tuesday"}})
@@ -925,6 +924,98 @@ async def test_a_run_the_door_had_nothing_to_say_about_stamps_nothing(registry, 
     assert (await d.store.get(run.id)).holdout == {}
 
 
+# ── preflight and the door on an eval cutoff ───────────────────────────────
+
+
+async def _dated_overlap(registry):
+    """A holdout dated 2026-06-02 that shares a row with the training version: a cutoff of
+    2026-06-01 excludes it, and a cutoff of 2026-06-03 keeps it."""
+    await registry.version("eval-later", HOLDOUT, role="test", dated_at="2026-06-02")
+    return await registry.version("corpus", [SHARED])
+
+
+def _overlap_blockers(verdict):
+    return [b.what for b in verdict.blockers if b.kind == "holdout-overlap"]
+
+
+async def test_preflight_agrees_with_the_door_on_a_cutoff(registry, monkeypatch):
+    dirty = await _dated_overlap(registry)
+    values = {"train": dirty, "eval_cutoff": "2026-06-01"}
+    assert (await _check(values)).ok is True
+    assert (await decide_admission(values, workspace_id=WS, policies=[])).verdict == ADMITTED
+    verdict = await _preflight(monkeypatch, values)
+    assert _overlap_blockers(verdict) == [] and verdict.ready is True
+
+
+async def test_preflight_and_the_door_both_refuse_when_the_cutoff_keeps_the_holdout(registry, monkeypatch):
+    dirty = await _dated_overlap(registry)
+    values = {"train": dirty, "eval_cutoff": "2026-06-03"}
+    door = await _check(values)
+    assert door.ok is False
+    assert (await decide_admission(values, workspace_id=WS, policies=[])).verdict == REFUSED
+    verdict = await _preflight(monkeypatch, values)
+    assert _overlap_blockers(verdict) == door.reasons() and verdict.ready is False
+
+
+async def test_preflight_finds_a_nested_cutoff_where_the_door_does(registry, monkeypatch):
+    dirty = await _dated_overlap(registry)
+    values = {"train": dirty, "params": {"eval_cutoff": "2026-06-01"}}
+    assert (await _check(values)).ok is True
+    assert _overlap_blockers(await _preflight(monkeypatch, values)) == []
+
+
+@pytest.mark.parametrize("typed_cutoff, raw_cutoff, ok", [
+    ("2026-06-01", "2026-06-03", True),   # the typed cutoff excludes the holdout
+    ("2026-06-03", "2026-06-01", False),  # the typed cutoff keeps it, whatever raw says
+    (None, "2026-06-01", True),           # coercion dropped the field: raw fills it in
+])
+async def test_the_typed_cutoff_wins_because_it_is_what_the_run_door_gets(registry, typed_cutoff, raw_cutoff, ok):
+    from cairn.core.preflight import _holdout_verdict
+
+    dirty = await _dated_overlap(registry)
+    typed = {"train": dirty} | ({"eval_cutoff": typed_cutoff} if typed_cutoff else {})
+    verdict = await _holdout_verdict(typed, {"train": dirty, "eval_cutoff": raw_cutoff})
+    assert verdict.ok is ok
+    assert verdict.eval_cutoff == (typed_cutoff or raw_cutoff)
+
+
+async def test_a_default_does_not_shadow_the_ref_the_user_typed(registry):
+    from cairn.core.preflight import _holdout_verdict
+
+    await registry.version("eval-set", HOLDOUT, role="test")
+    default = await registry.version("clean", TRAIN)
+    typed_ref = await registry.version("corpus", [SHARED])
+    values = {"train": default, "eval_cutoff": "2026-06-01"}
+    verdict = await _holdout_verdict(values, {**values, "train": typed_ref})
+    assert verdict.ok is False and {o.training for o in verdict.overlaps} == {typed_ref}
+
+
+async def test_preflight_blocks_a_malformed_top_level_cutoff_as_the_door_refuses_it(registry, monkeypatch):
+    clean = await registry.version("corpus", TRAIN)
+    values = {"train": clean, "eval_cutoff": "last tuesday"}
+    door = await _check(values)
+    assert door.ok is False
+    verdict = await _preflight(monkeypatch, values)
+    assert verdict.ready is False
+    assert [b.what for b in verdict.blockers if b.kind == "holdout-invalid-cutoff"] == [door.refusal]
+    assert _overlap_blockers(verdict) == []
+
+
+@pytest.mark.parametrize("typed_cutoff, raw_cutoff, refused_too", [
+    ("last tuesday", "2026-06-01", True),   # a bad typed cutoff isn't rescued by raw
+    (0, "2026-06-01", True),                # nor is a falsy one, which isn't "no cutoff"
+    ("2026-06-01", "last tuesday", False),  # the run door gets the typed one, and it's fine
+])
+async def test_the_typed_cutoff_wins_when_one_is_malformed(registry, typed_cutoff, raw_cutoff, refused_too):
+    from cairn.core.preflight import _holdout_verdict
+
+    clean = await registry.version("corpus", TRAIN)
+    verdict = await _holdout_verdict({"train": clean, "eval_cutoff": typed_cutoff},
+                                     {"train": clean, "eval_cutoff": raw_cutoff})
+    assert bool(verdict.refusal) is refused_too
+    assert (await _check({"train": clean, "eval_cutoff": typed_cutoff})).refusal == verdict.refusal
+
+
 # ── golden vectors: the door's definitions, pinned ──────────────────────────
 # The dataset operators ship in cairn-extensions, so a direct comparison would always skip here.
 # These literals were checked once against that pack's ``_canon.canonical_hash`` and
@@ -962,24 +1053,6 @@ def test_the_door_shingles_a_row_exactly_as_the_pack_does(row, n, expected):
 
 # The door's known gaps, as what its own text promises. Each fails today, on purpose: strict, so a
 # fix has to remove the marker. What it should do when it can't compare at all is #399.
-
-@pytest.mark.xfail(strict=True, reason="#397 preflight doesn't find the cutoff the door reads")
-async def test_preflight_agrees_with_the_door_on_a_cutoff(registry, monkeypatch):
-    await registry.version("eval-later", HOLDOUT, role="test", dated_at="2026-06-02")
-    dirty = await registry.version("corpus", [SHARED])
-    values = {"train": dirty, "eval_cutoff": "2026-06-01"}
-    assert (await _check(values)).ok is True
-    verdict = await _preflight(monkeypatch, values)
-    assert [b for b in verdict.blockers if b.kind == "holdout-overlap"] == []
-
-
-@pytest.mark.xfail(strict=True, reason="#397 preflight doesn't find the cutoff the door reads")
-async def test_preflight_blocks_a_malformed_top_level_cutoff_as_the_door_refuses_it(registry, monkeypatch):
-    clean = await registry.version("corpus", TRAIN)
-    values = {"train": clean, "eval_cutoff": "last tuesday"}
-    assert (await _check(values)).ok is False
-    assert (await _preflight(monkeypatch, values)).ready is False
-
 
 @pytest.mark.xfail(strict=True, reason="#398 a capped read isn't reported")
 async def test_a_version_past_the_row_cap_is_reported_as_truncated(registry, monkeypatch):
