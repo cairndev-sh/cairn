@@ -18,6 +18,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -277,6 +278,10 @@ def check_tiny_finetune(ctx: Ctx) -> None:  # profile → train (ml flow) → lo
     held_out = (ctx.out("train").get("findings") or {}).get("train_lora_eval_loss")
     gated = ctx.out("loss").get("value")
     assert held_out is not None and gated == held_out, (held_out, gated)
+    # the promoted tag and the card name the adapter where the run was told to keep it (#253)
+    kept = ctx.rec["inputs"]["output_dir"]
+    assert ctx.out("promote").get("uri", "").removeprefix("file://") == kept, ctx.out("promote")
+    assert (Path(kept) / "adapter_config.json").is_file(), kept
     ctx.receipt("train", f"train.lora flow leg done (run {ids['train']}, model {ctx.rec['inputs'].get('base_model')}, "
                 f"held-out eval_loss={held_out}, from rows the adapter was not trained on; loss-ok gated on it)")
     ctx.receipt("worker.pull", "no hello-cairn leg is routed to the pull lane (an ML target `worker:<pool>` "
@@ -344,7 +349,8 @@ ROWS: tuple[Row, ...] = (
     Row("ask-the-docs", gates=("review",), check=check_ask_the_docs),
     Row("tiny-finetune", gates=("promote", "review"), check=check_tiny_finetune,
         needs=train_available, marks=(pytest.mark.train,),
-        inputs={"base_model": os.environ.get("HELLO_TRAIN_MODEL", "sshleifer/tiny-gpt2")}),
+        inputs={"base_model": os.environ.get("HELLO_TRAIN_MODEL", "sshleifer/tiny-gpt2"),
+                "output_dir": str(Path(tempfile.mkdtemp(prefix="cairn-adapter-")) / "adapter")}),
     Row("nightly-ops", gates=("propose",), check=check_nightly_ops, needs=_nightly_needs,
         marks=(pytest.mark.services,), server_env=_nightly_env, prepare=_nightly_prepare),
 )

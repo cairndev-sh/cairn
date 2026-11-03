@@ -190,3 +190,4 @@ staged and published summaries are under `~/.cairn/artifacts`
 - [Pipelines, legs and steps](/concepts/pipelines/): what you just ran.
 - [Write a pipeline](/guides/write-a-pipeline/): your own pipeline, with a data gate and a person gate.
 - [Install and deploy](/install/): run cairn for a team.
+- [Troubleshooting](/troubleshooting/): if `cairn setup --check` or a launch says no.
