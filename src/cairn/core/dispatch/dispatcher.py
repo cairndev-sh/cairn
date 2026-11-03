@@ -1563,6 +1563,11 @@ class RunDispatcher:
         graph._cairn_cost_cap = template_cost_cap(compiled)
         return graph
 
+    def has_live_task(self, inv_id: str) -> bool:
+        """Whether a task in this process is still running ``inv_id``, and so will record its end."""
+        task = self._tasks.get(inv_id)
+        return task is not None and not task.done()
+
     def launch_handle(self):
         """The ``OperationContext.launch`` closure (ADR-0120 D7, #2455): how an operator
         starts other governed work without importing the dispatcher. ``pipeline:<ref>``

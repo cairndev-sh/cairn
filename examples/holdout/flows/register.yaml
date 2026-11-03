@@ -1,0 +1,10 @@
+name: register
+kind: data
+description: >
+  Registers a file as a version of a dataset, with a role. It touches no data.
+stages:
+  - stage: noop
+    config:
+      register: $config.register
+      register_role: $config.register_role
+      source: $config.source

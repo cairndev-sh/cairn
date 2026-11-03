@@ -24,6 +24,24 @@ To try it from this directory on a file that passes:
 cairn run --check dataset-check --set path=../hello-cairn/data/sample.jsonl --json
 ```
 
+## In GitHub Actions: one `uses:` line
+
+The repository ships a composite action, [`actions/gate`](../../actions/gate/action.yml). It
+installs a pinned `cairndev` from PyPI, runs `cairn run --check` and exits with its code:
+
+```yaml
+- uses: actions/checkout@v6
+- uses: cairndev-sh/cairn/actions/gate@<ref>   # a release tag or a commit SHA
+  with:
+    check: dataset-check
+    set: path=data/train.jsonl
+```
+
+Its inputs are `check`, `set` (one `key=value` per line), `fail-on`, `working-directory`,
+`cairndev-version` and `python-version`; its outputs are `verdict`, `exit-code` and `report`.
+The [guide](https://docs.cairndev.sh/guides/gate-ci/) lists them. Use the workflow below
+instead when you want to post the findings on the pull request.
+
 ## What the check does
 
 It runs the `data/profile` operator, which ships with `cairndev`, over the file. No model
@@ -88,5 +106,6 @@ From a file with no `text`, `label` or `id` field:
 ## Files here
 
 - [`templates/dataset-check.md`](templates/dataset-check.md): the check.
+- [`../../actions/gate`](../../actions/gate/action.yml): the composite action (`uses: cairndev-sh/cairn/actions/gate@<ref>`).
 - [`github-actions-gate.yml`](github-actions-gate.yml): GitHub Actions workflow (gates the PR and posts findings with `gh pr comment`).
 - [`gitlab-ci-gate.yml`](gitlab-ci-gate.yml): GitLab CI job (gates the MR and posts an MR note).

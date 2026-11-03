@@ -5,7 +5,10 @@ All notable changes to this project are documented here. The format follows [Kee
 ## [Unreleased]
 
 ### Added
+- The example pack ships a `sample` preset, so the Quickstart runs on its own rows with `--preset sample`, from an installed wheel, without downloading a file. `cairn-pack-hello` needs the release that carries it. (#317)
 - The example pack's `tiny-finetune` takes an `output_dir`, so its promoted adapter can live somewhere the system won't delete. Without it the adapter stays in the engine's temp workdir, and the README says so. (#253)
+- A page on the holdout door and eval cutoff, and `examples/holdout`, which you can run to see it refuse. The `noop` stage takes `register_role`, so a file can be registered as a test set without a pack of your own. (#333)
+- A GitHub Action for gating CI on a check: `uses: cairndev-sh/cairn/actions/gate@<ref>` installs a pinned `cairndev`, runs `cairn run --check` and fails the job with the check's own exit code, 2 included. Inputs `check`, `set`, `fail-on`, `working-directory`, `cairndev-version`, `python-version`; outputs `verdict`, `exit-code`, `report`. (#350)
 
 ## [0.5.0] - 2026-11-03
 
@@ -30,7 +33,7 @@ The old command names are gone, and a cost cap now stops a run.
 - The failing and warning rows of `cairn setup --check` now end with `— fix:` and the command or setting that resolves it, on the same line, so the failures `cairn setup` prints carry it too. Rows that read `unset (optional)` are unchanged.
 
 ### Fixed
-- A run that ends while the reconciler is judging it keeps its own reason, where the reconciler's note could overwrite it and publish a second terminal event. A capped run on DBOS could lose `over budget` this way.
+- A run that ends while the reconciler is judging it keeps its own reason, where the reconciler's note could overwrite it and publish a second terminal event. The reconciler also leaves a run alone while its own task is still running in that process, so it can't fail the pipeline first. A capped run on DBOS could lose `over budget` either way.
 - The example pack's `tiny-finetune` pipeline now gates `loss-ok` on the loss the trainer measures over the rows it held out. It used to gate on a figure that mostly re-scored training rows. Its training data now holds 48 distinct rows instead of 10 repeated ones, so no held-out row is also a training row, and the separate `eval` leg is gone (#252).
 - `cairn setup --seed` from a checkout no longer fails its checks: with no profile set, the example pack runs under its own `profiles/hello.toml`, which names the MCP server it requires. It also writes that profile's audit log to `./audit.jsonl`.
 - The pages written against an older tree describe this repository: the architecture overview's system description, `examples/README.md` (which said `max_cost_usd` is not enforced; it is) and the engine's test lists. The fine-tune guide says what the `finetune-ssh` profile's audit log records. (#255)

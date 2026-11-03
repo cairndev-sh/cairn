@@ -28,15 +28,14 @@ pip install 'cairndev[hello]'   # inside a virtual environment, Python 3.12 or l
 Check it: `cairn --version`, then `cairn pack ls --pipelines` lists the example's
 pipelines.
 
-## 2. Get a dataset to check
+## 2. Get the example's profile
 
 The `profile-and-publish` pipeline checks a JSONL file whose rows have a
-`text` and a `label` field. Use the example's sample, and its deployment profile,
-which turns the audit trail on:
+`text` and a `label` field. The example ships a sample, which `--preset sample` picks
+below. Get its deployment profile, which turns the audit trail on:
 
 ```bash
 mkdir cairn-quickstart && cd cairn-quickstart
-curl -LsSfO https://raw.githubusercontent.com/cairndev-sh/cairn/main/examples/hello-cairn/data/sample.jsonl
 curl -LsSfO https://raw.githubusercontent.com/cairndev-sh/cairn/main/examples/hello-cairn/profiles/hello.toml
 export CAIRN_PROFILE=$PWD/hello.toml
 ```
@@ -44,7 +43,7 @@ export CAIRN_PROFILE=$PWD/hello.toml
 ## 3. See what will happen before anything runs
 
 ```bash
-cairn run --dry-run hello-cairn/profile-and-publish -e sandbox -i path=$PWD/sample.jsonl
+cairn run --dry-run hello-cairn/profile-and-publish -e sandbox --preset sample
 ```
 
 `--dry-run` resolves everything a launch would, and runs nothing. For each leg
@@ -76,7 +75,7 @@ next commands need no flags; `cairn setup --stop` stops the engine. `hello.toml`
 
 ```bash
 cairn run hello-cairn/profile-and-publish \
-  -i path=$PWD/sample.jsonl --environment sandbox
+  --preset sample --environment sandbox
 ```
 
 The pipeline profiles the file, passes its **data gate** (the profile must

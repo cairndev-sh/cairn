@@ -124,8 +124,46 @@ environment variable. And `--mock` runs the check's operators in mock mode, wher
 
 ## 3. A GitHub Actions job
 
-This job runs the check on every pull request that touches `data/` and fails the build when
-the check exits non-zero:
+The repository ships a composite action that installs `cairndev`, runs the check and passes
+its exit code through. This job runs the check on every pull request that touches `data/`:
+
+```yaml
+name: dataset check
+
+on:
+  pull_request:
+    paths: ['data/**']
+
+jobs:
+  dataset-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: cairndev-sh/cairn/actions/gate@<ref>
+        with:
+          check: dataset-check
+          set: path=data/train.jsonl
+```
+
+Use a release tag for `<ref>`, or a commit SHA to pin it harder. The action takes:
+
+| Input | Is | Default |
+|---|---|---|
+| `check` | the check to run (required): a name looked up in `templates/`, or `<pack>/<name>` | |
+| `set` | inputs for the check, one `key=value` per line, passed as repeated `--set` | none |
+| `fail-on` | `fail`, or `warn` to block on warnings too | `fail` |
+| `working-directory` | where to run it; `templates/` is looked up there | `.` |
+| `cairndev-version` | the exact `cairndev` release to install from PyPI; a range or `latest` is refused | the release the action was tagged with |
+| `python-version` | the Python to run it on | `3.12` |
+
+It sets three outputs: `verdict` (`pass`, `warn` or `fail`, or `error` when the check
+decided nothing), `exit-code` (`0`, `1` or `2`) and `report` (the path of the JSON verdict).
+The step exits with the check's own code, so a failing check fails the job, and so does a check
+that exits 2. Use `cairndev` 0.4.1 or later: the action runs `cairn run --check`, and before
+0.4.1 a check that didn't finish exited 0. Inputs reach the script through environment
+variables, never as script text, so a value in `set` can't run as shell.
+
+The same job without the action:
 
 ```yaml
 name: dataset check
@@ -146,7 +184,7 @@ jobs:
       - run: cairn run --check dataset-check --set path=data/train.jsonl
 ```
 
-GitHub runs a `run` step with `bash -e`, so a non-zero exit fails the step and the job, and
+In both, GitHub runs a `run` step with `bash -e`, so a non-zero exit fails the step and the job, and
 the summary on stderr is in the log. The checkout puts `templates/dataset-check.md` where the
 command looks for it. Add `--fail-on warn` to block on warnings too, and make the job a
 required status check in the branch protection rules so a red job blocks the merge.

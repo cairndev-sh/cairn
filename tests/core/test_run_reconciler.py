@@ -207,3 +207,45 @@ async def test_a_verdict_the_store_refuses_publishes_nothing(monkeypatch):
     assert done == [] and emitted == []
     assert (await store.get("run-u")).status == "done"
     assert not [e for e in await store.get_events("run-u") if e.type == "failed"]
+
+
+@pytest.mark.asyncio
+async def test_a_run_with_a_live_task_here_is_left_to_it():
+    """The workflow has ended, and the task waiting on it is about to record why."""
+    store = _store()
+    await store.create(_run("run-live", "running", OLD))
+    await store.create(_run("run-orphan", "running", OLD))
+    asked = []
+
+    async def status_fn(run_id):
+        asked.append(run_id)
+        return "failed"
+
+    done = await reconcile_stale_runs(store, status_fn, grace_seconds=120, live_fn=lambda rid: rid == "run-live")
+
+    assert done == ["run-orphan"] and asked == ["run-orphan"]
+    assert (await store.get("run-live")).status == "running"
+    assert (await store.get("run-orphan")).status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_the_dispatcher_says_which_runs_it_is_still_running():
+    import asyncio
+
+    from cairn.core.dispatch.dispatcher import RunDispatcher
+
+    d = RunDispatcher(runner=object(), store=_store())
+    release = asyncio.Event()
+    task = asyncio.create_task(release.wait())
+    d._tasks["r1"] = task
+    assert d.has_live_task("r1") is True and d.has_live_task("nope") is False
+    release.set()
+    await task
+    assert d.has_live_task("r1") is False
+
+
+def test_the_server_tells_the_reconciler_about_live_tasks():
+    from tests import _layout
+
+    text = (_layout.REPO / "src" / "cairn" / "core" / "triggers" / "server.py").read_text(encoding="utf-8")
+    assert "live_fn=dispatcher.has_live_task" in text

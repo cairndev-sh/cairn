@@ -1,0 +1,6 @@
+{"id": "t1", "text": "The courier left the parcel at the wrong door.", "label": "logistics"}
+{"id": "t2", "text": "A duplicate charge appeared on the statement.", "label": "finance"}
+{"id": "t3", "text": "The app logged out after every update.", "label": "support"}
+{"id": "t4", "text": "The warehouse shipped the wrong colour.", "label": "logistics"}
+{"id": "t5", "text": "Two-factor codes arrived after they had expired.", "label": "support"}
+{"id": "e1", "text": "The invoice total did not match the purchase order.", "label": "finance", "dated_at": "2026-06-02"}
