@@ -212,12 +212,17 @@ async def build_preflight(
     #     instead of the user finding out at launch. Reads the registry and the
     #     dataset files; writes nothing.
     holdout = await _holdout_verdict(typed, values or {})
-    for reason in holdout.reasons():
+    if holdout.refusal:
         blockers.append(Blocker(
-            kind="holdout-overlap", what=reason,
-            fix="remove the overlapping rows (the clean flow's decontamination step "
-                "against that eval set) and register a new version, or re-check the "
-                "roles on these versions"))
+            kind="holdout-invalid-cutoff", what=holdout.refusal,
+            fix="write eval_cutoff as an ISO-8601 date or timestamp, or remove it"))
+    else:
+        for reason in holdout.reasons():
+            blockers.append(Blocker(
+                kind="holdout-overlap", what=reason,
+                fix="remove the overlapping rows (the clean flow's decontamination step "
+                    "against that eval set) and register a new version, or re-check the "
+                    "roles on these versions"))
     warnings.extend(holdout.warnings)
 
     # 3c. intake verdict (#2021, ADR-0102 D1) — the SAME door the dispatcher
