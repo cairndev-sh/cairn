@@ -1,0 +1,14 @@
+# holdout-example: a domain pack that shows the holdout door refusing a run.
+# Load it with CAIRN_PACK_PATH=examples/holdout. See README.md.
+
+[pack]
+name        = "holdout-example"
+version     = "0.1.0"
+description = "See the holdout door refuse training data that overlaps an eval set."
+tags = ["domain:example"]
+kind        = "domain"
+publisher   = "cairn"
+trust_level = "builtin"
+
+[compat]
+cairn_engine = ">=0.5.0"

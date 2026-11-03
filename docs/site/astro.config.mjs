@@ -153,6 +153,7 @@ export default defineConfig({
             { label: 'Capabilities and environments', slug: 'concepts/capabilities' },
             { label: 'Gates and approvals', slug: 'concepts/gates' },
             { label: 'LLM judges are advisory', slug: 'concepts/judges' },
+            { label: 'Holdout and eval cutoff', slug: 'concepts/holdout' },
             { label: 'Cost and budgets', slug: 'concepts/cost' },
             { label: 'Runs and the record', slug: 'concepts/runs' },
             { label: 'Glossary', slug: 'concepts/glossary' },

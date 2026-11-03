@@ -14,6 +14,12 @@ For how a template is written, read its
 [`flows/assistant.md`](hello-cairn/flows/assistant.md) (a model and tools) and
 [`flows/nightly-job.md`](hello-cairn/flows/nightly-job.md) (operations, no model).
 
+## `holdout/`: see the holdout door refuse
+
+[`holdout/`](holdout/README.md) registers an eval set and two training sets, then launches a
+run on each: the one that shares a row with the eval set is refused before it has a record.
+No key, no spend. Its test is `tests/e2e/hello/test_holdout_example.py`.
+
 ## `ci/`: a gate in CI
 
 [`ci/`](ci/README.md) has GitHub Actions and GitLab CI jobs that block a merge when a
