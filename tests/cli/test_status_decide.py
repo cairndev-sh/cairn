@@ -297,6 +297,11 @@ def test_an_old_name_still_works_and_says_the_new_one_on_stderr(wire, argv, new)
     assert "is now" not in r.stdout, "stdout stays what a script reads"
 
 
+def test_replay_takes_a_run_not_a_pipeline():
+    r = cli.invoke(app, ["status", "pl_a", "--replay"])
+    assert r.exit_code == 1 and "cairn status pl_a --logs" in r.stderr
+
+
 def test_replay_still_works_as_an_alias(wire):
     r = cli.invoke(app, ["replay", "no-such-run", "--source", "file"])
     assert "is now `cairn status <run> --replay`" in r.stderr

@@ -14,6 +14,8 @@ from operator_audit_store.operators.audit_store import AuditStoreOp
 from operator_audit_store.schemas.audit_store import AuditWriteInput
 
 from cairn.core.operator import OperationContext
+import pytest
+
 
 _RECORD = {
     "model_name": "sql-bot",
@@ -218,3 +220,55 @@ async def test_expect_head_detects_rows_missing_from_the_tail(tmp_path, capsys, 
     log.write_text(log.read_text().splitlines()[0] + "\n")   # the last row is gone
     assert lineage_cmd.main(["--expect-head", head[:12]]) == 2
     assert "expected head" in capsys.readouterr().err
+
+
+async def test_a_broken_chain_does_not_say_why(tmp_path, monkeypatch, capsys):
+    """A last line cut mid-write, as a crash leaves it, breaks the chain with nobody altering
+    anything, so the message states what was found and no cause (#327)."""
+    log = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("OBS_AUDIT_LOG", str(log))
+    await _write_non_lineage_log(log)
+    text = log.read_text().rstrip("\n")
+    log.write_text(text[:-20] + "\n")
+    capsys.readouterr()
+
+    assert lineage_cmd.main(["--audit-log", str(log)]) == 2
+    err = capsys.readouterr().err
+    assert "audit chain broken at row(s) [2]; provenance is NOT trustworthy." in err
+    assert "altered" not in err
+
+
+@pytest.mark.parametrize("value", ["", " ", "abc", "a" * 11])
+async def test_an_expect_head_that_cannot_mean_anything_is_refused(tmp_path, capsys, monkeypatch, value):
+    """#380: a script that reads its saved head from an empty file must not get a pass on a cut log."""
+    log = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("OBS_AUDIT_LOG", str(log))
+    await _write_lineage_row(log, target="a")
+    await _write_lineage_row(log, target="b")
+    log.write_text(log.read_text().splitlines()[0] + "\n")   # rows cut from the end
+    capsys.readouterr()
+    for form in (["--expect-head", value], ["--json", "--expect-head", value]):
+        assert lineage_cmd.main(form) == 2
+        out = capsys.readouterr()
+        assert "Nothing was checked" in out.err and "chain_ok" not in out.out
+
+
+async def test_the_first_characters_of_a_cut_logs_own_head_are_refused(tmp_path, capsys, monkeypatch):
+    log = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("OBS_AUDIT_LOG", str(log))
+    await _write_lineage_row(log, target="a")
+    await _write_lineage_row(log, target="b")
+    log.write_text(log.read_text().splitlines()[0] + "\n")
+    last = json.loads(log.read_text().splitlines()[-1])["hash"]
+    assert lineage_cmd.main(["--expect-head", last[:1]]) == 2
+
+
+async def test_a_matching_head_exits_0_in_both_forms_with_no_lineage_records(tmp_path, capsys, monkeypatch):
+    log = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("OBS_AUDIT_LOG", str(log))
+    await _write_non_lineage_log(log)
+    head = json.loads(log.read_text().splitlines()[-1])["hash"]
+    assert lineage_cmd.main(["--expect-head", head]) == 0
+    assert lineage_cmd.main(["--json", "--expect-head", head]) == 0
+    assert lineage_cmd.main(["--expect-head", "f" * 64]) == 2
+    assert lineage_cmd.main([]) == 1, "no head asked for: an empty listing keeps its exit"

@@ -463,13 +463,14 @@ def url_scheme(value: str) -> str:
     return m.group(1) if m else ""
 
 
-def redacted_url(value: str) -> str:
+def redacted_url(value: str, *, keep_path: bool = True) -> str:
     """``value`` as a diagnostic may print it: a URL without its user, password,
     query or fragment (``postgresql://db:5432/cairn``); ``***`` for a value with a
     ``@`` but no scheme (a DSN missing it); anything else unchanged.
 
     Unlike :func:`masked_dsn` it keeps neither the user nor a query (libpq takes
     ``?password=``), and a URL it cannot take apart is just ``<scheme>://***``.
+    ``keep_path=False`` is for a URL whose path can be the secret, as a webhook's is.
     """
     value = (value or "").strip()
     scheme = url_scheme(value)
@@ -483,6 +484,8 @@ def redacted_url(value: str) -> str:
         return f"{scheme}://***"
     if "@" in parts.path:  # an unescaped '@' or '/' in the password spills into the path
         return f"{scheme}://***"
+    if parts.path.strip("/") and not keep_path:
+        return f"{scheme}://{host}{port}/***"
     return f"{scheme}://{host}{port}{parts.path}"
 
 

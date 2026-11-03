@@ -59,7 +59,7 @@ Each old name keeps working for one more minor version, and says its new name on
 | `cairn pipeline ls` | Lists every installed pipeline with its legs and content hash, internal ones included. |
 | `cairn run <ref>` | Starts a pipeline through the launch door and stays with it: it asks at each gate, follows any pipeline its events start, and ends with the results. `-i key=value` or `-i @file.json` (repeatable; values are parsed as JSON when possible, and a `list` input also takes a comma-separated string), `-p` a saved input set, `--save-preset`, `-e` the environment, `--detach` returns at once, `--json` prints the records. With no ref, it lists what can run. |
 | `cairn run <ref> --dry-run` | What will happen before anything spends: each input and where its value comes from, each leg and what triggers it, the gates and the budget. Nothing runs. On a flow, it is the dev loop's plan. |
-| `cairn run <ref> --check` | Runs a read-only check and exits on its verdict, for CI. `--fail-on warn` also fails on warnings. |
+| `cairn run <ref> --check` | Runs a read-only check and exits on its verdict, for CI: 0 on pass or warn, 1 on fail. `--fail-on warn` also fails on warnings. Exit 2 means nothing was decided: bad inputs, the check couldn't run, a step failed, it paused at an approval, or it gave no verdict or one that isn't a pass, a warning or a failure. A failure inside a `subgraph_node` isn't detected yet. |
 | `cairn run <skill> --skill` | Submits a skill to the server. `--wait` blocks until it is done, `--service` names the service. |
 | `cairn pipeline show <ref>` | A pipeline's inputs, legs, gates and wiring. `--plan` shows the execution plan instead; with `--plan`, `--preset <name>` and `-i key=value` first list each input's value and the layer it comes from (`← preset 'name'`). |
 
@@ -134,9 +134,9 @@ anyway. When no engine answers, the write goes ahead and the line names the stor
 
 | Command | What it does |
 |---|---|
-| `cairn replay <run-id>` | Replays a past run's recorded event trace as a timeline. `--json` for the raw events. |
+| `cairn status <run-id> --replay` | Prints what a past run recorded: its inputs, what it ran and its events. `--json` for the raw events. |
 | `cairn audit verify` | Checks the audit log's hash chain without writing anything. Reads `--audit-log`, else `CAIRN_AUDIT_LOG`, else `./audit.jsonl`. Prints the row count, the first and last timestamp, the head hash and, if the chain is broken, the first broken row and why (`hash`, `prev_hash` or `corrupt line`). `--json` prints the same as `{path, rows, first_ts, last_ts, head_hash, ok, broken}`. Exit 0: verified (an empty log verifies). Exit 2: broken or a corrupt line. Exit 1: no log, or it cannot be read. |
-| `cairn lineage [subject]` | Shows provenance records from the audit log, matched on a subject such as a model name, and checks the hash chain as it reads. Omit the subject to list them all. `--expect-head <hash>` also checks that the log ends at a receipt you quoted earlier, which shows rows missing from its end. The operator that writes lineage records is part of cairn-platform. |
+| `cairn lineage [subject]` | Shows provenance records from the audit log, matched on a subject such as a model name, and checks the hash chain as it reads. Omit the subject to list them all. `--expect-head <hash>` also checks that the log ends at a receipt you quoted earlier, which shows rows missing from its end. Give the full hash or at least 12 characters of it: anything shorter, or an empty value, is refused with exit 2. The operator that writes lineage records is part of cairn-platform. |
 
 ## A remote server
 

@@ -93,7 +93,7 @@ def agentic_flows() -> list[tuple[str, str, str]]:
 
 
 def split_cmd(
-    ref: str = typer.Argument(..., help="Flow ref, e.g. dataset-readiness/intake"),
+    ref: str = typer.Argument(..., help="Flow ref, e.g. hello-cairn/engine-check"),
     json_out: bool = typer.Option(False, "--json", help="Emit segments as JSON."),
 ) -> None:
     """Show how a flow splits at its in-flow approval gates.

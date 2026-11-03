@@ -148,12 +148,26 @@ def _render_line(row: dict) -> str:
     return f"{_subject_of(row):24}  {run_id:28}  {receipt}…"
 
 
+#: The shortest prefix `--expect-head` accepts: what cairn prints when it abbreviates a hash. A
+#: shorter one matches a cut log by chance, and an empty one matches every log.
+_MIN_HEAD_PREFIX = 12
+
+
+def _head_problem(expect_head: Optional[str]) -> Optional[str]:
+    """Why ``expect_head`` can't be checked, or None. Not passing it at all is no check, and fine;
+    an empty value is a script that read an empty file, and must not read as a pass."""
+    if expect_head is None or len(expect_head.strip()) >= _MIN_HEAD_PREFIX:
+        return None
+    return (f"--expect-head needs the saved hash, or at least {_MIN_HEAD_PREFIX} characters of it; "
+            f"got {expect_head.strip()!r}. Nothing was checked.")
+
+
 def _head_mismatch(rows: list[dict], expect_head: Optional[str]) -> bool:
     """True when ``expect_head`` (a full hash or a prefix of one, as quoted from an
     earlier receipt) is not the hash of the log's last row. This is how a log that
     lost rows from its tail is told apart from one that did not: the chain alone
     verifies the same either way."""
-    if not expect_head:
+    if expect_head is None:
         return False
     last = str(rows[-1].get("hash") or "") if rows else ""
     return not (last and last.startswith(expect_head.strip()))
@@ -161,6 +175,10 @@ def _head_mismatch(rows: list[dict], expect_head: Optional[str]) -> bool:
 
 def _run(subject: Optional[str], *, json: bool, audit_log: Optional[str],
          expect_head: Optional[str] = None) -> int:
+    problem = _head_problem(expect_head)
+    if problem:
+        print(problem, file=sys.stderr)
+        return 2
     path = _audit_path(audit_log)
     if not path.exists() and not _writer_installed():
         print("\n".join(_no_writer_lines()), file=sys.stderr)
@@ -186,7 +204,7 @@ def _run(subject: Optional[str], *, json: bool, audit_log: Optional[str],
         print(f"no lineage records{where} in {path}")
         if not _writer_installed():
             print("\n".join(_no_writer_lines()), file=sys.stderr)
-        if not broken and not head_mismatch:
+        if not broken and not head_mismatch and expect_head is None:
             return 1
     elif subject:
         for i, r in enumerate(matches):
@@ -200,8 +218,9 @@ def _run(subject: Optional[str], *, json: bool, audit_log: Optional[str],
             print(f"  {_render_line(r)}")
 
     if broken:
-        print(f"\n⚠ audit chain broken at row(s) {broken} — the log was altered; "
-              f"provenance is NOT trustworthy.", file=sys.stderr)
+        # A broken chain doesn't say why: an edit, a crash mid-write and racing writers look alike.
+        print(f"\n⚠ audit chain broken at row(s) {broken}; provenance is NOT trustworthy.",
+              file=sys.stderr)
         return 2
     if head_mismatch:
         print(f"\n⚠ the log's last row is not the expected head {expect_head!r} — rows "
@@ -226,7 +245,7 @@ def cmd(
     ),
     expect_head: Optional[str] = typer.Option(
         None, "--expect-head",
-        help="Hash of the last row you expect (a receipt quoted earlier, full or a prefix). "
+        help="Hash of the last row you expect (a receipt quoted earlier, full or at least 12 characters). "
         "The chain alone cannot show rows missing from its end; this does.",
     ),
 ) -> None:
