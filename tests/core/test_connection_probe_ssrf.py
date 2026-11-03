@@ -229,11 +229,32 @@ def test_a_dsn_with_a_host_is_probed(dsn, monkeypatch):
     "postgresql://u:pw@169.254.169.254:5432,b.invalid:5433/vec",
     "postgresql://u:pw@b.invalid:5433,169.254.169.254:5432/vec",
     "postgresql://u:pw@[::1]:5432,[fd00:ec2::254]:5433/vec",
+    "postgresql://u@/db?host=169.254.169.254",
+    "postgresql://u@/db?host=a.invalid,[fd00:ec2::254]",
 ])
 def test_a_dsn_aimed_at_a_metadata_endpoint_is_refused(dsn, monkeypatch):
     r = _dsn(dsn, monkeypatch)
     assert r.ok is False
     assert "metadata" in (r.detail or ""), r.detail
+
+
+def test_a_hostless_dsn_uses_pghost_and_refuses_metadata(monkeypatch):
+    monkeypatch.setenv("PGHOST", "169.254.169.254")
+    r = _dsn("postgresql://u@/db", monkeypatch)
+    assert r.ok is False
+    assert "metadata" in (r.detail or ""), r.detail
+
+
+def test_a_query_host_private_address_is_still_probed(monkeypatch):
+    r = _dsn("postgresql://u@/db?host=10.0.0.5", monkeypatch)
+    assert "blocked" not in (r.detail or ""), r.detail
+    assert "connect refused in test" in (r.detail or ""), r.detail
+
+
+def test_a_service_dsn_is_refused_rather_than_probed(monkeypatch):
+    r = _dsn("postgresql:///?service=myservice", monkeypatch)
+    assert r.ok is False
+    assert "service=" in (r.detail or ""), r.detail
 
 
 @pytest.mark.parametrize("host", ["box..example.com", "a" * 64 + ".example.com"])

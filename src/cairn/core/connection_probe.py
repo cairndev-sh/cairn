@@ -30,7 +30,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
 
@@ -440,16 +440,40 @@ async def _ssh_probe(resolved: ResolvedConnection) -> ProbeResult:
         return ProbeResult(ok=False, status=0, detail=f"ssh: {type(exc).__name__}: {exc}")
 
 
-def _dsn_hosts(dsn: str) -> list[str]:
-    """Every host asyncpg dials from ``dsn``'s netloc, parsed as asyncpg parses it:
-    after the first ``@``, comma-separated, ``[v6]:port`` or ``host:port``, unquoted."""
-    netloc = urlparse(dsn).netloc
-    spec = netloc.partition("@")[2] if "@" in netloc else netloc
+def _split_host_list(spec: str) -> list[str]:
+    """Split a comma-separated host list the way asyncpg does: ``[v6]:port`` or
+    ``host:port``, then unquote."""
     hosts = []
     for part in spec.split(",") if spec else ():
+        part = part.strip()
+        if not part:
+            continue
         part = part[1:].partition("]")[0] if part.startswith("[") else part.partition(":")[0]
         hosts.append(unquote(part))
     return [h for h in hosts if h]
+
+
+def _dsn_hosts(dsn: str) -> list[str]:
+    """Every host asyncpg would dial from ``dsn``.
+
+    asyncpg 0.31.0 prefers, in order: the netloc hosts; else the ``host`` query
+    parameter (comma list); else ``PGHOST``. A ``service=`` DSN is handled by
+    the probe itself (we refuse it) rather than parsing ``pg_service.conf``.
+    """
+    parsed = urlparse(dsn)
+    netloc = parsed.netloc
+    spec = netloc.partition("@")[2] if "@" in netloc else netloc
+    hosts = _split_host_list(spec)
+    if hosts:
+        return hosts
+    # Query string may use ``?host=a,b`` when the netloc has no host (#287).
+    query_hosts = parse_qs(parsed.query).get("host") or []
+    for entry in query_hosts:
+        hosts.extend(_split_host_list(entry))
+    if hosts:
+        return hosts
+    pghost = os.environ.get("PGHOST") or ""
+    return _split_host_list(pghost)
 
 
 async def _dsn_probe(resolved: ResolvedConnection, provider: ProviderSpec) -> ProbeResult:
@@ -466,6 +490,13 @@ async def _dsn_probe(resolved: ResolvedConnection, provider: ProviderSpec) -> Pr
     dsn = dsn or resolved.config.get("dsn") or resolved.secrets.get("DSN") or ""
     if not dsn:
         return ProbeResult(ok=False, status=0, detail="no DSN configured")
+    # service= DSNs pull hosts from pg_service.conf — refuse rather than miss them.
+    if (parse_qs(urlparse(dsn).query).get("service") or [""])[0]:
+        return ProbeResult(
+            ok=False,
+            status=0,
+            detail="blocked: DSN service= entries are not probed (hosts come from pg_service.conf)",
+        )
     # A private Postgres IS the normal case (#1506) — metadata endpoints only.
     for _dsn_host in _dsn_hosts(dsn):
         blocked = host_block_reason(_dsn_host)
