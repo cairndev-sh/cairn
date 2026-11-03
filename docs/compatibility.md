@@ -33,8 +33,8 @@ for those operator kinds) and nothing else.
 - **Engines.** An engine is whatever passes the conformance suite; the suite may gain
   cases (engines must follow) but never drop a guarantee without an ADR.
 - **API.** oasdiff judges: additions pass; breaking changes fail without `api-break`.
-- **CLI.** Exit codes in use: 0 success · 1 failure · 2 usage/refusal · 3 policy/door
-  refusal · 130 interrupted. Changing a verb's meaning is breaking.
+- **CLI.** Exit codes in use: 0 success · 1 failure · 2 usage/refusal · 3 `cairn admin
+  connect` store mismatch · 130 interrupted. Changing a verb's meaning is breaking.
 - **Events.** New types/topics are additive; renames are breaking.
 
 ## Release discipline

@@ -10,6 +10,9 @@ import ast
 import re
 from pathlib import Path
 
+from typer.main import get_command
+
+from cairn.cli.main import app
 from cairn.cli.moved import MOVED
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -41,6 +44,19 @@ def test_no_string_in_the_code_names_a_command_that_is_gone() -> None:
                 continue
             found += [f"{path.relative_to(ROOT)}:{line}: {text[:100]!r}" for line, text in _strings(path)
                       if _names_a_gone_command(text)]
+    assert not found, "\n".join(found)
+
+
+def _help_texts(cmd) -> list[tuple[str, str]]:
+    name = cmd.name or "cairn"
+    found = [(name, cmd.help or ""), *((name, getattr(p, "help", None) or "") for p in cmd.params)]
+    for sub in getattr(cmd, "commands", {}).values():
+        found += _help_texts(sub)
+    return found
+
+
+def test_no_help_page_names_a_command_that_is_gone() -> None:
+    found = [f"{name}: {text[:100]!r}" for name, text in _help_texts(get_command(app)) if _names_a_gone_command(text)]
     assert not found, "\n".join(found)
 
 

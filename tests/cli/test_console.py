@@ -1,4 +1,4 @@
-"""#56 — the Textual console (`cairn remote console`).
+"""#56 — the Textual console (`cairn admin console`).
 
 Headless smoke + autocomplete contracts via Textual's run_test pilot. Skipped
 where the optional `tui` extra (textual + textual-autocomplete) isn't installed,
@@ -218,14 +218,14 @@ async def test_entity_rows_route_to_the_right_command(ask_provided):
 
 
 async def test_profile_doctor_targets_selected_profile_via_env():
-    """Profiles→Doctor runs `cairn doctor` with OBS_PROFILE pointed at the
+    """Profiles→Doctor runs `cairn setup --check` with OBS_PROFILE pointed at the
     selected profile file (doctor reads the profile from that env path)."""
     app = CairnConsole(endpoint=_EP, token=None)
     async with app.run_test():
         captured: dict = {}
         app._shell = lambda toks, **k: captured.update(toks=toks, **k)
         app._prof_action("doctor", "/x/secure.toml")
-        assert captured["toks"] == ["doctor"]
+        assert captured["toks"] == ["doctor"]  # `setup --check` by test_cli_calls_itself.py
         assert captured["env"] == {"CAIRN_PROFILE": "/x/secure.toml"}
 
 
@@ -396,18 +396,3 @@ async def test_run_form_validates_then_runs_with_typed_inputs():
         # valid → shells `run <ref> --input <tmp json>`
         app._run_with_contract("training/finetune", contract, {"dataset_path": "s3://d/t.jsonl"})
         assert seen and seen[0][:2] == ["run", "training/finetune"] and "--input" in seen[0]
-
-
-@pytest.mark.parametrize("toks, argv", [
-    (["ls"], ["pack", "ls"]),
-    (["connect", "test", "openai"], ["admin", "connect", "test", "openai"]),
-    (["validate", "."], ["pack", "check", "."]),
-    (["init", "pack", "x"], ["pack", "new", "pack", "x"]),
-    (["lock", "--check"], ["pack", "lock", "--check"]),
-    (["replay", "run-1"], ["status", "run-1", "--replay"]),
-    (["visualize", "template", "a/b"], ["pack", "show", "--graph", "a/b"]),
-    (["run", "a/b"], ["run", "a/b"]),
-    (["ask", "plan", "a/b"], ["ask", "plan", "a/b"]),
-])
-def test_the_command_bar_shells_out_to_the_current_spelling(toks, argv):
-    assert CairnConsole._cli_argv(toks) == argv

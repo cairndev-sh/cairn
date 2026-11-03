@@ -77,7 +77,7 @@ MOVED: dict[str, str] = {
     "remote pipelines": "`cairn status`",
     "remote presets": "`cairn admin preset ls`",
     "remote ps": "`cairn status`",
-    "remote reject": "`cairn decide reject`",
+    "remote reject": "`cairn decide <run> reject`",
     "remote status": "`cairn status <run>`",
     "remote submit": "`cairn run --skill`",
     "remote triggers": "`cairn admin trigger ls`",

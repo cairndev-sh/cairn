@@ -110,10 +110,10 @@ def _seed(env: dict[str, str]) -> None:
     the example pack from a checkout, plus the platform's scenarios when it is
     installed; each leaves one pipeline waiting at a person gate) run under the
     PINNED env — the data lands in dev.db, never in whatever the shell's .env
-    points at. ONE code path: `cairn demo` → `seed_demo_workspace`. Idempotent."""
+    points at. ONE code path: `cairn admin demo` → `seed_demo_workspace`. Idempotent."""
     cairn_bin = Path(sys.executable).with_name("cairn")
-    cmd = [str(cairn_bin), "demo"] if cairn_bin.exists() else [
-        sys.executable, "-P", "-m", "cairn.cli.main", "demo"]
+    cmd = [str(cairn_bin), "admin", "demo"] if cairn_bin.exists() else [
+        sys.executable, "-P", "-m", "cairn.cli.main", "admin", "demo"]
     typer.secho("seeding demo data into the dev store…", fg=typer.colors.GREEN)
     r = subprocess.run(cmd, env=env)
     if r.returncode:

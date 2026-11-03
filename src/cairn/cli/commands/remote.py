@@ -445,7 +445,6 @@ def _tail(endpoint: str, token: Optional[str], run_id: str, *, after_seq: int = 
 
 # ─── commands ──────────────────────────────────────────────────────
 
-_EP = typer.Option(None, "--endpoint", "-e", help="server URL (overrides profile/env)")
 _TOK = typer.Option(None, "--token", help="bearer token (overrides profile/env)")
 _PROF = typer.Option(None, "--profile", help="config profile name")
 
