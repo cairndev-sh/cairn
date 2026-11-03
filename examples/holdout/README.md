@@ -1,7 +1,7 @@
 # holdout example
 
 See the holdout door refuse training data that overlaps an eval set. No API key, no spend.
-It needs `cairndev` 0.5.1 or later, and a checkout of this repository for its files.
+It needs `cairndev` 0.5.0 or later, and a checkout of this repository for its files.
 
 ```bash
 export CAIRN_PACK_PATH=$PWD/examples/holdout
