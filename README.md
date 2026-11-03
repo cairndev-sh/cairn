@@ -200,13 +200,11 @@ you, and writes a hash-chained audit trail. No API key, no spend, about ten minu
 ```bash
 curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_EXTRAS=hello sh   # or: pip install 'cairndev[hello]'
 mkdir cairn-quickstart && cd cairn-quickstart
-curl -LsSfO https://raw.githubusercontent.com/cairndev-sh/cairn/main/examples/hello-cairn/data/sample.jsonl
 curl -LsSfO https://raw.githubusercontent.com/cairndev-sh/cairn/main/examples/hello-cairn/profiles/hello.toml
 export CAIRN_PROFILE=$PWD/hello.toml                        # the example's profile: audit trail on
 
 cairn setup --port 8471                                     # local engine on SQLite, signed in as dev
-cairn run hello-cairn/profile-and-publish \
-  -i path=$PWD/sample.jsonl --environment sandbox
+cairn run hello-cairn/profile-and-publish --preset sample --environment sandbox
 ```
 
 The pipeline profiles the file, passes its **data gate** (the profile must pass and

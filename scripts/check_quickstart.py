@@ -13,9 +13,9 @@ not a skip. In a scratch directory and HOME, with no API key in the environment,
     decision a person made;
   * stops the engine it started, and checks that its process is gone.
 
-What it does not run: the install line (the check installs the checkout instead), and the two
-``curl`` lines, which fetch the example's files from ``main`` on GitHub; the same files are copied
-from this checkout. Exit 0 only if every step held.
+What it does not run: the install line (the check installs the checkout instead), and the ``curl``
+line, which fetches the example's profile from ``main`` on GitHub; the same file is copied from
+this checkout. Exit 0 only if every step held.
 
     .venv/bin/python scripts/check_quickstart.py [--cairn .venv/bin/cairn]
 """

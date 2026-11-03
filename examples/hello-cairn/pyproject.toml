@@ -52,6 +52,7 @@ bypass-selection = true
 "pack.toml" = "cairn_pack_hello/pack.toml"
 "hooks.py" = "cairn_pack_hello/hooks.py"
 "pipelines" = "cairn_pack_hello/pipelines"
+"presets" = "cairn_pack_hello/presets"
 "flows" = "cairn_pack_hello/flows"
 "rag" = "cairn_pack_hello/rag"
 "data" = "cairn_pack_hello/data"
@@ -60,7 +61,7 @@ bypass-selection = true
 "tools" = "cairn_pack_hello/tools"
 
 [tool.hatch.build.targets.sdist]
-include = ["__init__.py", "pack.toml", "hooks.py", "pipelines", "flows", "rag", "data", "policies", "profiles",
+include = ["__init__.py", "pack.toml", "hooks.py", "pipelines", "presets", "flows", "rag", "data", "policies", "profiles",
            "tools", "README.md", "pyproject.toml"]
 
 # In the repository's uv workspace the engine is the workspace root, not a PyPI wheel.
