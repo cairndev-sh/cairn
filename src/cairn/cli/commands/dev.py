@@ -63,11 +63,12 @@ def dev_env(port: int, db_path: Optional[str] = None, *, example_pack: bool = Tr
         env[k] = ""
         if k.startswith(_settings.ENV_PREFIX):  # an OBS_* spelling would otherwise fill it (ADR-0122)
             env[_settings.legacy_name(k)] = ""
+    example = _example_pack_dir() if example_pack else None
     if not (_settings.getenv("CAIRN_PROFILE", "", environ=env) or "").strip():  # the server refuses without one (#2296)
         import cairn.profiles as profiles_pkg
 
-        env["CAIRN_PROFILE"] = str(Path(profiles_pkg.__file__).parent / "local-dev.toml")
-    example = _example_pack_dir() if example_pack else None
+        env["CAIRN_PROFILE"] = str(Path(example) / "profiles" / "hello.toml") if example is not None else str(
+            Path(profiles_pkg.__file__).parent / "local-dev.toml")  # the example needs what its own profile names
     if example is not None:  # #2418 — the seed and the engine both see the example pack
         from cairn.core.pack.loader import DEV_PACK_PATH_ENV  # noqa: PLC0415 - keep `cairn --help` light
 
