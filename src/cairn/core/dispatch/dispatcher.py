@@ -52,7 +52,7 @@ from cairn.core.storage import (
     new_run_id,
 )
 from cairn.core.storage.protocols import PIPELINE_ID_KEY, _now
-from cairn.core.engine.runner import Runner
+from cairn.core.engine.runner import Runner, budget_exceeded_output, cost_cap_reason, template_cost_cap
 from cairn.core.engine.schema import TriggerEvent
 from cairn.core.obs.metrics import record_run
 from cairn.core.obs.telemetry import current_trace_id, span
@@ -162,16 +162,6 @@ def _aggregate_cost(payloads: list[dict]) -> dict[str, float]:
         "storage_usd": round(storage, 6),
         "total_usd": round(llm + gpu + storage, 6),
     }
-
-
-def _template_cost_cap(compiled: Any) -> Optional[float]:
-    """A compiled template's ``budget.max_cost_usd``, or ``None``."""
-    return getattr(getattr(getattr(compiled, "spec", None), "budget", None), "max_cost_usd", None)
-
-
-def _budget_exceeded_output(reason: str) -> dict[str, Any]:
-    """The output of a run a cost cap stopped, which `cairn gate` and scoring read."""
-    return {"type": "budget_exceeded", "budget_exceeded": True, "reason": reason, "output": ""}
 
 
 async def _audit_over_budget(run: Any, template_ref: str, reason: str, cost: dict[str, Any]) -> None:
@@ -545,9 +535,14 @@ class RunDispatcher:
                 # counterfactual (#481 Slice F) — only on terminal completion,
                 # same guard as the terminal hooks below.
                 cost_baseline = _cost_baseline_best_effort(cost) if not paused else None
+                # #417: a run a cost cap stopped fails, as a capped template leg does.
+                capped = None if paused else next((r for r in results if cost_cap_reason(getattr(r, "raw_output", None))), None)
+                over_budget = cost_cap_reason(capped.raw_output) if capped else ""
+                terminal = "failed" if over_budget else "done"
                 await self.store.update(
                     inv.id,
-                    status=pause_status if paused else "done",
+                    status=pause_status if paused else terminal,
+                    **({"error": over_budget} if over_budget else {}),
                     ended_at=ended_at,
                     results=summaries,
                     # Full structured result(s) → the DB result backend (#76).
@@ -559,14 +554,18 @@ class RunDispatcher:
                     cost_baseline_usd=cost_baseline,
                     matched_skills=len(summaries),
                 )
+                if over_budget:
+                    with workspace_scope(inv.workspace_id):
+                        await _audit_over_budget(inv, capped.template_name, over_budget, cost)
                 if not paused:  # fleet metric on terminal completion (#242 P2)
-                    record_run("done", workspace=inv.workspace_id,
+                    record_run(terminal, workspace=inv.workspace_id,
                                duration_ms=_duration_ms(started_at, ended_at), cost=cost)
                 await self._emit(
                     inv.id,
-                    (pause_status if paused else "done"),
+                    (pause_status if paused else terminal),
                     {"matched_skills": len(summaries),
-                     **({"approval": pending_approval} if pending_approval is not None else {})},
+                     **({"approval": pending_approval} if pending_approval is not None else {}),
+                     **({"error": over_budget} if over_budget else {})},
                     pipeline_id=inv.bundle_pipeline_id,
                 )
                 logger.info(
@@ -574,8 +573,8 @@ class RunDispatcher:
                     "awaiting approval" if paused else "finished",
                     inv.id, len(summaries),
                 )
-                if not paused:  # scoring (#474/#480, ADR-0060 D1) — terminal "done" only
-                    await self._terminal_hooks(inv.id)
+                if not paused:  # scoring (#474/#480, ADR-0060 D1) — not a pause
+                    await self._terminal_hooks(inv.id, status=terminal)
         except asyncio.CancelledError:
             if self._preserve_on_shutdown(inv.id):
                 raise
@@ -1218,7 +1217,7 @@ class RunDispatcher:
                                 co.setdefault(_op, {}).setdefault("model", eval_model)
                         run_inputs = {**inputs, "config_overrides": co}
                     from cairn.core.operator.runtime import launch_scope  # noqa: PLC0415 — ADR-0120 D7 (#2455)
-                    run_cap = _template_cost_cap(compiled)
+                    run_cap = template_cost_cap(compiled)
                     over_budget = ""
                     with obs.cost_scope(
                         f"run-{template_ref}", max_cost_usd=run_cap
@@ -1233,7 +1232,7 @@ class RunDispatcher:
                             # #395: a cap is a governance stop, so the run fails and
                             # its pipeline stops. The output stays for what reads it.
                             over_budget = str(be)
-                            output = _budget_exceeded_output(over_budget)
+                            output = budget_exceeded_output(over_budget)
                     run_llm_usd = round(cost_ctx.cost_usd, 6)
 
                 paused = isinstance(output, dict) and "__interrupt__" in output
@@ -1450,7 +1449,7 @@ class RunDispatcher:
                 result = await runtime.resume(graph, decision, run_id=run_id)
             except obs.BudgetExceeded as be:
                 over_budget = str(be)
-                result = _budget_exceeded_output(over_budget)
+                result = budget_exceeded_output(over_budget)
         run_llm_usd = round(cost_ctx.cost_usd, 6)
         still_paused = isinstance(result, dict) and "__interrupt__" in result
         # ADR-0065: if the resume re-paused on a remote job, that's RUNNING, not
@@ -1561,7 +1560,7 @@ class RunDispatcher:
         graph = getattr(compiled.runnable, "_compiled_graph", None)
         if graph is None:
             raise ValueError(f"template {template_name!r} has no compiled graph")
-        graph._cairn_cost_cap = _template_cost_cap(compiled)
+        graph._cairn_cost_cap = template_cost_cap(compiled)
         return graph
 
     def launch_handle(self):
