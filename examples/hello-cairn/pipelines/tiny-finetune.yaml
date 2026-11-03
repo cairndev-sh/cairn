@@ -41,6 +41,7 @@ inputs:
   steps: {type: int, default: 8, description: "Optimizer steps."}
   max_samples: {type: int, default: 48, description: "At most this many rows are read; the last row in every eight is held out for the loss gate and the rest train the adapter."}
   lora_rank: {type: int, default: 8, description: "LoRA rank r."}
+  output_dir: {type: str, default: "", description: "Where to keep the adapter on the engine's box: a new directory for each run, because a later run writes over it. Empty keeps it in the engine's temp workdir, which the system can delete, so the promoted tag and the model card then name a path that may disappear."}
   target_loss: {type: float, default: 12.0, description: "The loss gate passes when the loss on the held-out rows (rows the adapter did not train on) is at or below this."}
   expectation:
     type: dict
@@ -87,6 +88,7 @@ steps:
       steps: $input.steps
       max_samples: $input.max_samples
       lora_rank: $input.lora_rank
+      output_dir: $input.output_dir
 
   # ── the loss gate ─────────────────────────────────────────────────────────
   # monitor/threshold says whether the loss crossed the target (gt: above it);
