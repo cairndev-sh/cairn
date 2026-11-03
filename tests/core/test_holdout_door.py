@@ -622,6 +622,7 @@ _NESTED = [pytest.param(lambda c: {"params": {"eval_cutoff": c}}, id="nested"),
 def _says_the_cutoff_is_invalid(text: str) -> None:
     assert "eval_cutoff" in text and "ISO-8601" in text and "'2026-06-01'" in text
     assert "nothing was compared" in text and "overlaps" not in text
+    assert "last tuesday" not in text  # the reason reaches the audit row, which carries no inputs
 
 
 async def _assert_the_launch_is_refused(inputs) -> None:
