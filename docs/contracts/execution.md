@@ -151,7 +151,7 @@ executor then resolves its `dataset:` refs to the durable copy when the workspac
 registration has one, and the SSH engine refuses a version whose only location is a
 control-plane path before submit (`operator_dataflow/engines_ssh.py` `validate`).
 Doors that refuse before a record exists: job-channel, SkyPilot, pull-worker
-(`dispatcher.py:888-911`, `pipeline_launch.py:283`).
+(`dispatcher.py:895-946`, `pipeline_launch.py:697`).
 
 ## Failure semantics of a template operation node (CURRENT)
 An in-process operator that raises inside a template operation node is degraded to a finding
