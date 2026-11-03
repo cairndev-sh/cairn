@@ -153,9 +153,8 @@ $ test "${#saved}" -eq 64 && cairn admin lineage --json --audit-log audit.jsonl 
 A log that no longer ends at that hash exits 2, with `chain_ok: false`. How you
 call the check matters:
 
-- **Use the full 64-character hash.** `--expect-head` accepts any prefix, and a short
-  one can be matched: with rows cut, trying values in one field of the new last row
-  matches 4 characters quickly, and the check exits 0.
+- **Use the full 64-character hash.** `--expect-head` also accepts a prefix of at least 12
+  characters, but a prefix is a weaker check. An empty or shorter value is refused with exit 2.
 - **Don't let the value come out empty.** An empty or blank value compares nothing, so
   a log with rows cut exits 0. The `test` above refuses one.
 - **Pass `--json`.** Without it, a log with no lineage records exits 1 even when the
