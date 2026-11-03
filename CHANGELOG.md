@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows [Kee
 ## [Unreleased]
 
 ### Added
+- The example pack ships a `sample` preset, so the Quickstart runs on its own rows with `--preset sample`, from an installed wheel, without downloading a file. `cairn-pack-hello` needs the release that carries it. (#317)
+- The example pack's `tiny-finetune` takes an `output_dir`, so its promoted adapter can live somewhere the system won't delete. Without it the adapter stays in the engine's temp workdir, and the README says so. (#253)
 - A page on the holdout door and eval cutoff, and `examples/holdout`, which you can run to see it refuse. The `noop` stage takes `register_role`, so a file can be registered as a test set without a pack of your own. (#333)
 
 ## [0.5.0] - 2026-11-03

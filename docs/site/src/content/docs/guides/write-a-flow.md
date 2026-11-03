@@ -167,6 +167,36 @@ An **agentic flow** is a markdown file, `flows/<name>.md`, run by a
 `cairn run <pack>/<flow> --input in.json --dry-run` (or `--mock`,
 `--interactive`); see [Flows](/concepts/flows/#the-dev-loop).
 
+## What was recorded
+
+The launch in step 4 is a real pipeline run, so it leaves a record in the engine's
+store. The dev loop for an agentic flow (`cairn run <pack>/<flow> --dry-run`,
+`--mock` or `--interactive`) leaves none.
+
+**The pipeline record** (`pl_…`) holds the plan with its one leg, `keep`, the
+inputs `source` and `register`, and the leg's status and run id.
+`cairn status <pipeline_id> --json` prints it. `keep-file` declares no gate,
+so no one is asked and the record holds no approver.
+
+**The run.** One: `run-flow-acme--keep-…`, the flow leg, with its status and
+cost. `cairn status <run-id> --logs` prints its event log.
+
+**Artifacts.** The `noop` stage registers `source` as an artifact whose id is
+its content hash, and as a version of the dataset `register` names
+(`acme-sample` by default). The leg's findings hold `artifact_ids`,
+`dataset_versions`, `noop_content_hash`, `noop_register_as`, `noop_bytes`,
+`noop_rows` and `stages_done`/`stages_total`, which
+`cairn status <pipeline_id> --results` prints. Running the pipeline again on an unchanged
+file adds no version. A stage of your own adds its results to the same findings
+(`acme_count_rows`), and a stage that returns `outputs: [...]` registers each of its
+products.
+
+**Audit rows.** Only when the engine's profile binds `audit.sink`, which
+`local-dev` does not and `secure` and the example's `hello.toml` do. With a sink the log
+holds `pipeline.admitted`, `leg.submitted`, `leg.finished` and
+`pipeline.finished`. There is no gate and no `audit/store` leg, so there are no
+decision rows. `cairn admin audit verify` checks the chain.
+
 ## Next
 
 - [Write a pipeline](/guides/write-a-pipeline/): put flows and gates together.

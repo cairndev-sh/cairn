@@ -30,6 +30,7 @@ from pathlib import Path
 os.environ.setdefault("OPENAI_API_KEY", "sk-test-dummy")
 
 import pytest
+import yaml
 
 from cairn.core import pack as pack_api
 from cairn.core.dataflow.defs import load_flow_defs, parse_flow_def
@@ -320,3 +321,46 @@ async def test_the_same_pipeline_runs_once_its_cap_covers_the_estimate(hello_pac
         assert len(engine_submits) == 1
     finally:
         bridge.stop()
+
+
+# ── the Quickstart's data comes with the pack (#317) ────────────────────
+
+
+def test_the_sample_preset_is_in_the_wheel_and_names_a_file_in_the_pack():
+    pyproject = (PACK_DIR / "pyproject.toml").read_text()
+    assert '"presets" = "cairn_pack_hello/presets"' in pyproject and '"data" = "cairn_pack_hello/data"' in pyproject
+    preset = yaml.safe_load((PACK_DIR / "presets" / "profile-and-publish.yaml").read_text())
+    assert preset["pipeline"] == "hello-cairn/profile-and-publish"
+    sample = next(p for p in preset["presets"] if p["name"] == "sample")
+    assert (PACK_DIR / sample["inputs"]["path"].removeprefix("$pack/")).is_file()
+
+
+def test_the_quickstarts_download_no_sample_data():
+    for page in (PACK_DIR.parents[1] / "README.md", PACK_DIR.parents[1] / "docs/site/src/content/docs/quickstart.md"):
+        text = page.read_text()
+        assert "data/sample.jsonl" not in text and "--preset sample" in text
+
+
+# ── where tiny-finetune's adapter lives (#253) ──────────────────────────
+
+
+def test_tiny_finetune_can_keep_its_adapter_outside_the_temp_workdir():
+    pipeline = _tiny_finetune_def()
+    train = next(s for s in pipeline.steps if s.id == "train")
+    assert train.inputs["output_dir"] == "$input.output_dir"
+    flow = parse_flow_def((PACK_DIR / "flows" / "lora.yaml").read_text(), where="lora.yaml")
+    assert flow.stages[0].config["output_dir"] == "$config.output_dir"
+
+
+def test_the_readme_says_where_the_adapter_lives():
+    readme = (PACK_DIR / "README.md").read_text()
+    assert "temp workdir" in readme and "-i output_dir=" in readme
+
+
+def test_an_empty_output_dir_means_the_workdir(tmp_path):
+    from operator_train_local.stages import train_lora
+
+    data = PACK_DIR / "data" / "train.jsonl"
+    out = train_lora(tmp_path, {"dataset": str(data), "base_model": "m", "output_dir": "", "mock": True}, [])
+    assert out["mock"] is True
+

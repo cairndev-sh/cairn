@@ -106,3 +106,4 @@ are part of cairn-platform, a separate product whose source isn't public.
 - [Quickstart](/quickstart/): install cairn, launch a pipeline and approve a gate.
 - [What is cairn](/): the model in one page.
 - [Install and deploy](/install/): run cairn for your team.
+- [Troubleshooting](/troubleshooting/): a message you didn't expect, and what to do.

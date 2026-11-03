@@ -125,6 +125,35 @@ the process environment; read them from `ctx.secrets`.
 The console's integrations page, and the operators that train or serve on GPU
 providers, are part of cairn-platform.
 
+## What was recorded
+
+This guide launches no pipeline, so it leaves no pipeline record, run or
+artifact, and `cairn admin connect add`, `test` and `rm` write no audit row. What
+it leaves is in the store the engine reads (`CAIRN_STORAGE`):
+
+- **The connection**: its name, kind, settings and the *names* of its secrets.
+  `connect add` also runs the health check once and keeps the result, and
+  `connect test` keeps a new one. `cairn admin connect ls` prints the names,
+  kinds and secret keys. A secret value is never written; `rm` removes
+  the reference.
+
+What a connection puts on the records of later runs:
+
+- **The pipeline and run records** hold the connection's *name*, such as
+  `hello-ssh`, and never the credential, which is resolved when the leg runs.
+  `cairn status <run-id> --json` prints a run's record, with its cost split into model
+  calls, GPU and storage.
+- **Audit rows**, when the profile binds `audit.sink` (`local-dev` does not,
+  `secure` and the example's `hello.toml` do). A direct model completion writes
+  `llm.complete`, with the model, the number of messages and the token counts,
+  and no prompt or reply text. An `mcp/call` writes `tool.call`, with the tool and the outcome. A
+  leg's `leg.finished` row has its `llm_usd`. Model calls that a template's own
+  prompt and agent nodes make write no row yet. The cost of those calls is still
+  on the run.
+
+[What a pipeline run writes](/concepts/runs/#what-a-pipeline-run-writes) lists the rows,
+and `cairn admin audit verify` checks the chain.
+
 ## Next
 
 - [Capabilities and environments](/concepts/capabilities/): how operators pick up a provider.

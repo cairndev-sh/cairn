@@ -1,0 +1,7 @@
+# The example's own sample rows, on any machine: `cairn run hello-cairn/profile-and-publish
+# --preset sample`. `$pack/` names a file inside the pack, so this works from an installed wheel.
+pipeline: hello-cairn/profile-and-publish
+presets:
+  - name: sample
+    inputs:
+      path: $pack/data/sample.jsonl

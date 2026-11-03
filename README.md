@@ -92,9 +92,9 @@ Walkthrough: [Fine-tune a model](https://docs.cairndev.sh/guides/fine-tune-a-mod
 This is what separates cairn from a bare agent loop or a black-box tool — the
 work runs behind deterministic guardrails you can inspect afterward:
 
-- **Hard budget** — a template's model calls stop at its `budget.max_cost_usd`, or at the
+- **Budget cap** — a template's model calls stop at its `budget.max_cost_usd`, or at the
   deployment's `MAX_COST_USD` ($1 by default) if that's lower: the call that crosses the cap
-  has been paid for, the leg fails, and the pipeline stops. A flow checks its own
+  has been paid for, calls already in flight can pass it further, the leg fails, and the pipeline stops. A flow checks its own
   `budget.max_cost_usd` between stages, and a leg in a series reserves its estimate first.
 - **Holdout door** — a training dataset version that shares rows with a registered test set
   is refused at launch, and the refusal names the rows.
@@ -202,13 +202,11 @@ you, and writes a hash-chained audit trail. No API key, no spend, about ten minu
 ```bash
 curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_EXTRAS=hello sh   # or: pip install 'cairndev[hello]'
 mkdir cairn-quickstart && cd cairn-quickstart
-curl -LsSfO https://raw.githubusercontent.com/cairndev-sh/cairn/main/examples/hello-cairn/data/sample.jsonl
 curl -LsSfO https://raw.githubusercontent.com/cairndev-sh/cairn/main/examples/hello-cairn/profiles/hello.toml
 export CAIRN_PROFILE=$PWD/hello.toml                        # the example's profile: audit trail on
 
 cairn setup --port 8471                                     # local engine on SQLite, signed in as dev
-cairn run hello-cairn/profile-and-publish \
-  -i path=$PWD/sample.jsonl --environment sandbox
+cairn run hello-cairn/profile-and-publish --preset sample --environment sandbox
 ```
 
 The pipeline profiles the file, passes its **data gate** (the profile must pass and
