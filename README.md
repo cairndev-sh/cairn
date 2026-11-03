@@ -30,7 +30,8 @@
   <a href="https://docs.cairndev.sh/reference/catalog/">Pipeline catalog</a> ·
   <a href="https://docs.cairndev.sh/concepts/gates/">Gates and approvals</a> ·
   <a href="https://github.com/cairndev-sh/cairn-extensions">Extensions</a> ·
-  <a href="https://github.com/cairndev-sh/cairn/discussions">Discussions</a>
+  <a href="https://github.com/cairndev-sh/cairn/discussions">Discussions</a> ·
+  <a href="https://discord.gg/CPyC6bzTJW">Discord</a>
 </p>
 
 <p align="center">
