@@ -156,6 +156,17 @@ trainer holds out the last row in every eight (6 of the 48 rows in `data/train.j
 all distinct from the 42 it trains on) and reports its loss over those rows only;
 `promote` and `review` each wait for a person.
 
+**Where the adapter lives:** in the engine's temp workdir, unless you say otherwise. The system
+can delete that directory, and then the promoted tag and the model card name a path that's gone.
+To keep the adapter, give each run its own directory on the engine's box:
+
+```bash
+cairn run hello-cairn/tiny-finetune --environment sandbox -i output_dir=$HOME/adapters/run-1
+```
+
+Use a new directory for each run, because a later run writes over it. On more than one machine,
+`CAIRN_ARTIFACT_STORE` also copies the adapter to an object store.
+
 Until the train-local pack was merged (hello-cairn WP3), tiny-finetune was pending in two
 strict xfails and one strict list entry. WP3 removed all three in the change that added the
 pack: `test_tiny_finetune_is_runnable_on_the_public_core`
