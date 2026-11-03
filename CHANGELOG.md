@@ -4,6 +4,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+- A GitHub Action for gating CI on a check: `uses: cairndev-sh/cairn/actions/gate@<ref>` installs a pinned `cairndev`, runs `cairn run --check` and fails the job with the check's own exit code, 2 included. Inputs `check`, `set`, `fail-on`, `working-directory`, `cairndev-version`, `python-version`; outputs `verdict`, `exit-code`, `report`. (#350)
+
 ## [0.5.0] - 2026-11-03
 
 The old command names are gone, and a cost cap now stops a run.
