@@ -141,6 +141,7 @@ export default defineConfig({
             { label: 'Install and deploy', slug: 'install' },
             { label: 'FAQ', slug: 'faq' },
             { label: 'Troubleshooting', slug: 'troubleshooting' },
+            { label: 'Releases', link: '/releases/' },
           ],
         },
         {
