@@ -5,6 +5,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ## [Unreleased]
 ### Added
 - The example pack's `over-budget` pipeline shows a budget refusing a run before its engine starts, with no key and no spend, and `cairn run` now prints why a leg failed (#368).
+- The failing and warning rows of `cairn setup --check` now end with `— fix:` and the command or setting that resolves it, on the same line, so the failures `cairn setup` prints carry it too. Rows that read `unset (optional)` are unchanged.
 
 ### Fixed
 - `cairn deploy doctor --values` no longer fails a Helm values file with `ingress.enabled: false` and no host for a missing `CADDY_DOMAIN`; the chart renders that file, and an enabled ingress with no host still fails (#76).
