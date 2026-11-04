@@ -5,7 +5,7 @@ A plain LoRA fine-tune: ``transformers`` loads the base model, ``peft`` wraps it
 adapter (target modules inferred per architecture), and a torch AdamW loop runs ``steps``
 optimizer steps over batches of the training rows. On a machine without CUDA it is the fp32
 CPU run it always was; with ``device``/``precision`` at ``auto`` it uses a CUDA GPU when one
-is available, in fp16 or bf16 by the GPU's compute capability (ADR-0166). No ``Trainer``, no
+is available, in fp16 or bf16 by the GPU's compute capability (ADR-0167). No ``Trainer``, no
 ``accelerate``, no ``trl``, no ``bitsandbytes``: the point is a real loss curve and a real
 adapter on any laptop or a single GPU, in seconds on the ``sshleifer/tiny-gpt2`` stand-in and
 minutes on the ``Qwen/Qwen2.5-0.5B`` default.
@@ -61,12 +61,14 @@ def require_train_stack() -> None:
         raise TrainStackMissing(f"train-local needs the training stack, and {e.name!r} is not importable: "
                                 f"{INSTALL_HINT}") from e
 
+
 # ── device and precision ─────────────────────────────────────────────────────
+
 def resolve_device(device: str = "auto"):
     """The ``torch.device`` to train on. ``auto`` is CUDA when it is available and the CPU
-        otherwise (never MPS: a Mac keeps the CPU behaviour it had); naming an unavailable device
-        raises instead of silently falling back."""
-    import torch
+    otherwise (never MPS: a Mac keeps the CPU behaviour it had); naming an unavailable device
+    raises instead of silently falling back."""
+    import torch  # noqa: PLC0415 - optional dependency: the [train] extra
 
     if device == "auto":
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -78,10 +80,11 @@ def resolve_device(device: str = "auto"):
         raise ValueError(f"unknown device {device!r}: use auto, cpu, cuda or mps")
     return torch.device(device)
 
+
 def resolve_dtype(precision: str, device) -> tuple[Any, str]:
     """``(torch dtype, name)`` for ``precision`` on ``device``. ``auto`` is bf16 on a CUDA GPU
-    with native bf16 (compute capability 8.0+, Ampere and later), fp16 on an older one (a T4), and fp32 anywhere
-    else. fp16 and bf16 are refused off CUDA."""
+    with native bf16 (compute capability 8.0+, Ampere and later), fp16 on an older one (a T4),
+    and fp32 anywhere else. fp16 and bf16 are refused off CUDA."""
     import torch  # noqa: PLC0415 - optional dependency: the [train] extra
 
     if precision == "auto":
@@ -99,6 +102,7 @@ def resolve_dtype(precision: str, device) -> tuple[Any, str]:
         raise ValueError(f"precision {precision!r} needs a CUDA device; this run is on {device.type!r}")
     return dtypes[precision], precision
 
+
 def _autocast(device, dtype):
     """Mixed-precision context for the forward pass; a no-op at fp32."""
     import contextlib  # noqa: PLC0415
@@ -108,6 +112,8 @@ def _autocast(device, dtype):
     if dtype == torch.float32:
         return contextlib.nullcontext()
     return torch.autocast(device_type=device.type, dtype=dtype)
+
+
 # ── data ─────────────────────────────────────────────────────────────────────
 
 def load_texts(dataset: str, max_samples: int) -> list[str]:
@@ -202,6 +208,7 @@ def _mean_loss(model: Any, tokenizer: Any, texts: list[str], max_seq_len: int,
                dtype=None) -> tuple[float, int]:
     """Token-weighted mean causal-LM loss over ``texts`` and the non-padding tokens scored."""
     import torch  # noqa: PLC0415 - optional dependency: the [train] extra
+
     device = device if device is not None else torch.device("cpu")
     model.eval()
     total, targets, tokens = 0.0, 0, 0
@@ -326,12 +333,12 @@ def evaluate(*, adapter_path: str, base_model: str, dataset: str, max_samples: i
     """Load ``base_model`` with the adapter at ``adapter_path`` and score the first
     ``max_samples`` rows of ``dataset``."""
     require_train_stack()
-    dev = resolve_device(device)
-    dtype, _ = resolve_dtype(precision, dev)
     from peft import PeftModel  # noqa: PLC0415 - optional dependency: the [train] extra
 
     if not Path(adapter_path).is_dir():
         raise FileNotFoundError(f"adapter {adapter_path!r}: no such directory")
+    dev = resolve_device(device)
+    dtype, _ = resolve_dtype(precision, dev)
     texts = load_texts(dataset, max_samples)
     tokenizer, model = _load(base_model, dev, dtype)
     model = PeftModel.from_pretrained(model, adapter_path)

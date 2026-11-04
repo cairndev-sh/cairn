@@ -18,6 +18,7 @@ DEFAULT_BASE_MODEL = "Qwen/Qwen2.5-0.5B"
 Device = Literal["auto", "cpu", "cuda", "mps"]
 Precision = Literal["auto", "fp32", "fp16", "bf16"]
 
+
 class TrainLoraInput(BaseModel):
     """What to fine-tune, on what, and how long: a LoRA adapter over base_model trained on the
     dataset's {"text": ...} rows."""
@@ -72,6 +73,7 @@ class EvalLossInput(BaseModel):
     device: Device = Field("auto", description="Where to run: auto is CUDA when available, else the CPU.")
     precision: Precision = Field("auto", description="Weights and compute dtype: auto is bf16 or fp16 on "
                                                      "CUDA (by GPU), fp32 elsewhere.")
+
 
 class EvalLossOutput(BaseModel):
     eval_loss: float = Field(..., description="Mean loss over the scored rows.")

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "contract://train.finetune.input/1.1.0",
+  "$id": "contract://train.finetune.input/1.0.0",
   "description": "What to fine-tune, on what, and how long: a LoRA adapter over base_model trained on the dataset's {\"text\": ...} rows.",
   "properties": {
     "dataset": {
@@ -36,20 +36,6 @@
       "default": null,
       "description": "Where the adapter is written; the provider chooses when unset.",
       "title": "Output Dir"
-    },
-    "device": {
-      "default": "auto",
-      "description": "Where to run: auto is CUDA when available, else the CPU.",
-      "enum": ["auto", "cpu", "cuda", "mps"],
-      "title": "Device",
-      "type": "string"
-    },
-    "precision": {
-      "default": "auto",
-      "description": "Weights and compute dtype: auto is bf16 or fp16 on CUDA (by GPU), fp32 elsewhere.",
-      "enum": ["auto", "fp32", "fp16", "bf16"],
-      "title": "Precision",
-      "type": "string"
     }
   },
   "required": ["dataset"],

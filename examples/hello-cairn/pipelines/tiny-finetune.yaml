@@ -25,7 +25,7 @@
 # The training stack is the `[train]` extra of cairn-operator-train-local (torch,
 # transformers, peft, datasets). `device` and `precision` (both `auto`) train on a CUDA
 # GPU when one is available, fp16 or bf16 by the GPU, and on the CPU in fp32 otherwise
-# (ADR-0166). `base_model` defaults to the
+# (ADR-0167). `base_model` defaults to the
 # stand-in `sshleifer/tiny-gpt2` (seconds); `-i base_model=Qwen/Qwen2.5-0.5B` trains
 # the ADR's default model in minutes.
 name: tiny-finetune

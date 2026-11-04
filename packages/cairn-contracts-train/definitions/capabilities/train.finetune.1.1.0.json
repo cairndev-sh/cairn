@@ -1,0 +1,10 @@
+{
+  "format": "cairn.capability/1",
+  "id": "train.finetune",
+  "revision": "1.1.0",
+  "summary": "Fine-tune a causal language model with a LoRA adapter on a JSONL of {\"text\": ...} rows and return where the adapter landed, its train and held-out eval loss and the tokens it saw. The weights never cross the control plane: the adapter travels as a path.",
+  "input": "contract://train.finetune.input/1.1.0",
+  "configuration": "contract://train.finetune.configuration/1.0.0",
+  "output": "contract://train.finetune.output/1.0.0",
+  "report": "contract://train.finetune.report/1.0.0"
+}

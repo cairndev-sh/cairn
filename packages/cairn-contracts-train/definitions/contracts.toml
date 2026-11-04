@@ -6,13 +6,13 @@ version = "1.1.0"
 
 [[definitions]]
 id = "train.finetune"
-revision = "1.1.0"
+revision = "1.0.0"
 kind = "capability"
 path = "capabilities/train.finetune.json"
 
 [[definitions]]
 id = "train.finetune.input"
-revision = "1.1.0"
+revision = "1.0.0"
 kind = "schema"
 path = "schemas/train.finetune.input.json"
 
@@ -30,13 +30,13 @@ path = "schemas/train.finetune.output.json"
 
 [[definitions]]
 id = "train.eval_loss"
-revision = "1.1.0"
+revision = "1.0.0"
 kind = "capability"
 path = "capabilities/train.eval_loss.json"
 
 [[definitions]]
 id = "train.eval_loss.input"
-revision = "1.1.0"
+revision = "1.0.0"
 kind = "schema"
 path = "schemas/train.eval_loss.input.json"
 
@@ -63,3 +63,29 @@ id = "train.eval_loss.report"
 revision = "1.0.0"
 kind = "report"
 path = "reports/train.eval_loss.report.json"
+
+# ADR-0167 — train.finetune and train.eval_loss 1.1.0: their input schemas add `device` and
+# `precision` (both default `auto`). Additive; every earlier file above is unchanged.
+[[definitions]]
+id = "train.finetune"
+revision = "1.1.0"
+kind = "capability"
+path = "capabilities/train.finetune.1.1.0.json"
+
+[[definitions]]
+id = "train.finetune.input"
+revision = "1.1.0"
+kind = "schema"
+path = "schemas/train.finetune.input.1.1.0.json"
+
+[[definitions]]
+id = "train.eval_loss"
+revision = "1.1.0"
+kind = "capability"
+path = "capabilities/train.eval_loss.1.1.0.json"
+
+[[definitions]]
+id = "train.eval_loss.input"
+revision = "1.1.0"
+kind = "schema"
+path = "schemas/train.eval_loss.input.1.1.0.json"

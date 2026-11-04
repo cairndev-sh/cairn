@@ -609,6 +609,14 @@
    "version": "1.0.0"
   },
   {
+   "digest": "d8fc495b423faa7853d8fdfdda818ac9f3bbf6cd1c6f7c65e4d26d4b351fff2a",
+   "distribution": "cairn-contracts-train",
+   "id": "train.eval_loss",
+   "kind": "capability",
+   "revision": "1.0.0",
+   "version": "1.1.0"
+  },
+  {
    "digest": "18782066c909fd64e4956904d97d53d9fd76cbbe5fba463fe45e1dd511d60784",
    "distribution": "cairn-contracts-train",
    "id": "train.eval_loss",
@@ -620,6 +628,14 @@
    "digest": "d8ddff87751a5297c5e40e24598d4d3c9d3f1c7bc43a994e5dd8976de372a0b0",
    "distribution": "cairn-contracts-train",
    "id": "train.eval_loss.configuration",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.1.0"
+  },
+  {
+   "digest": "51e1ba3453b41a4832567fae867bdfc0ff31f92caf138c879ca41a8045244e3a",
+   "distribution": "cairn-contracts-train",
+   "id": "train.eval_loss.input",
    "kind": "schema",
    "revision": "1.0.0",
    "version": "1.1.0"
@@ -649,6 +665,14 @@
    "version": "1.1.0"
   },
   {
+   "digest": "38c75f4c8be669b2b48793d27db0959abea4d563319778b516b3bd543e75de30",
+   "distribution": "cairn-contracts-train",
+   "id": "train.finetune",
+   "kind": "capability",
+   "revision": "1.0.0",
+   "version": "1.1.0"
+  },
+  {
    "digest": "a2e5899232a88fbfef37af254d94c52c80e7feada0beab8af706d75aa85efd24",
    "distribution": "cairn-contracts-train",
    "id": "train.finetune",
@@ -660,6 +684,14 @@
    "digest": "9feb86df28518af7fc58d0b4e9ee67552cb72d67c145aa2506fbcf89c5b3e34a",
    "distribution": "cairn-contracts-train",
    "id": "train.finetune.configuration",
+   "kind": "schema",
+   "revision": "1.0.0",
+   "version": "1.1.0"
+  },
+  {
+   "digest": "212e75631265bd21649f7974a52849961e9c73a2b83e113f2d68f663d90b9783",
+   "distribution": "cairn-contracts-train",
+   "id": "train.finetune.input",
    "kind": "schema",
    "revision": "1.0.0",
    "version": "1.1.0"
@@ -751,7 +783,7 @@
    "version": "1.0.0"
   },
   {
-   "digest": "71d55000974dec4b6198a56c3bd11c1eea88fa55f52c9751af065efe5e5637c1",
+   "digest": "2c31bd5846a27b204a3c937826612f2e361e086e18de80f32202334529efa671",
    "name": "cairn-contracts-train",
    "version": "1.1.0"
   }

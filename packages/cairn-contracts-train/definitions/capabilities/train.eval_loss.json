@@ -1,9 +1,9 @@
 {
   "format": "cairn.capability/1",
   "id": "train.eval_loss",
-  "revision": "1.1.0",
+  "revision": "1.0.0",
   "summary": "Score a saved LoRA adapter: load the base model with the adapter and return the mean causal-LM loss over a JSONL's {\"text\": ...} rows and the tokens scored. Reads only; the adapter travels as a path.",
-  "input": "contract://train.eval_loss.input/1.1.0",
+  "input": "contract://train.eval_loss.input/1.0.0",
   "configuration": "contract://train.eval_loss.configuration/1.0.0",
   "output": "contract://train.eval_loss.output/1.0.0",
   "report": "contract://train.eval_loss.report/1.0.0"
