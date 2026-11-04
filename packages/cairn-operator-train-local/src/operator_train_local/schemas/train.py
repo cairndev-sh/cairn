@@ -7,13 +7,16 @@ in ``tests/core/test_builtin_operator_contracts_train.py`` fails when they drift
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 #: The default base model (ADR-0127 D4). A deployment pins another through
 #: ``[profile.config."train/lora"] base_model``; a run's bound ``base_model`` wins over both.
 DEFAULT_BASE_MODEL = "Qwen/Qwen2.5-0.5B"
+
+Device = Literal["auto", "cpu", "cuda", "mps"]
+Precision = Literal["auto", "fp32", "fp16", "bf16"]
 
 
 class TrainLoraInput(BaseModel):
@@ -32,6 +35,9 @@ class TrainLoraInput(BaseModel):
     max_seq_len: int = Field(256, ge=8, description="Each row is truncated to this many tokens.")
     output_dir: Optional[str] = Field(None, description="Where the adapter is written; the provider chooses when "
                                                         "unset.")
+    device: Device = Field("auto", description="Where to run: auto is CUDA when available, else the CPU.")
+    precision: Precision = Field("auto", description="Weights and compute dtype: auto is bf16 or fp16 on "
+                                                     "CUDA (by GPU), fp32 elsewhere.")
 
 
 class TrainLoraConfig(BaseModel):
@@ -64,6 +70,9 @@ class EvalLossInput(BaseModel):
     dataset: str = Field(..., description="JSONL path (or file:// URI) of {\"text\": ...} rows, or a dataset ref.")
     max_samples: int = Field(64, ge=1, description="At most this many rows are scored.")
     max_seq_len: int = Field(256, ge=8, description="Each row is truncated to this many tokens.")
+    device: Device = Field("auto", description="Where to run: auto is CUDA when available, else the CPU.")
+    precision: Precision = Field("auto", description="Weights and compute dtype: auto is bf16 or fp16 on "
+                                                     "CUDA (by GPU), fp32 elsewhere.")
 
 
 class EvalLossOutput(BaseModel):

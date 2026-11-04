@@ -1,7 +1,7 @@
 # train_local — design
 
 - **Distribution:** `cairn-operator-train-local` (`cairn/operators/builtins/train_local/`)
-- **Capabilities provided:** `train.finetune` (contract `contract://train.finetune/1.0.0`), `train.eval_loss` (contract `contract://train.eval_loss/1.0.0`)
+- **Capabilities provided:** `train.finetune` (contract `contract://train.finetune/1.1.0`), `train.eval_loss` (contract `contract://train.eval_loss/1.1.0`)
 - **Status:** experimental (new; proven on a one-layer GPT-2 in the pack's tests)
 - **Decisions:** ADR-0127 D4, #2572 (WP3)
 
@@ -13,10 +13,12 @@ a held-out loss a gate can read. It is what the `tiny-finetune` pipeline of
 `examples/hello-cairn` trains with, and it is the builtin provider of `train.finetune`, so a
 private or third-party trainer can implement the same contract and be bound in its place.
 
-It deliberately does NOT: use a GPU, quantize (no bitsandbytes), use `Trainer`/`accelerate`/
-`trl`, run distributed, stream checkpoints, push to a hub or register the model (promotion is
-the pipeline's `artifact/promote` step on the leg's `model` artifact). Those belong to the
-private training pack, which may implement `train.finetune` too.
+It uses one CUDA GPU when one is available (`device`/`precision`, default `auto`; ADR-0167),
+so the same pack trains on a laptop CPU, a workstation GPU or a Colab T4. It deliberately does
+NOT: quantize (no bitsandbytes), use `Trainer`/`accelerate`/`trl`, run on several GPUs or
+distributed, stream checkpoints, push to a hub or register the model (promotion is the
+pipeline's `artifact/promote` step on the leg's `model` artifact). Those belong to the private
+training pack, which may implement `train.finetune` too.
 
 ## 2. Architecture
 
@@ -25,8 +27,8 @@ One implementation module, `operator_train_local/finetune.py`, called from three
 ```
 train/lora (operation) ─┐
                         ├─> finetune.finetune(dataset, base_model, lora_rank, steps, ...)
-train.lora (ml stage) ──┘     load_texts -> split_holdout -> AutoTokenizer/AutoModelForCausalLM (float32)
-                              -> peft.get_peft_model(LoraConfig(r, alpha=2r)) -> AdamW x steps
+train.lora (ml stage) ──┘     load_texts -> split_holdout -> resolve_device/resolve_dtype -> AutoModelForCausalLM (dtype, device)
+                              -> peft.get_peft_model(LoraConfig(r, alpha=2r)) -> AdamW x steps (autocast; GradScaler at fp16)
                               -> mean held-out loss -> model.save_pretrained(output_dir)
 train/eval-loss ──────────> finetune.evaluate(adapter_path, base_model, dataset, ...)
                               -> PeftModel.from_pretrained -> token-weighted mean loss
@@ -40,6 +42,16 @@ train/eval-loss ──────────> finetune.evaluate(adapter_path, 
   right-padded, padding masked out of the labels; LoRA target modules inferred by peft per
   architecture (GPT-2 `c_attn`, Qwen2 `q_proj`/`v_proj`). A non-finite loss raises before the
   adapter is saved.
+- **Device and precision.** `resolve_device("auto")` is `cuda` when `torch.cuda.is_available()`
+  and the CPU otherwise; it never picks MPS, so a Mac keeps its CPU behaviour (`mps` is opt-in).
+  A named device that is unavailable raises. `resolve_dtype("auto")` is fp32 off CUDA, and on
+  CUDA bf16 from compute capability 8.0 (Ampere) and fp16 below it (a T4 is 7.5):
+  `torch.cuda.is_bf16_supported()` also counts emulation and reports True on a T4, so it is not
+  used. fp16/bf16 off CUDA are refused. The base model loads in that dtype; peft keeps the LoRA
+  weights in fp32 (`autocast_adapter_dtype`), the forward pass runs under `torch.autocast`, and
+  fp16 uses a `GradScaler`. `train/eval-loss` resolves the same way. The stage's stats add
+  `device`, `precision` and `peak_gpu_mem_gb` (not contract output), because the engine
+  discards the job's stdout.
 - **Where it runs.** The operation runs the blocking loop in a worker thread of the calling
   process. The stage runs inside the engine's job process (the builtin engine's
   `cairn-dataflow-run` subprocess, with its workdir as cwd).
@@ -78,12 +90,12 @@ flow's first input artifact; a relative local path resolves against the submitte
 
 `TrainLoraInput`: `dataset` (required), `base_model` (`Qwen/Qwen2.5-0.5B`), `lora_rank` (8),
 `steps` (8), `max_samples` (64), `learning_rate` (2e-4), `max_seq_len` (256), `output_dir`
-(optional). `TrainLoraOutput`: `adapter_path`, `train_loss` (mean over steps), `eval_loss`
+(optional), `device` (`auto`), `precision` (`auto`). `TrainLoraOutput`: `adapter_path`, `train_loss` (mean over steps), `eval_loss`
 (held-out mean, or null), `tokens_seen` (non-padding training tokens), `steps_run`,
 `base_model`, `elapsed_s`. Both mirror `contracts/train/definitions/schemas/train.finetune.*`.
 
 `EvalLossInput`: `adapter_path`, `base_model`, `dataset`, `max_samples` (64), `max_seq_len`
-(256). `EvalLossOutput`: `eval_loss`, `tokens_seen`. Both mirror
+(256), `device` (`auto`), `precision` (`auto`). `EvalLossOutput`: `eval_loss`, `tokens_seen`. Both mirror
 `contracts/train/definitions/schemas/train.eval_loss.*` (configuration: the empty closed object).
 
 ## 4. Configuration
@@ -91,7 +103,7 @@ flow's first input artifact; a relative local path resolves against the submitte
 | Setting | Where | Scope | Default | What it does |
 |---|---|---|---|---|
 | `base_model` | `config_schema` (`TrainLoraConfig`) | operational | `Qwen/Qwen2.5-0.5B` | The deployment's default base model, set under `[profile.config."train/lora"]`; a run's bound `base_model` wins (run > workflow > profile > default) |
-| `dataset`, `lora_rank`, `steps`, `max_samples`, `learning_rate`, `max_seq_len`, `output_dir` | `input_schema` | run | see §3 | Per-run knobs |
+| `dataset`, `lora_rank`, `steps`, `max_samples`, `learning_rate`, `max_seq_len`, `output_dir`, `device`, `precision` | `input_schema` | run | see §3 | Per-run knobs |
 | `mock` | stage config only | run | `false` | The stage's torch-free stand-in |
 | `CAIRN_SUBMIT_CWD` | env (set by the builtin engine) | job | — | Resolves a relative `dataset` in the stage |
 
@@ -109,7 +121,7 @@ billed, so it is not `paid_compute`. `train/eval-loss` is `read_only`. The stage
 `external_write`, which makes any flow containing it aggregate to `external_write` at flow
 admission. A pipeline places a loss gate on `eval_loss` and a person gate before promoting the
 adapter (hello-cairn `tiny-finetune`). The door records `train/lora` against
-`train.finetune/1.0.0` and `train/eval-loss` against `train.eval_loss/1.0.0`, with the
+`train.finetune/1.1.0` and `train/eval-loss` against `train.eval_loss/1.1.0`, with the
 distribution's digests; a non-conforming input refuses before
 the operation runs and a non-conforming output fails the run.
 
@@ -125,6 +137,9 @@ the operation runs and a non-conforming output fails the run.
 | `unknown config keys [...]` | A typo in the stage config | `ValueError` | Yes |
 | `eval_loss` is null | Fewer than eight rows: nothing held out | a valid output | n/a |
 | Slow first run | The default model downloads from the Hugging Face hub (~1 GB) | — | n/a |
+| `device 'cuda' was asked for, but torch.cuda.is_available() is False` | `device: cuda` on a machine whose torch has no working CUDA (no GPU, or a driver older than the build) | `RuntimeError` | Yes |
+| `precision 'fp16' needs a CUDA device` | `fp16`/`bf16` with the run on the CPU or MPS | `ValueError` | Yes |
+| `device` reads `cpu` on a GPU machine | `auto` fell back: torch cannot see CUDA | a valid output; pass `device: cuda` to make it fail instead | No (by design) |
 
 ## 7. Testing
 
@@ -133,7 +148,9 @@ manifest/class agreement, the mock paths, the loud refusal (torch made unimporta
 loading and the stage through the builtin engine (mock). With the extra (`-m train`, skipped
 when torch is absent): a one-layer, eight-wide GPT-2 and a word-level tokenizer built in the
 test (no network), two LoRA steps on an eight-row JSONL, the adapter read back by
-`train/eval-loss`, and the real stage through the builtin engine. The shared-contract proof
+`train/eval-loss`, and the real stage through the builtin engine. Device and precision
+selection is tested with CUDA faked (`tests/test_train_local_device.py`); its one real GPU test
+runs only where CUDA is present (verified on a Colab T4: fp16, `peak_gpu_mem_gb` > 0). The shared-contract proof
 is `tests/core/test_builtin_operator_contracts_train.py`. From a worktree, install the pack
 into a scratch venv (`uv sync --frozen --extra dev --extra train`), never the shared one. CI
 installs no `[train]` extra today, so it runs the base and mock tests and skips `-m train`
@@ -144,3 +161,4 @@ until hello-cairn WP7 adds that cell.
 | Date | Change | PR |
 |---|---|---|
 | 2026-10-15 | Initial pack: `train/lora`, `train.lora`, `train/eval-loss`; contracts `train.finetune/1.0.0`, `train.eval_loss/1.0.0` (every builtin operator implements a contract) | #2572 WP3 |
+| 2026-11-03 | `device`/`precision` inputs: one CUDA GPU when available, fp16/bf16 by compute capability; contracts `train.finetune/1.1.0`, `train.eval_loss/1.1.0` (additive) | ADR-0167 |

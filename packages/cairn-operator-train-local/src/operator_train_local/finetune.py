@@ -1,12 +1,14 @@
 """The ONE implementation of ``train.finetune`` (ADR-0127 D4), shared by the ``train/lora``
 operation, the ``train.lora`` ml stage and ``train/eval-loss``.
 
-A plain LoRA fine-tune on CPU: ``transformers`` loads the base model in float32, ``peft``
-wraps it with a LoRA adapter (target modules inferred per architecture), and a torch AdamW
-loop runs ``steps`` optimizer steps over batches of the training rows. No ``Trainer``, no
-``accelerate``, no ``trl``, no ``bitsandbytes``, no CUDA: the point is a real loss curve and a
-real adapter on any laptop, in seconds on the ``sshleifer/tiny-gpt2`` stand-in and minutes on
-the ``Qwen/Qwen2.5-0.5B`` default.
+A plain LoRA fine-tune: ``transformers`` loads the base model, ``peft`` wraps it with a LoRA
+adapter (target modules inferred per architecture), and a torch AdamW loop runs ``steps``
+optimizer steps over batches of the training rows. On a machine without CUDA it is the fp32
+CPU run it always was; with ``device``/``precision`` at ``auto`` it uses a CUDA GPU when one
+is available, in fp16 or bf16 by the GPU's compute capability (ADR-0167). No ``Trainer``, no
+``accelerate``, no ``trl``, no ``bitsandbytes``: the point is a real loss curve and a real
+adapter on any laptop or a single GPU, in seconds on the ``sshleifer/tiny-gpt2`` stand-in and
+minutes on the ``Qwen/Qwen2.5-0.5B`` default.
 
 The training stack is the pack's ``[train]`` extra. Nothing here imports it at module load, so
 the pack imports and registers on a base install; :func:`require_train_stack` is the one place
@@ -58,6 +60,58 @@ def require_train_stack() -> None:
     except ImportError as e:
         raise TrainStackMissing(f"train-local needs the training stack, and {e.name!r} is not importable: "
                                 f"{INSTALL_HINT}") from e
+
+
+# ── device and precision ─────────────────────────────────────────────────────
+
+def resolve_device(device: str = "auto"):
+    """The ``torch.device`` to train on. ``auto`` is CUDA when it is available and the CPU
+    otherwise (never MPS: a Mac keeps the CPU behaviour it had); naming an unavailable device
+    raises instead of silently falling back."""
+    import torch  # noqa: PLC0415 - optional dependency: the [train] extra
+
+    if device == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if device == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("device 'cuda' was asked for, but torch.cuda.is_available() is False")
+    if device == "mps" and not torch.backends.mps.is_available():
+        raise RuntimeError("device 'mps' was asked for, but torch.backends.mps.is_available() is False")
+    if device not in ("cpu", "cuda", "mps"):
+        raise ValueError(f"unknown device {device!r}: use auto, cpu, cuda or mps")
+    return torch.device(device)
+
+
+def resolve_dtype(precision: str, device) -> tuple[Any, str]:
+    """``(torch dtype, name)`` for ``precision`` on ``device``. ``auto`` is bf16 on a CUDA GPU
+    with native bf16 (compute capability 8.0+, Ampere and later), fp16 on an older one (a T4),
+    and fp32 anywhere else. fp16 and bf16 are refused off CUDA."""
+    import torch  # noqa: PLC0415 - optional dependency: the [train] extra
+
+    if precision == "auto":
+        if device.type != "cuda":
+            precision = "fp32"
+        else:
+            # Native bf16 starts at Ampere (8.0); is_bf16_supported() also counts emulation
+            # and reports True on a T4 (7.5), where bf16 runs slowly.
+            major, _ = torch.cuda.get_device_capability(device)
+            precision = "bf16" if major >= 8 else "fp16"
+    dtypes = {"fp32": torch.float32, "fp16": torch.float16, "bf16": torch.bfloat16}
+    if precision not in dtypes:
+        raise ValueError(f"unknown precision {precision!r}: use auto, fp32, fp16 or bf16")
+    if precision != "fp32" and device.type != "cuda":
+        raise ValueError(f"precision {precision!r} needs a CUDA device; this run is on {device.type!r}")
+    return dtypes[precision], precision
+
+
+def _autocast(device, dtype):
+    """Mixed-precision context for the forward pass; a no-op at fp32."""
+    import contextlib  # noqa: PLC0415
+
+    import torch  # noqa: PLC0415 - optional dependency: the [train] extra
+
+    if dtype == torch.float32:
+        return contextlib.nullcontext()
+    return torch.autocast(device_type=device.type, dtype=dtype)
 
 
 # ── data ─────────────────────────────────────────────────────────────────────
@@ -128,40 +182,46 @@ def mock_eval(*, adapter_path: str, dataset: str, max_samples: int, **_: Any) ->
 
 # ── the real thing ───────────────────────────────────────────────────────────
 
-def _load(base_model: str):
+def _load(base_model: str, device=None, dtype=None):
     import torch  # noqa: PLC0415 - optional dependency: the [train] extra (see require_train_stack)
     from transformers import AutoModelForCausalLM, AutoTokenizer  # noqa: PLC0415 - [train] extra
 
     tokenizer = AutoTokenizer.from_pretrained(base_model)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    model = AutoModelForCausalLM.from_pretrained(base_model, dtype=torch.float32)
+    model = AutoModelForCausalLM.from_pretrained(base_model, dtype=dtype or torch.float32)
+    if device is not None:
+        model = model.to(device)
     return tokenizer, model
 
 
-def _batch(tokenizer, texts: list[str], max_seq_len: int) -> dict:
+def _batch(tokenizer, texts: list[str], max_seq_len: int, device=None) -> dict:
     enc = tokenizer(texts, truncation=True, max_length=max_seq_len, padding=True, return_tensors="pt")
     labels = enc["input_ids"].clone()
     labels[enc["attention_mask"] == 0] = -100
-    return {"input_ids": enc["input_ids"], "attention_mask": enc["attention_mask"], "labels": labels}
+    batch = {"input_ids": enc["input_ids"], "attention_mask": enc["attention_mask"], "labels": labels}
+    return {k: v.to(device) for k, v in batch.items()} if device is not None else batch
 
 
 def _mean_loss(model: Any, tokenizer: Any, texts: list[str], max_seq_len: int,
-               cancel_event: threading.Event | None = None) -> tuple[float, int]:
+               cancel_event: threading.Event | None = None, device=None,
+               dtype=None) -> tuple[float, int]:
     """Token-weighted mean causal-LM loss over ``texts`` and the non-padding tokens scored."""
     import torch  # noqa: PLC0415 - optional dependency: the [train] extra
 
+    device = device if device is not None else torch.device("cpu")
     model.eval()
     total, targets, tokens = 0.0, 0, 0
     with torch.no_grad():
         for i in range(0, len(texts), BATCH_SIZE):
             _check_cancelled(cancel_event)
-            enc = _batch(tokenizer, texts[i:i + BATCH_SIZE], max_seq_len)
+            enc = _batch(tokenizer, texts[i:i + BATCH_SIZE], max_seq_len, device)
             _check_cancelled(cancel_event)
             n = int((enc["labels"][:, 1:] != -100).sum())  # the shifted positions the loss averages
             if n == 0:
                 continue
-            batch_loss = model(**enc).loss
+            with _autocast(device, dtype or torch.float32):
+                batch_loss = model(**enc).loss
             _check_cancelled(cancel_event)
             total += float(batch_loss) * n
             targets += n
@@ -194,7 +254,8 @@ def finetune(*, dataset: str, base_model: str, lora_rank: int, steps: int, max_s
              learning_rate: float, max_seq_len: int, output_dir: str,
              on_step: Optional[Callable[[int, float], None]] = None,
              cancel_event: threading.Event | None = None,
-             written: Optional[list[str]] = None) -> dict[str, Any]:
+             written: Optional[list[str]] = None, device: str = "auto",
+             precision: str = "auto") -> dict[str, Any]:
     """Run the LoRA fine-tune and save the adapter to ``output_dir``; the contract's output.
     ``written``, when given, receives the paths (relative to ``output_dir``) the save wrote."""
     require_train_stack()
@@ -204,29 +265,36 @@ def finetune(*, dataset: str, base_model: str, lora_rank: int, steps: int, max_s
 
     started = time.monotonic()
     torch.manual_seed(0)
+    dev = resolve_device(device)
+    dtype, precision_name = resolve_dtype(precision, dev)
+    if dev.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(dev)
     train, held = split_holdout(load_texts(dataset, max_samples))
     _check_cancelled(cancel_event)
-    tokenizer, model = _load(base_model)
+    tokenizer, model = _load(base_model, dev, dtype)
     _check_cancelled(cancel_event)
     model = get_peft_model(model, LoraConfig(r=lora_rank, lora_alpha=2 * lora_rank, lora_dropout=0.0,
                                              task_type="CAUSAL_LM"))
     optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=learning_rate)
+    scaler = torch.amp.GradScaler("cuda", enabled=(dtype == torch.float16))
     model.train()
     losses: list[float] = []
     tokens = 0
     size = min(BATCH_SIZE, len(train))
     for step in range(steps):
         _check_cancelled(cancel_event)
-        enc = _batch(tokenizer, [train[(step * size + i) % len(train)] for i in range(size)], max_seq_len)
+        enc = _batch(tokenizer, [train[(step * size + i) % len(train)] for i in range(size)], max_seq_len, dev)
         _check_cancelled(cancel_event)
-        loss = model(**enc).loss
+        with _autocast(dev, dtype):
+            loss = model(**enc).loss
         _check_cancelled(cancel_event)
         value = float(loss.detach())
         if not math.isfinite(value):
             raise RuntimeError(f"train loss is {value} at step {step}; refusing to save the adapter")
-        loss.backward()
+        scaler.scale(loss).backward()
         _check_cancelled(cancel_event)
-        optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
         optimizer.zero_grad()
         _check_cancelled(cancel_event)
         losses.append(value)
@@ -234,7 +302,7 @@ def finetune(*, dataset: str, base_model: str, lora_rank: int, steps: int, max_s
         if on_step is not None:
             on_step(step, value)
     _check_cancelled(cancel_event)
-    eval_loss = _mean_loss(model, tokenizer, held, max_seq_len, cancel_event)[0] if held else None
+    eval_loss = _mean_loss(model, tokenizer, held, max_seq_len, cancel_event, device=dev, dtype=dtype)[0] if held else None
     _check_cancelled(cancel_event)
     out = Path(output_dir)
     _check_cancelled(cancel_event)
@@ -253,11 +321,15 @@ def finetune(*, dataset: str, base_model: str, lora_rank: int, steps: int, max_s
         "steps_run": len(losses),
         "base_model": base_model,
         "elapsed_s": round(time.monotonic() - started, 3),
+        "device": dev.type,
+        "precision": precision_name,
+        "peak_gpu_mem_gb": round(torch.cuda.max_memory_allocated(dev) / 1e9, 3) if dev.type == "cuda" else 0.0,
     }
 
 
 def evaluate(*, adapter_path: str, base_model: str, dataset: str, max_samples: int,
-             max_seq_len: int) -> dict[str, Any]:
+             max_seq_len: int, device: str = "auto",
+             precision: str = "auto") -> dict[str, Any]:
     """Load ``base_model`` with the adapter at ``adapter_path`` and score the first
     ``max_samples`` rows of ``dataset``."""
     require_train_stack()
@@ -265,8 +337,10 @@ def evaluate(*, adapter_path: str, base_model: str, dataset: str, max_samples: i
 
     if not Path(adapter_path).is_dir():
         raise FileNotFoundError(f"adapter {adapter_path!r}: no such directory")
+    dev = resolve_device(device)
+    dtype, _ = resolve_dtype(precision, dev)
     texts = load_texts(dataset, max_samples)
-    tokenizer, model = _load(base_model)
+    tokenizer, model = _load(base_model, dev, dtype)
     model = PeftModel.from_pretrained(model, adapter_path)
-    loss, tokens = _mean_loss(model, tokenizer, texts, max_seq_len)
+    loss, tokens = _mean_loss(model, tokenizer, texts, max_seq_len, device=dev, dtype=dtype)
     return {"eval_loss": loss, "tokens_seen": tokens}

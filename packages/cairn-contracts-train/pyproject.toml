@@ -6,7 +6,7 @@
 # DATA ONLY — no Python package, no entry points.
 [project]
 name = "cairn-contracts-train"
-version = "1.0.0"
+version = "1.1.0"
 description = "Shared contract definitions for the train capability domain (train.finetune, train.eval_loss)."
 requires-python = ">=3.12"
 dependencies = []

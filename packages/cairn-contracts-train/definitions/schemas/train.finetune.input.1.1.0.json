@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "contract://train.finetune.input/1.1.0",
+  "description": "What to fine-tune, on what, and how long: a LoRA adapter over base_model trained on the dataset's {\"text\": ...} rows.",
+  "properties": {
+    "dataset": {
+      "description": "Where the training rows are: a local JSONL path (or file:// URI) of {\"text\": ...} rows, or a dataset ref the provider can load.",
+      "title": "Dataset",
+      "type": "string"
+    },
+    "base_model": {
+      "default": "Qwen/Qwen2.5-0.5B",
+      "description": "The causal LM to adapt: a Hugging Face model id or a local model directory.",
+      "title": "Base Model",
+      "type": "string"
+    },
+    "lora_rank": {"default": 8, "description": "LoRA rank r.", "minimum": 1, "title": "Lora Rank", "type": "integer"},
+    "steps": {"default": 8, "description": "Optimizer steps to run.", "minimum": 1, "title": "Steps", "type": "integer"},
+    "max_samples": {
+      "default": 64,
+      "description": "At most this many rows are read from the dataset (train plus held-out eval).",
+      "minimum": 1,
+      "title": "Max Samples",
+      "type": "integer"
+    },
+    "learning_rate": {"default": 0.0002, "exclusiveMinimum": 0, "title": "Learning Rate", "type": "number"},
+    "max_seq_len": {
+      "default": 256,
+      "description": "Each row is truncated to this many tokens.",
+      "minimum": 8,
+      "title": "Max Seq Len",
+      "type": "integer"
+    },
+    "output_dir": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "default": null,
+      "description": "Where the adapter is written; the provider chooses when unset.",
+      "title": "Output Dir"
+    },
+    "device": {
+      "default": "auto",
+      "description": "Where to run: auto is CUDA when available, else the CPU.",
+      "enum": ["auto", "cpu", "cuda", "mps"],
+      "title": "Device",
+      "type": "string"
+    },
+    "precision": {
+      "default": "auto",
+      "description": "Weights and compute dtype: auto is bf16 or fp16 on CUDA (by GPU), fp32 elsewhere.",
+      "enum": ["auto", "fp32", "fp16", "bf16"],
+      "title": "Precision",
+      "type": "string"
+    }
+  },
+  "required": ["dataset"],
+  "title": "TrainLoraInput",
+  "type": "object"
+}

@@ -1,20 +1,20 @@
 # flows/lora.yaml — a LoRA fine-tune as an ml flow (hello-cairn WP6, ADR-0127 D4).
 #
 # One stage, `train.lora`, from the builtin train-local operator pack
-# (cairn-operator-train-local, contract train.finetune/1.0.0). The stage takes the
+# (cairn-operator-train-local, contract train.finetune/1.1.0). The stage takes the
 # contract's input keys as its config; every `$config.<key>` the leg does not bind is
 # dropped, so the stage's own defaults apply (Qwen/Qwen2.5-0.5B, 8 steps, 64 rows).
 # `mock: true` runs the torch-free stand-in: no training stack, deterministic numbers.
 #
 # The real fine-tune needs the `[train]` extra of cairn-operator-train-local (torch,
-# transformers, peft, datasets) on the box the ml engine runs on; CPU is enough. The
-# stage writes the adapter to `output_dir`, or under the leg's temp workdir when it's
-# empty, and reports `kind: model`, so the leg registers a model artifact the pipeline
-# can promote.
+# transformers, peft, datasets) on the box the ml engine runs on; CPU is enough, and a
+# CUDA GPU is used when present (`device`, `precision`). The stage writes the adapter to
+# `output_dir`, or under the leg's temp workdir when it's empty, and reports `kind: model`,
+# so the leg registers a model artifact the pipeline can promote.
 name: lora
 kind: ml
 description: >
-  LoRA fine-tune a small causal LM on a JSONL of {"text": ...} rows (CPU).
+  LoRA fine-tune a small causal LM on a JSONL of {"text": ...} rows (CPU, or CUDA when available).
 stages:
   - stage: train.lora
     config:
@@ -23,5 +23,7 @@ stages:
       lora_rank: $config.lora_rank
       steps: $config.steps
       max_samples: $config.max_samples
+      device: $config.device
+      precision: $config.precision
       mock: $config.mock
       output_dir: $config.output_dir
