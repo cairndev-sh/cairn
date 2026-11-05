@@ -16,7 +16,6 @@
 <p align="center">
   <a href="https://docs.cairndev.sh"><img alt="Docs" src="https://img.shields.io/badge/docs-cairndev.sh-3b82f6"></a>
   <a href="https://cairndev.sh"><img alt="Website" src="https://img.shields.io/badge/website-cairndev.sh-111827"></a>
-  <a href="https://demo.cairndev.sh"><img alt="Live demo" src="https://img.shields.io/badge/live%20demo-demo.cairndev.sh-16a34a"></a>
   <a href="https://github.com/cairndev-sh/cairn/actions/workflows/ci.yml?query=branch%3Amain"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/cairndev-sh/cairn/ci.yml?branch=main&label=ci"></a>
   <a href="https://github.com/cairndev-sh/cairn/actions/workflows/quickstart.yml?query=branch%3Amain"><img alt="Quickstart" src="https://img.shields.io/github/actions/workflow/status/cairndev-sh/cairn/quickstart.yml?branch=main&label=quickstart"></a>
   <a href="https://pypi.org/project/cairndev/"><img alt="PyPI" src="https://img.shields.io/pypi/v/cairndev"></a>
@@ -26,17 +25,11 @@
 
 <p align="center">
   <a href="https://docs.cairndev.sh">Docs</a> ·
-  <a href="https://demo.cairndev.sh">Live demo</a> ·
   <a href="https://docs.cairndev.sh/install/">Install</a> ·
   <a href="https://docs.cairndev.sh/reference/catalog/">Pipeline catalog</a> ·
   <a href="https://docs.cairndev.sh/concepts/gates/">Gates and approvals</a> ·
-  <a href="https://github.com/cairndev-sh/cairn-extensions">Extensions</a> ·
   <a href="https://github.com/cairndev-sh/cairn/discussions">Discussions</a> ·
   <a href="https://discord.gg/CPyC6bzTJW">Discord</a>
-</p>
-
-<p align="center">
-  <sub>The live demo runs a web console that isn't part of this repository. <a href="#what-cairndev-includes">What <code>cairndev</code> includes</a>.</sub>
 </p>
 
 ---
@@ -61,25 +54,22 @@ GPUs, your logs — nothing leaves your perimeter.
 
 `pip install cairndev` gives you the engine, the `cairn` command, the API server
 (`cairn-server`), the client (`cairn-client`) and the builtin operator packs, under
-Apache 2.0. Domain packs and more operator packs are separate Apache 2.0 wheels from
-[cairn-extensions](https://github.com/cairndev-sh/cairn-extensions).
+Apache 2.0. Domain packs and more operator packs are separate wheels.
 
 The web console, and the operator packs for GPU providers and managed training, are
 part of cairn-platform. Everything in the [docs](https://docs.cairndev.sh) runs on the
-open-source packages, unless a page says otherwise. The [live demo](https://demo.cairndev.sh) runs that console, so
-it shows things you won't get from `pip install cairndev`.
+open-source packages, unless a page says otherwise.
 
 ## Extensions
 
-Domain packs and the operators they use are separate wheels, released from
-[**cairn-extensions**](https://github.com/cairndev-sh/cairn-extensions). Install
-the ones you need next to `cairndev`:
+Domain packs and the operators they use are separate wheels. Install the ones you need
+next to `cairndev`:
 
 | Package | What it adds |
 |---|---|
-| [`cairn-pack-dataset-prep`](https://github.com/cairndev-sh/cairn-extensions/tree/main/packs/cairn-pack-dataset-prep) | Pin a dataset, audit and clean it, split it by group and register `train` / `val` / `test` versions |
-| [`cairn-pack-finetune`](https://github.com/cairndev-sh/cairn-extensions/tree/main/packs/cairn-pack-finetune) | LoRA / QLoRA fine-tuning on a GPU box over SSH, with approvals, a priced budget, base-vs-candidate evaluation and a box that starts after approval and stops on every outcome |
-| [Operator packs](https://github.com/cairndev-sh/cairn-extensions#packages) | Dataset checks, training, lm-evaluation-harness benchmarks, IFC validation, and the contract wheels they implement |
+| `cairn-pack-dataset-prep` | Pin a dataset, audit and clean it, split it by group and register `train` / `val` / `test` versions |
+| `cairn-pack-finetune` | LoRA / QLoRA fine-tuning on a GPU box over SSH, with approvals, a priced budget, base-vs-candidate evaluation and a box that starts after approval and stops on every outcome |
+| Operator packs | Dataset checks, training, lm-evaluation-harness benchmarks, and the contract wheels they implement |
 
 ```bash
 pip install cairndev cairn-pack-finetune
@@ -260,10 +250,7 @@ rows for the launch, each step, each decision a person made, with the signed-in 
 (`pipeline.gate_approved`), and the row the pipeline's own `audit` step writes. Each
 row is chained to the one before it by its hash, and `cairn admin audit verify` checks the
 file. Try `-i min_rows=1000` to watch the data gate stop the pipeline before any later
-step starts. The full walkthrough is the [Quickstart](https://docs.cairndev.sh/quickstart/);
-to look around without installing, use the live demo at https://demo.cairndev.sh (a
-shared sandbox, so don't enter real credentials). It runs a web console that isn't part
-of this repository ([what `cairndev` includes](#what-cairndev-includes)).
+step starts. The full walkthrough is the [Quickstart](https://docs.cairndev.sh/quickstart/).
 
 To watch a budget refuse a run, with no key and no spend, start a pipeline whose estimate
 is above its cap:
