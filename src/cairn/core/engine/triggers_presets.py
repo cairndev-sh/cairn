@@ -25,7 +25,7 @@ from typing import Any, Optional
 # signature scheme (verified by router.verify_signature), and a starter
 # normalize mapping into the vendor's payload shape. The GenericYamlProvider
 # mounts + fires these with NO per-vendor Python; secrets stay env references.
-_SIGNATURE_SCHEME_OPTS = [
+SIGNATURE_SCHEMES: list[dict[str, str]] = [
     {"value": "hmac_sha256", "label": "HMAC-SHA256 of body (GitHub-style)",
      "description": "bare hex or prefix=<hex> of the raw body"},
     {"value": "slack_v0", "label": "Slack v0",
@@ -34,7 +34,7 @@ _SIGNATURE_SCHEME_OPTS = [
      "description": "one or more comma-separated v1=<hex> values"},
 ]
 
-_TRIGGER_PRESETS: list[dict[str, Any]] = [
+TRIGGER_PRESETS: list[dict[str, Any]] = [
     {
         "source": "slack", "label": "Slack (Events API)",
         "description": "Slack Events API webhook — mentions, messages, reactions.",
@@ -90,8 +90,12 @@ _TRIGGER_PRESETS: list[dict[str, Any]] = [
 ]
 
 
+# The earlier private names (#297); the same list objects.
+_SIGNATURE_SCHEME_OPTS = SIGNATURE_SCHEMES
+_TRIGGER_PRESETS = TRIGGER_PRESETS
+
 #: Every preset's ``source`` — what a declared webhook trigger may name.
-PRESET_SOURCES: tuple[str, ...] = tuple(p["source"] for p in _TRIGGER_PRESETS)
+PRESET_SOURCES: tuple[str, ...] = tuple(p["source"] for p in TRIGGER_PRESETS)
 
 
 def preset_for(source: str) -> Optional[dict[str, Any]]:
@@ -102,7 +106,10 @@ def preset_for(source: str) -> Optional[dict[str, Any]]:
     between the two surfaces.
     """
     key = (source or "").strip()
-    return next((p for p in _TRIGGER_PRESETS if p["source"] == key), None)
+    return next((p for p in TRIGGER_PRESETS if p["source"] == key), None)
 
 
-__all__ = ["PRESET_SOURCES", "_SIGNATURE_SCHEME_OPTS", "_TRIGGER_PRESETS", "preset_for"]
+__all__ = [
+    "PRESET_SOURCES", "SIGNATURE_SCHEMES", "TRIGGER_PRESETS", "preset_for",
+    "_SIGNATURE_SCHEME_OPTS", "_TRIGGER_PRESETS",
+]

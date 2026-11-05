@@ -10,7 +10,9 @@ storage schemas of persisted records (`PipelineRecord`, `RunEvent`, `ArtifactRec
 `dataset_versions`), the `cairn` CLI verbs and exit codes, and the event topics. Each family
 has an owner and a doc in `docs/contracts/README.md`. Everything else under `cairn.core`
 is internal: packs may import `cairn.core.operator` (and `cairn.core.llm` / `cairn.core.eval`
-for those operator kinds) and nothing else.
+for those operator kinds) and nothing else. A `cairn.routers` or `cairn.seeds` provider (a surface,
+ADR-0120 D4) may also import the names a contract doc lists under a *Public Python names*
+heading.
 
 ## Change classes
 | Class | Meaning | Allowed how |
