@@ -1,9 +1,0 @@
-{
-  "format": "cairn.capability/1",
-  "id": "monitor.threshold",
-  "revision": "1.0.0",
-  "summary": "Read a numeric metric (inline, a JSON file or an HTTP GET) and report whether it crossed a threshold. Observes only; never mutates.",
-  "input": "contract://monitor.threshold.input/1.0.0",
-  "configuration": "contract://monitor.threshold.configuration/1.0.0",
-  "output": "contract://monitor.threshold.output/1.0.0"
-}

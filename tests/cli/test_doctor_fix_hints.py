@@ -204,7 +204,7 @@ def _(monkeypatch, tmp_path):
     return [asyncio.run(doctor_mod.check_metaflow_service())]
 
 
-@scenario("engine-client-missing", "engine_client:dataflow_engine", "fail", "cairndev[metaflow]")
+@scenario("engine-client-missing", "engine_client:dataflow_engine", "fail", "cairn-operator-dataflow-metaflow")
 def _(monkeypatch, tmp_path):
     import cairn.core.backend_selection as bs
 
@@ -805,7 +805,7 @@ def test_every_cairn_command_doctor_names_exists(command):
 def test_every_cairndev_extra_doctor_names_exists():
     extras = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["optional-dependencies"]
     named = set(re.findall(r"cairndev\[([a-z0-9-]+)\]", "\n".join(_strings_in_doctor())))
-    assert {"runtime-temporal", "pii", "metaflow"} <= named
+    assert {"runtime-temporal", "pii"} <= named
     assert named <= set(extras), named - set(extras)
 
 

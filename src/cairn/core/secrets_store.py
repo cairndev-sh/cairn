@@ -241,7 +241,7 @@ class InfisicalSecretBackend:
             from infisicalsdk import InfisicalSDKClient  # type: ignore
         except Exception as e:  # noqa: BLE001
             raise RuntimeError(
-                "infisical:// secrets need the '[infisical]' extra — `uv pip install cairndev[infisical]`"
+                "infisical:// secrets need the Infisical client — `uv pip install infisicalsdk`"
             ) from e
         c = InfisicalSDKClient(host=self.host, token=self.token)
         return c

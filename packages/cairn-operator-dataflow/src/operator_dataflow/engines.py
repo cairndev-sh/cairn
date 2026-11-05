@@ -180,16 +180,15 @@ def _selected(key: str, default: str) -> str:
 
 
 def builtin_engine(*, kind: str = "data", target: str = "") -> BuiltinLocalEngine:
-    """The in-process engine — or the SSH one when the environment names a box.
+    """The in-process engine.
 
     Registered as the ``builtin`` entry in the ``cairn.dataflow_engines`` group
     (#1512): core selects the NAME, this factory builds the engine.
     """
     if target:
-        # SSH dispatch (#1050 slice 3): same binary, launched on the
-        # environment's compute.ssh box via the proven remote/exec machinery.
-        from operator_dataflow.engines_ssh import BuiltinSshEngine  # noqa: PLC0415 - [ssh] extra path
-        return BuiltinSshEngine(target)
+        raise EngineError(
+            f"the builtin engine runs on this machine only, and can't dispatch to {target!r}"
+        )
     return BuiltinLocalEngine()
 
 

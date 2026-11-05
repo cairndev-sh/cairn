@@ -1,7 +1,0 @@
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "contract://rag.fetch.configuration/1.0.0",
-  "description": "rag/fetch has no semantic configuration in v1: every knob rides the input.",
-  "type": "object",
-  "additionalProperties": false
-}

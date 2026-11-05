@@ -298,9 +298,8 @@ import importlib.metadata as md;\
 eps = list(md.entry_points(group='cairn.operators'));\
 other = sorted({f'{ep.name} ({ep.dist.name})' for ep in eps if ep.dist.name != 'cairndev'});\
 assert not other, f'builtin operators not shipped by cairndev: {other}';\
-optional = {'cairn-operator-dataflow-metaflow', 'cairn-operator-dataflow-skypilot'};\
 names = [d.metadata['Name'] or '' for d in md.distributions()];\
-folded = sorted(n for n in names if n.startswith('cairn-contracts-') or (n.startswith('cairn-operator-') and n not in optional));\
+folded = sorted(n for n in names if n.startswith('cairn-contracts-') or n.startswith('cairn-operator-'));\
 assert not folded, f'folded into cairndev (ADR-0137), installed on their own: {folded}';\
 print('[verify]', len(eps), 'operators, all from cairndev; no folded distribution installed')"
 # #2241 D — the launch door refuses every pipeline reaching an opted-in operator whose
@@ -310,7 +309,7 @@ print('[verify]', len(eps), 'operators, all from cairndev; no folded distributio
 RUN /app/.venv/bin/python -c "\
 from cairn.core.pack.contracts import resolve_contracts;\
 names = sorted(d.name for d in resolve_contracts());\
-want = {'cairn-contracts-dataflow', 'cairn-contracts-audit', 'cairn-contracts-mcp', 'cairn-contracts-monitor', 'cairn-contracts-artifact', 'cairn-contracts-storage', 'cairn-contracts-memory', 'cairn-contracts-redact', 'cairn-contracts-secrets', 'cairn-contracts-rag', 'cairn-contracts-remote', 'cairn-contracts-data', 'cairn-contracts-train'};\
+want = {'cairn-contracts-dataflow', 'cairn-contracts-audit', 'cairn-contracts-artifact', 'cairn-contracts-storage', 'cairn-contracts-redact', 'cairn-contracts-secrets', 'cairn-contracts-data', 'cairn-contracts-train'};\
 assert want <= set(names), f'contract distributions resolved: {names}';\
 print('[verify] contract distributions resolved:', names)"
 # #2102 — the two binaries SkyPilot shells out to. A red build here beats a

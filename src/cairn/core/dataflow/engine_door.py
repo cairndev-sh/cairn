@@ -45,11 +45,6 @@ ENGINE_OPERATORS: dict[str, str] = {"data": "dataflow/run", "ml": "ml/run"}
 _KIND_OF_OPERATOR: dict[str, str] = {op: kind for kind, op in ENGINE_OPERATORS.items()}
 
 
-def extra_for(engine: str) -> str:
-    """The extra that installs an engine: ``cairndev[<engine>]`` (ADR-0134 D1)."""
-    return f"cairndev[{engine}]"
-
-
 def engines_selected() -> dict[str, str]:
     """``{kind: engine}`` for both flow kinds, through the one config plane."""
     return {kind: selected_engine(kind)[0] for kind in FLOW_KINDS}
@@ -86,8 +81,8 @@ async def check_flow_engines(*, kinds: Optional[Iterable[str]] = None,
             verdict.ok = False
             verdict.reasons.append(
                 f"{kind} flows are set to the {engine!r} engine, but the package registering it "
-                f"does not load ({type(exc).__name__}: {exc}) — reinstall it "
-                f"(pip install '{extra_for(engine)}') or set [profile.backends] {engine_key} to "
+                f"does not load ({type(exc).__name__}: {exc}) — reinstall its package "
+                f"or set [profile.backends] {engine_key} to "
                 "an engine that is installed."
             )
             continue
@@ -95,9 +90,9 @@ async def check_flow_engines(*, kinds: Optional[Iterable[str]] = None,
             verdict.ok = False
             verdict.reasons.append(
                 f"{kind} flows are set to the {engine!r} engine, but no installed package "
-                f"provides it — install the extra (pip install '{extra_for(engine)}') or set "
+                f"provides it — install the package that does, or set "
                 f"[profile.backends] {engine_key} back to an engine that is installed. The "
-                "control plane does not install extras for you."
+                "control plane does not install packages for you."
             )
             continue
         try:
@@ -124,6 +119,5 @@ __all__ = [
     "ServiceVerdict",
     "check_flow_engines",
     "engines_selected",
-    "extra_for",
     "kinds_reached",
 ]

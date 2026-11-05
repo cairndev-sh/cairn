@@ -165,8 +165,6 @@ async def test_the_skypilot_refusal_carries_the_doors_own_remediation(
         tmp_path, monkeypatch, flow_pack):
     """The message is the product: the door already writes the fix, and the
     pipeline surface SURFACES it rather than writing a second one."""
-    from cairn.core.dataflow.engine_door import extra_for
-
     _install(tmp_path, monkeypatch, name="mltrain", body=_ML_LEG)
     monkeypatch.setenv("OBS_ML_ENGINE", "skypilot")
     _skypilot_extra_absent(monkeypatch)
@@ -175,7 +173,7 @@ async def test_the_skypilot_refusal_carries_the_doors_own_remediation(
         await launch_pipeline("doorpack/mltrain", bridge=_Bridge())
 
     msg = str(e.value)
-    assert f"pip install '{extra_for('skypilot')}'" in msg
+    assert "install the package that does" in msg
     assert "doorpack/mltrain" in msg and "'train'" in msg  # the pipeline AND the leg
 
 

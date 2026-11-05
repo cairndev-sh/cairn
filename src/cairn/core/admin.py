@@ -479,7 +479,7 @@ class ProfileView(BaseModelView):
         StringField("name", required=True),
         StringField("extends", help_text="parent profile name (layering)"),
         BooleanField("enabled"),
-        JSONField("bindings", help_text='capability → operator, e.g. {"rag.search": "rag/search"}'),
+        JSONField("bindings", help_text='capability → operator, e.g. {"storage.put": "storage/put"}'),
         JSONField("capabilities", help_text="capability → winning pack (disambiguation)"),
         JSONField("backends", help_text='e.g. {"llm_gateway": "env:OPENAI_API_KEY"}'),
         StringField("description"),

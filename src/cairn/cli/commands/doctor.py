@@ -296,9 +296,9 @@ async def check_metaflow_service() -> Optional[CheckResult]:
     )
 
 
-# selected engine → (importable module, the extra that provides it)
+# selected engine → (importable module, the wheel that provides it)
 _ENGINE_CLIENT = {
-    "metaflow": ("metaflow", "cairndev[metaflow]"),   # ADR-0134 D2: its own optional wheel
+    "metaflow": ("metaflow", "cairn-operator-dataflow-metaflow"),   # its own wheel
 }
 
 

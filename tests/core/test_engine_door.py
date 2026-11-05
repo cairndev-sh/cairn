@@ -21,7 +21,6 @@ from cairn.core.dataflow.engine_door import (
     ENGINE_OPERATORS,
     check_flow_engines,
     engines_selected,
-    extra_for,
     kinds_reached,
 )
 
@@ -104,7 +103,7 @@ async def test_an_engine_no_installed_package_provides_is_refused(monkeypatch, e
     assert not v.ok and v.required == [engine]
     reason = v.reasons[0]
     assert "no installed package provides it" in reason
-    assert f"pip install '{extra_for(engine)}'" in reason and "ml_engine" in reason
+    assert "install the package that does" in reason and "ml_engine" in reason
     assert "installing" not in reason  # it names the fix; it never installs
 
 
@@ -159,12 +158,10 @@ async def test_the_verdict_shape_is_the_one_the_doors_already_speak(monkeypatch)
     assert isinstance(await check_flow_engines(factory=_factory(_Engine())), ServiceVerdict)
 
 
-@pytest.mark.parametrize("target", ["", "gpubox"])
-def test_building_a_registered_engine_for_the_check_has_no_side_effect(tmp_path, monkeypatch, target):
+def test_building_a_registered_engine_for_the_check_has_no_side_effect(tmp_path, monkeypatch):
     """The door builds the selected engine with the factory call the leg will make, with the
     real target. That is only safe if construction is free of side effects: every installed
-    engine is built here — with and without a target, so the builtin engine's SSH form is
-    built too — in an empty working directory and an empty HOME, which must both stay empty."""
+    engine is built here in an empty working directory and an empty HOME, which must both stay empty."""
     from importlib.metadata import entry_points
 
     from cairn.core.dataflow.engine_registry import ENTRY_POINT_GROUP
@@ -180,7 +177,7 @@ def test_building_a_registered_engine_for_the_check_has_no_side_effect(tmp_path,
         except (ImportError, AttributeError):  # a registration that does not load: the door refuses it unbuilt
             continue
         for kind in ("data", "ml"):
-            make(kind=kind, target=target)
+            make(kind=kind, target="")
             built.append((ep.name, kind))
     assert ("builtin", "data") in built or not built  # the builtin engine is exercised when installed
     assert list(cwd.iterdir()) == [] and list(home.iterdir()) == []

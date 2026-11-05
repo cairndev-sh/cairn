@@ -1,9 +1,0 @@
-{
-  "format": "cairn.capability/1",
-  "id": "rag.search",
-  "revision": "1.0.0",
-  "summary": "Embed a query and return the top-k chunks of a named RAG corpus by similarity; failures surface as ok=false with an error, not as an exception.",
-  "input": "contract://rag.search.input/1.0.0",
-  "configuration": "contract://rag.search.configuration/1.0.0",
-  "output": "contract://rag.search.output/1.0.0"
-}

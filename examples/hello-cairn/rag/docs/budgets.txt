@@ -1,7 +1,0 @@
-# Budgets
-
-A pipeline declares a spend ceiling under `governance.budget.usd`. The engine
-reserves that amount when the pipeline is admitted and settles it when the pipeline
-ends, so two pipelines cannot both spend the same money. Each leg records its own
-`cost_usd`. A local fine-tune on a CPU costs nothing, and its leg records 0.0; the
-ceiling is still declared, so the record shows one.

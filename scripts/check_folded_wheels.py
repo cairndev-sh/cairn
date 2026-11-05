@@ -1,11 +1,10 @@
-"""The built-wheel gate (ADR-0137 D7): the public release is five wheels, and the engine
+"""The built-wheel gate (ADR-0137 D7): the public release is three wheels, and the engine
 wheel alone carries the builtin operator packs and the core contracts.
 
     python scripts/check_folded_wheels.py [--dist DIR] [--keep]
 
 1. ``uv build --all-packages`` (each wheel built FROM its sdist, as a release builds it)
-   gives exactly the five public wheels: ``cairndev``, ``cairn-client``, the two optional
-   dataflow engines and ``cairn-pack-hello``.
+   gives exactly the three public wheels: ``cairndev``, ``cairn-client`` and ``cairn-pack-hello``.
 2. A fresh venv gets the three base wheels (``cairndev``, ``cairn-client``,
    ``cairn-pack-hello``) from ``dist`` alone (``--no-index --no-deps``) plus the third-party
    requirements the lock exports for the base install, and nothing else that is cairn's. Not
@@ -52,14 +51,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 #: The public release (ADR-0137 D6): wheel distribution names, normalised as wheels spell them.
-WHEELS = {"cairndev", "cairn_client", "cairn_operator_dataflow_metaflow",
-          "cairn_operator_dataflow_skypilot", "cairn_pack_hello"}
+WHEELS = {"cairndev", "cairn_client", "cairn_pack_hello"}
 #: What a base install holds of cairn's own: the engine, the client and the example pack.
 BASE = ("cairndev", "cairn-client", "cairn-pack-hello")
 ENGINE = "cairndev"
 SNAPSHOT = ROOT / "tests" / "core" / "fixtures" / "contract_resolution_prefold.json"
-CORE_CONTRACTS = 13
-BUILTIN_OPERATORS = 24  # 22, plus compute/acquire and compute/release (ADR-0151 D6)
+CORE_CONTRACTS = 8
+BUILTIN_OPERATORS = 11
 #: The pipeline D7.4 runs in process, and the gates in it that wait for a person.
 PIPELINE = "hello-cairn/profile-and-publish"
 PERSON_GATES = ("review", "promote")
@@ -74,11 +72,11 @@ PROVIDER_KEYS = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GEMIN
 # ── the checks: plain data in, problems out ─────────────────────────────────────────────────
 
 def wheel_problems(names: Iterable[str]) -> list[str]:
-    """D7.2: exactly the public five, nothing more and nothing less."""
+    """D7.2: exactly the public three, nothing more and nothing less."""
     got = set(names)
     if got == WHEELS:
         return []
-    return [f"the wheels are {sorted(got)}, not the public five {sorted(WHEELS)}"
+    return [f"the wheels are {sorted(got)}, not the public three {sorted(WHEELS)}"
             + (f"; extra: {sorted(got - WHEELS)}" if got - WHEELS else "")
             + (f"; missing: {sorted(WHEELS - got)}" if WHEELS - got else "")]
 
@@ -433,7 +431,7 @@ def main(argv: list[str] | None = None) -> int:
             shutil.rmtree(work, ignore_errors=True)
         else:
             print(f"[check_folded_wheels] kept {work}")
-    print("[check_folded_wheels] OK: five wheels; the engine wheel carries the builtins and the core "
+    print("[check_folded_wheels] OK: three wheels; the engine wheel carries the builtins and the core "
           f"contracts; {PIPELINE} ran in process to done")
     return 0
 

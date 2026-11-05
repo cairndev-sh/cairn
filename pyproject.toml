@@ -131,24 +131,11 @@ hello-cairn = "cairn.core.demo_seed:seed_hello_cairn"
 [project.entry-points."cairn.operators"]
 "artifact/promote" = "operator_dataflow.operators.promote:ArtifactPromoteOp"
 "audit/store" = "operator_audit_store.operators.audit_store:AuditStoreOp"
-"compute/acquire" = "operator_remote.operators.acquire:ComputeAcquireOp"
-"compute/release" = "operator_remote.operators.release:ComputeReleaseOp"
 "data/profile" = "operator_data_profile.operators.profile:DataProfileOp"
 "dataflow/run" = "operator_dataflow.operators.run:DataflowRunOp"
-"mcp/call" = "operator_mcp.operators.call:CallOp"
-"memory/search" = "operator_memory_local.operators.search:SearchOp"
-"memory/write" = "operator_memory_local.operators.write:WriteOp"
 "ml/run" = "operator_dataflow.operators.run_ml:MlRunOp"
-"monitor/dispatch" = "operator_monitor_threshold.operators.dispatch:DispatchOp"
-"monitor/propose" = "operator_monitor_threshold.operators.propose:ProposeOp"
-"monitor/threshold" = "operator_monitor_threshold.operators.threshold:ThresholdOp"
-"rag/fetch" = "operator_rag_local.operators.fetch:FetchOp"
-"rag/rerank" = "operator_rag_rerank.operators.rerank:RerankOp"
-"rag/search" = "operator_rag_local.operators.search:SearchOp"
 "redact/text" = "operator_redact_regex.operators.redact_text:RedactTextOp"
-"remote/exec" = "operator_remote.operators.exec:RemoteExecOp"
 "secrets/env" = "operator_secrets_env.operators.env:EnvSecretStoreOp"
-"secrets/infisical" = "operator_secrets_infisical.operators.infisical:InfisicalSecretStoreOp"
 "storage/get" = "operator_artifact_local.operators.get:GetOp"
 "storage/put" = "operator_artifact_local.operators.put:PutOp"
 "train/eval-loss" = "operator_train_local.operators.eval_loss:EvalLossOp"
@@ -250,7 +237,6 @@ oauth = ["authlib>=1.3.0"]
 # local encrypted-file backend (cryptography, base dep) is the default and needs
 # no service. Install with `pip install -e ".[infisical]"`. The same SDK backs the
 # builtin secrets/infisical operator (its pack's [infisical] extra, ADR-0137; lazy import).
-infisical = ["infisicalsdk>=1.0.0"]
 # The example pack and everything its four pipelines reach beyond the base install
 # (ADR-0127 D1): `pip install 'cairndev[hello]'` → cairn-pack-hello[all] → the
 # sqlite-vec store, asyncssh and DBOS. The training stack is not in it
@@ -323,14 +309,10 @@ train = ["torch>=2.11,<2.12", "transformers>=5.5,<5.6", "peft>=0.20,<0.21", "dat
 # The builtin dataflow engine's job-machine libraries (polars shards, duckdb, pyarrow).
 dataflow-engine = ["polars>=1.0", "duckdb>=1.0", "pyarrow>=15"]
 # rag/rerank's cross-encoder (local torch model) and Cohere (network, COHERE_API_KEY) scorers.
-rerank-cross-encoder = ["sentence-transformers>=3.0"]
-rerank-cohere = ["cohere>=5.0"]
 # ADR-0134 D2 (#2678) — the Metaflow dataflow engine: an optional public wheel, never a base
 # dependency. `[profile.backends] ml_engine = "metaflow"` without it is refused at the launch door.
-metaflow = ["cairn-operator-dataflow-metaflow", "metaflow>=2.12"]
 # ADR-0134 D3a — the SkyPilot provisioning engine: an optional public wheel. Selecting it without
 # the wheel is refused at the launch door (ADR-0134 D3c).
-skypilot = ["cairn-operator-dataflow-skypilot", "skypilot[aws,kubernetes,runpod,ssh,vast]>=0.13"]
 # The platform: every official operator pack and the domain contracts. Today's
 # deployments, this repository's CI and the engine image install
 # `cairn[platform,ssh,ask]`.
@@ -358,16 +340,12 @@ skypilot = ["cairn-operator-dataflow-skypilot", "skypilot[aws,kubernetes,runpod,
 [tool.uv.workspace]
 members = [
     "packages/cairn-client",
-    "packages/cairn-operator-dataflow-metaflow",
-    "packages/cairn-operator-dataflow-skypilot",
     "examples/hello-cairn",
 ]
 
 [tool.uv.sources]
 cairn-client           = { workspace = true }
 cairn-pack-hello = { workspace = true, editable = false }
-cairn-operator-dataflow-metaflow = { workspace = true }
-cairn-operator-dataflow-skypilot = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]
@@ -382,15 +360,8 @@ packages = [
     "packages/cairn-operator-audit-store/src/operator_audit_store",
     "packages/cairn-operator-data-profile/src/operator_data_profile",
     "packages/cairn-operator-dataflow/src/operator_dataflow",
-    "packages/cairn-operator-mcp/src/operator_mcp",
-    "packages/cairn-operator-memory-local/src/operator_memory_local",
-    "packages/cairn-operator-monitor-threshold/src/operator_monitor_threshold",
-    "packages/cairn-operator-rag-local/src/operator_rag_local",
-    "packages/cairn-operator-rag-rerank/src/operator_rag_rerank",
     "packages/cairn-operator-redact-regex/src/operator_redact_regex",
-    "packages/cairn-operator-remote/src/operator_remote",
     "packages/cairn-operator-secrets-env/src/operator_secrets_env",
-    "packages/cairn-operator-secrets-infisical/src/operator_secrets_infisical",
     "packages/cairn-operator-train-local/src/operator_train_local",
 ]
 exclude = ["CLAUDE.md", "AGENTS.md"]
@@ -406,26 +377,14 @@ exclude = ["CLAUDE.md", "AGENTS.md"]
 "packages/cairn-operator-audit-store/pack.toml" = "operator_audit_store/pack.toml"
 "packages/cairn-operator-data-profile/pack.toml" = "operator_data_profile/pack.toml"
 "packages/cairn-operator-dataflow/pack.toml" = "operator_dataflow/pack.toml"
-"packages/cairn-operator-mcp/pack.toml" = "operator_mcp/pack.toml"
-"packages/cairn-operator-memory-local/pack.toml" = "operator_memory_local/pack.toml"
-"packages/cairn-operator-monitor-threshold/pack.toml" = "operator_monitor_threshold/pack.toml"
-"packages/cairn-operator-rag-local/pack.toml" = "operator_rag_local/pack.toml"
-"packages/cairn-operator-rag-rerank/pack.toml" = "operator_rag_rerank/pack.toml"
 "packages/cairn-operator-redact-regex/pack.toml" = "operator_redact_regex/pack.toml"
-"packages/cairn-operator-remote/pack.toml" = "operator_remote/pack.toml"
 "packages/cairn-operator-secrets-env/pack.toml" = "operator_secrets_env/pack.toml"
-"packages/cairn-operator-secrets-infisical/pack.toml" = "operator_secrets_infisical/pack.toml"
 "packages/cairn-operator-train-local/pack.toml" = "operator_train_local/pack.toml"
 "packages/cairn-contracts-artifact/definitions" = "cairn_contracts/cairn-contracts-artifact"
 "packages/cairn-contracts-audit/definitions" = "cairn_contracts/cairn-contracts-audit"
 "packages/cairn-contracts-data/definitions" = "cairn_contracts/cairn-contracts-data"
 "packages/cairn-contracts-dataflow/definitions" = "cairn_contracts/cairn-contracts-dataflow"
-"packages/cairn-contracts-mcp/definitions" = "cairn_contracts/cairn-contracts-mcp"
-"packages/cairn-contracts-memory/definitions" = "cairn_contracts/cairn-contracts-memory"
-"packages/cairn-contracts-monitor/definitions" = "cairn_contracts/cairn-contracts-monitor"
-"packages/cairn-contracts-rag/definitions" = "cairn_contracts/cairn-contracts-rag"
 "packages/cairn-contracts-redact/definitions" = "cairn_contracts/cairn-contracts-redact"
-"packages/cairn-contracts-remote/definitions" = "cairn_contracts/cairn-contracts-remote"
 "packages/cairn-contracts-secrets/definitions" = "cairn_contracts/cairn-contracts-secrets"
 "packages/cairn-contracts-storage/definitions" = "cairn_contracts/cairn-contracts-storage"
 "packages/cairn-contracts-train/definitions" = "cairn_contracts/cairn-contracts-train"

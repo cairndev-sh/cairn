@@ -75,8 +75,8 @@ def _import_root(doc: dict) -> str:
     return package
 
 
-def test_the_fold_is_the_fourteen_builtins_and_the_thirteen_core_contracts():
-    assert len(PACKS) == 14 and len(CONTRACTS) == 13 and len(FOLDED) == 27
+def test_the_fold_is_the_seven_builtins_and_the_eight_core_contracts():
+    assert len(PACKS) == 7 and len(CONTRACTS) == 8 and len(FOLDED) == 15
     assert set(PACKS) == set(_layout.operator_packs("builtins"))
     assert all(d.name.startswith("cairn-contracts-") for d in CONTRACTS)
 
@@ -189,7 +189,7 @@ def test_no_folded_directory_builds():
     taken = {REPO.joinpath(*PurePosixPath(p).parts[:2])
              for p in [*HATCH["wheel"]["packages"], *HATCH["wheel"]["force-include"]]
              if PurePosixPath(p).parts[0] == "packages"}
-    assert len(taken) == 27, sorted(d.name for d in taken)
+    assert len(taken) == 15, sorted(d.name for d in taken)
     assert taken == set(FOLDED), sorted(d.name for d in taken ^ set(FOLDED))
     for d in taken:
         text = (d / "pyproject.toml").read_text()

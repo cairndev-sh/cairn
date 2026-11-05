@@ -1,9 +1,0 @@
-{
-  "format": "cairn.capability/1",
-  "id": "memory.write",
-  "revision": "1.0.0",
-  "summary": "Upsert one record into a named memory store under an embedding of embed_text; the id is the caller's or derived from embed_text, so a repeated write is idempotent. Failures surface as ok=false with an error.",
-  "input": "contract://memory.write.input/1.0.0",
-  "configuration": "contract://memory.write.configuration/1.0.0",
-  "output": "contract://memory.write.output/1.0.0"
-}

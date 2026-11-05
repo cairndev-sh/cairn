@@ -1,8 +1,0 @@
-# Triggers
-
-A pipeline starts by hand unless it declares a trigger. `schedule` runs it on a cron.
-`webhook` runs it when an HTTP request arrives at a receiver path. `watch` looks at a
-source on a cadence: a registered dataset, an S3 prefix, or a database table past a
-watermark, and proposes or starts the pipeline when something changed. A fresh
-install arms nothing: a declared schedule or watch starts paused until someone turns
-it on.

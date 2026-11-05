@@ -208,7 +208,7 @@ def check_deploy(env: dict[str, str], profiles: set[str]) -> list[CheckResult]:
                 "secrets_binding", "warn",
                 "'infisical' profile is on but CAIRN_PROFILE is unset — the engine "
                 "won't read from Infisical unless a profile binds "
-                "secrets.store=secrets/infisical (ship CAIRN_PROFILE=.../prod-infisical.toml)",
+                "secrets.store=secrets/infisical (point CAIRN_PROFILE at a profile that does)",
                 category="secrets"))
         else:
             # Best-effort: if the profile file is reachable from here, confirm it

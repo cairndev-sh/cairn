@@ -58,58 +58,5 @@ async def test_memory_ensure_collection_namespaces_by_workspace():
 
 # ── operator runtime path: _store_for (the real path packs invoke) ──
 
-async def test_memory_operator_store_for_isolates_workspaces():
-    from operator_memory_local.operators import search as msearch
-
-    msearch._STORES.clear()
-    made: list[str] = []
-
-    def _fake_build(_backend):
-        store = AsyncMock()
-        async def _init(coll, dim):
-            made.append(coll)
-        store.initialize.side_effect = _init
-        return store
-
-    with patch.object(msearch, "build_vector_store", side_effect=_fake_build):
-        await msearch._store_for("incidents", 8)              # default workspace
-        tok = ws.set_current_workspace("acme")
-        try:
-            await msearch._store_for("incidents", 8)          # same name, other ws
-        finally:
-            ws.reset_current_workspace(tok)
-
-    assert made == ["memory_incidents", "ws_acme__memory_incidents"]
-    # two distinct cached store instances → no cross-workspace bleed, concurrency-safe
-    assert len(msearch._STORES) == 2
-    msearch._STORES.clear()
 
 
-async def test_rag_operator_store_for_isolates_workspaces():
-    from operator_rag_local.operators import search as rsearch
-
-    rsearch._STORES.clear()
-    made: list[str] = []
-
-    def _fake_build(_backend):
-        store = AsyncMock()
-        async def _init(coll, dim):
-            made.append(coll)
-        store.initialize.side_effect = _init
-        return store
-
-    with patch.object(rsearch, "build_vector_store", side_effect=_fake_build):
-        await rsearch._store_for("runbooks", 8)
-        tok = ws.set_current_workspace("acme")
-        try:
-            await rsearch._store_for("runbooks", 8)
-        finally:
-            ws.reset_current_workspace(tok)
-
-    # #512 — the collection is embedder-scoped; workspace isolation still holds
-    # (default vs acme), just with the active embedder's fingerprint appended.
-    from cairn.services.rag.embeddings import rag_collection
-    base = rag_collection("runbooks")            # rag_runbooks__<embedder_fp>
-    assert made == [base, f"ws_acme__{base}"]
-    assert len(rsearch._STORES) == 2
-    rsearch._STORES.clear()

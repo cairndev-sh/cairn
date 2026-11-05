@@ -122,16 +122,7 @@ PACK_CORE_INVENTORY: dict[Edge, str] = {
     ("cairn/operators/official/data_expectations/src/operator_data_expectations/dataflow_stages.py", "cairn.services.data", "lazy"): "C",
     ("cairn/operators/official/data_expectations/src/operator_data_expectations/operators/expectations.py", "cairn.services.data", "top"): "C",
     ("cairn/operators/official/data_expectations/src/operator_data_expectations/schemas/expectations.py", "cairn.services.data", "top"): "C",
-    ("cairn/operators/builtins/mcp/src/operator_mcp/operators/call.py", "cairn.services.mcp.client", "top"): "C",
     ("cairn/operators/official/notify_slack/src/operator_notify_slack/operators/slack.py", "cairn.services.mcp.client", "lazy"): "C",
-    ("cairn/operators/builtins/memory_local/src/operator_memory_local/operators/search.py", "cairn.services.rag.embeddings", "top"): "C",
-    ("cairn/operators/builtins/memory_local/src/operator_memory_local/operators/write.py", "cairn.services.rag.embeddings", "lazy"): "C",
-    ("cairn/operators/builtins/rag_local/src/operator_rag_local/operators/fetch.py", "cairn.services.rag.embeddings", "top"): "C",
-    ("cairn/operators/builtins/rag_local/src/operator_rag_local/operators/search.py", "cairn.services.rag.embeddings", "top"): "C",
-    ("cairn/operators/builtins/memory_local/src/operator_memory_local/operators/search.py", "cairn.services.rag.stores", "top"): "C",
-    ("cairn/operators/builtins/rag_local/src/operator_rag_local/operators/search.py", "cairn.services.rag.stores", "top"): "C",
-    ("cairn/operators/builtins/memory_local/src/operator_memory_local/operators/search.py", "cairn.services.rag.stores.base", "top"): "C",
-    ("cairn/operators/builtins/rag_local/src/operator_rag_local/operators/search.py", "cairn.services.rag.stores.base", "top"): "C",
 }
 # Each rule: name, predicate(rel, module) -> bool (True = the edge is forbidden),
 # allowlist of (rel, module-prefix, kind) sites recorded as debt.
@@ -165,7 +156,7 @@ RULES: dict[str, tuple] = {
         and mod.split(".")[0].startswith("operator_")
         and mod.split(".")[0] != _pack_of(rel)
         # builtin → builtin ships together in the public core: not a private coupling
-        # (#2427: the dataflow SSH engine → operator_remote, both builtins). The optional
+        # (#2427). The optional
         # tier (ADR-0134 D1) is installed only through an extra: no exemption either way.
         and not (rel.startswith("cairn/operators/builtins/") and mod.split(".")[0] in _builtin_modules()),
         set(),

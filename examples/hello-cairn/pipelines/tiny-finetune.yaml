@@ -1,6 +1,6 @@
 # pipelines/tiny-finetune.yaml — the ml pipeline (hello-cairn WP6, ADR-0127 D1/D4).
 #
-#   profile → data gate → train (ml flow) → loss (threshold) → loss gate
+#   profile → data gate → train (ml flow) → loss gate
 #     → promote ⏸ → review ⏸ → card
 #
 # A real LoRA fine-tune of a small causal LM (on CPU, or a CUDA GPU when available), then the governance a model
@@ -97,24 +97,12 @@ steps:
       output_dir: $input.output_dir
 
   # ── the loss gate ─────────────────────────────────────────────────────────
-  # monitor/threshold says whether the loss crossed the target (gt: above it);
-  # the data gate stops the pipeline when it did.
-  # With fewer than eight rows nothing is held out, `train.lora.eval_loss` is empty and
-  # this leg fails rather than gate on a number that was not measured.
-  - id: loss
-    label: Compare the held-out loss with the target
-    task: monitor/threshold
-    depends_on: [train]
-    with:
-      metric: held-out loss
-      # the trainer's own figure, over the rows it held out and did not train on
-      value: $steps.train.train_lora_eval_loss
-      threshold: $input.target_loss
-      comparator: gt
-
+  # The data gate stops the pipeline when the trainer's own figure, over the rows it held out,
+  # is above the target. With fewer than eight rows nothing is held out, the loss is empty,
+  # and the gate stops rather than pass on a number that was not measured.
   - gate: loss-ok
-    depends_on: [loss]
-    predicate: steps.loss.crossed == `false`
+    depends_on: [train]
+    predicate: steps.train.findings.train_lora_eval_loss <= input.target_loss
 
   # ── tag the candidate (an operator-declared gate) ─────────────────────────
   - id: promote
@@ -133,7 +121,6 @@ steps:
     show:
       - train.train_lora_train_loss   # the train.lora stage's train_loss (stats sit under findings)
       - train.train_lora_eval_loss   # the held-out loss the gate read
-      - loss.threshold
       - promote.tag
       - promote.uri
 

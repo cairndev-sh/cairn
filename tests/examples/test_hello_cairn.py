@@ -159,15 +159,15 @@ def test_the_loss_gate_reads_the_trainers_held_out_loss_and_nothing_scores_train
     steps = {s.id or s.gate: s for s in d.steps}
     assert "eval" not in steps
     assert not [s.id for s in d.steps if s.task == "train/eval-loss"]
-    loss = steps["loss"]
-    assert loss.depends_on == ["train"]
-    assert loss.inputs["value"] == "$steps.train.train_lora_eval_loss"
+    gate = steps["loss-ok"]
+    assert gate.depends_on == ["train"]
+    assert "steps.train.findings.train_lora_eval_loss" in gate.predicate
     # that spelling resolves against the stats the runner reports for the flow leg
     plan = {s.id: s for s in plan_pipeline(d).steps}
     stats = {"train.lora.adapter_path": "/w/adapter", "train.lora.output": "/w/adapter",
              "train.lora.train_loss": 3.2, "train.lora.eval_loss": 3.4}
     out = _flow_leg_output(plan["train"], SimpleNamespace(ok=True, stats=stats))
-    gated = resolve_value(loss.inputs["value"], Scopes(state={}, steps={"train": out}), source="test")
+    gated = resolve_value("$steps.train.train_lora_eval_loss", Scopes(state={}, steps={"train": out}), source="test")
     assert gated == 3.4                      # the held-out figure, not train_loss
     assert d.outputs["eval_loss"] == "train.train_lora_eval_loss"
     assert "train.train_lora_eval_loss" in steps["review"].show

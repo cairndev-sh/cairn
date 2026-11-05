@@ -74,10 +74,8 @@ def test_the_image_variable_is_cairn_image():
 #: ADR-0121 D3 (#2429): the operator packs ship as ``cairn-operator-<name>``; import names
 #: (``operator_<name>``), operator refs and entry-point names do not change.
 _OPERATOR_PYPROJECTS = sorted(p / "pyproject.toml" for p in _layout.operator_packs())
-#: 23 official + 14 builtin + 2 optional packs in the monorepo; the public tree has the 14
-#: builtins (`train_local` joined, ADR-0127 D4) and the optional Metaflow and SkyPilot engines
-#: (ADR-0134 D2/D3).
-_OPERATOR_PACKS = 39 if _layout.PRIVATE_TREES else 16
+#: The public tree has the 7 builtins.
+_OPERATOR_PACKS = 7
 
 
 def test_every_operator_pack_distribution_is_cairn_operator_and_matches_its_directory():

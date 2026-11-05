@@ -1,9 +1,0 @@
-{
-  "format": "cairn.capability/1",
-  "id": "rag.rerank",
-  "revision": "1.0.0",
-  "summary": "Re-rank retrieved hits against the query and cap them to top_k (identity, cross-encoder or Cohere); a missing backend or an outage degrades to identity, never a failure.",
-  "input": "contract://rag.rerank.input/1.0.0",
-  "configuration": "contract://rag.rerank.configuration/1.0.0",
-  "output": "contract://rag.rerank.output/1.0.0"
-}
