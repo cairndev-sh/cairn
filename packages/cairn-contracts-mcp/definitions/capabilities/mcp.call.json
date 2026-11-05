@@ -1,9 +1,0 @@
-{
-  "format": "cairn.capability/1",
-  "id": "mcp.call",
-  "revision": "1.0.0",
-  "summary": "Invoke one tool on a profile-named MCP server with an opaque args payload; failures surface as ok=false with an error, not as an exception.",
-  "input": "contract://mcp.call.input/1.0.0",
-  "configuration": "contract://mcp.call.configuration/1.0.0",
-  "output": "contract://mcp.call.output/1.0.0"
-}

@@ -32,13 +32,8 @@ visibility = "internal"
 #
 # Production profiles override these with richer backends shipped as
 # separate operator packs (cairn-operator-pgvector, cairn-operator-s3, etc.).
-"memory.search"  = "memory/search"   # cairn-operator-memory-local
-"memory.write"   = "memory/write"    # cairn-operator-memory-local
 "storage.put"    = "storage/put"     # cairn-operator-artifact-local
 "storage.get"    = "storage/get"     # cairn-operator-artifact-local
-"rag.search"     = "rag/search"      # cairn-operator-rag-local
-"rag.fetch"      = "rag/fetch"       # cairn-operator-rag-local
-"mcp.call"       = "mcp/call"        # cairn-operator-mcp
 # No `eval.delta` here (ADR-0134 D5): every binding in a shipped profile resolves against
 # the public builtins, and `eval/delta` is the platform's eval operator. The platform binds it
 # in its own profiles.

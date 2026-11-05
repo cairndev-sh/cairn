@@ -1,9 +1,0 @@
-{
-  "format": "cairn.capability/1",
-  "id": "monitor.propose",
-  "revision": "1.0.0",
-  "summary": "Record a threshold-crossing proposal for a downstream run. Declares requires_approval: it runs only after a human approved it at the gate.",
-  "input": "contract://monitor.propose.input/1.0.0",
-  "configuration": "contract://monitor.propose.configuration/1.0.0",
-  "output": "contract://monitor.propose.output/1.0.0"
-}

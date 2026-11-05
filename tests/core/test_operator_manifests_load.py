@@ -40,9 +40,3 @@ def test_operator_manifest_parses(manifest: Path):
             f"{manifest} declares no operators and registers no dataflow engine"
 
 
-def test_rag_rerank_capabilities_is_a_table():
-    """The specific #513 regression: rag/rerank provides rag.rerank via the
-    capabilities sub-table, not a bare array."""
-    rerank = next(d for d in _layout.operator_packs("builtins") if _layout.pack_name(d) == "rag_rerank")
-    m = load_manifest(rerank / "pack.toml")
-    assert "rag/rerank" in m.operators

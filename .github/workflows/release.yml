@@ -21,11 +21,11 @@ jobs:
     - uses: astral-sh/setup-uv@v7
     - name: Build all workspace wheels (lockstep)
       run: uv build --all-packages
-    - name: Exactly the five public wheels (ADR-0137 D6)
+    - name: Exactly the three public wheels (ADR-0137 D6)
       run: |
         set -euo pipefail
         ls dist/*.whl | sed 's|dist/||; s|-.*||' | LC_ALL=C sort > /tmp/wheels.txt
-        printf '%s\n' cairn_client cairn_operator_dataflow_metaflow cairn_operator_dataflow_skypilot cairn_pack_hello cairndev | LC_ALL=C sort > /tmp/want.txt
+        printf '%s\n' cairn_client cairn_pack_hello cairndev | LC_ALL=C sort > /tmp/want.txt
         diff /tmp/want.txt /tmp/wheels.txt
     - name: GitHub Release with wheel artifacts
       uses: softprops/action-gh-release@v3

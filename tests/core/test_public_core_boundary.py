@@ -85,18 +85,15 @@ PRIVATE_OPERATOR_MODULES: frozenset[str] = frozenset({
     "operator_postmortem", "operator_redteam", "operator_report", "operator_s3", "operator_serving",
     "operator_training"})
 PRIVATE_REF_PREFIXES: frozenset[str] = frozenset({
-    "blast-radius", "clickstack", "compress", "cost", "dataset", "dataset-readiness",
+    "blast-radius", "clickstack", "compress", "compute", "cost", "dataset", "dataset-readiness",
     "dataset_readiness", "eval", "git", "incident", "infer", "ingest", "lineage", "llm", "logs", "model",
-    "notify", "postmortem", "redteam", "report", "s3", "security-kb", "security-triage", "security_kb",
+    "notify", "postmortem", "rag", "redteam", "report", "s3", "security-kb", "security-triage", "security_kb",
     "security_triage", "serve", "serving", "traces", "training"})
-#: Official operators under a prefix a builtin shares (``data/profile`` and ``rag/search`` are builtins).
+#: Official operators under a prefix a builtin shares (``data/profile`` is a builtin).
 #: `train/` is shared since the public train-local builtin (`train/lora`, `train/eval-loss`, ADR-0127 D4),
-#: so the platform training pack's `train/*` operators are named one by one. `compute/` is shared since
-#: `compute/acquire` and `compute/release` moved into the public remote builtin (ADR-0151 D6, owner
-#: decision D-D 2026-10-24): exactly those two are public, the platform's other three stay private.
+#: so the platform training pack's `train/*` operators are named one by one.
 PRIVATE_SHARED_PREFIX_REFS: frozenset[str] = frozenset({
-    "compute/actual", "compute/estimate", "compute/quote",
-    "data/expectations", "rag/eval",
+    "data/expectations",
     "train/kaggle", "train/local", "train/modal", "train/proxy-trial", "train/runpod",
     "train/stage-dataset", "train/stub", "train/teardown", "train/vast"})
 
@@ -153,7 +150,7 @@ def test_operator_module_string_debt_only_shrinks():
     ('ENTRY = ["python", "-m", "operator_eval.run_entry"]\n', True),
     ('CODE = "\\n".join(["import os", "from operator_training.flow_stages import load"])\n', True),
     ('def f(x):\n    return f"from operator_dataflow.stages import {x}"\n', True),
-    ('EP = "operator_mcp.operators:CallOp"\n', True),
+    ('EP = "operator_audit_store.operators:StoreOp"\n', True),
     ('HINT = "pip install cairn-operator-dataflow[engine]"\n', False),
     ('KEY = "operator_id"\n', False),
     ('DESC = "Empty = the pinned default (operator_dataflow.engines_ssh.DEFAULT_TRAIN_IMAGE)."\n', False),
@@ -275,16 +272,6 @@ def test_a_shared_prefix_is_shared_with_a_builtin():
     assert {r.split("/")[0] for r in PRIVATE_SHARED_PREFIX_REFS} <= builtin_prefixes
 
 
-def test_exactly_two_compute_refs_are_public():
-    """ADR-0151 D6 (owner decision D-D, 2026-10-24): the `compute` prefix is public for
-    `compute/acquire` and `compute/release` only; the platform's cost operators stay private."""
-    assert {r for r in _manifest_refs("builtins") if r.startswith("compute/")} == {
-        "compute/acquire", "compute/release"}
-    assert "compute" not in PRIVATE_REF_PREFIXES and "operator_compute" in PRIVATE_OPERATOR_MODULES
-    new, _ = _check(_nonpublic_ref_hits(_literals_of_source(
-        'A = "compute/acquire"\nR = "compute/release"\nE = "compute/estimate"\n', "cairn/core/new.py")),
-        NONPUBLIC_REFS)
-    assert [v for _, _, v in new] == ["compute/estimate"]
 
 
 @pytest.mark.skipif(not _layout.PRIVATE_TREES, reason="the platform's packs are not in this tree")

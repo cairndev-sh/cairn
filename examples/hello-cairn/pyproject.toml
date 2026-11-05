@@ -26,12 +26,10 @@ license = { text = "Apache-2.0" }
 dependencies = ["cairndev>=0.1.0"]
 
 [project.optional-dependencies]
-# Everything the four pipelines reach beyond the base install: the sqlite-vec store
-# for retrieval and memory (ask-the-docs), asyncssh for remote/exec (nightly-ops),
-# the DBOS durable runtime (CAIRN_RUNTIME=dbos). The MCP client and the FastMCP
-# server ship with the engine's base dependencies. `cairndev[hello]` pulls this.
+# Everything the pipelines reach beyond the base install: the DBOS durable runtime
+# (CAIRN_RUNTIME=dbos). `cairndev[hello]` pulls this.
 # tiny-finetune's training stack is separate and large: cairndev[train].
-all = ["cairndev[rag-sqlite-vec,ssh,runtime-dbos]>=0.1.0"]
+all = ["cairndev[runtime-dbos]>=0.1.0"]
 
 [project.entry-points."cairn.packs"]
 hello-cairn = "cairn_pack_hello:pack"
@@ -54,11 +52,9 @@ bypass-selection = true
 "pipelines" = "cairn_pack_hello/pipelines"
 "presets" = "cairn_pack_hello/presets"
 "flows" = "cairn_pack_hello/flows"
-"rag" = "cairn_pack_hello/rag"
 "data" = "cairn_pack_hello/data"
 "policies" = "cairn_pack_hello/policies"
 "profiles" = "cairn_pack_hello/profiles"
-"tools" = "cairn_pack_hello/tools"
 
 [tool.hatch.build.targets.sdist]
 include = ["__init__.py", "pack.toml", "hooks.py", "pipelines", "presets", "flows", "rag", "data", "policies", "profiles",

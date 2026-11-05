@@ -106,14 +106,15 @@ def test_resolve_engine_honours_a_profile_selected_engine(monkeypatch):
 
 
 def test_resolve_engine_reads_profile_target(monkeypatch):
-    """The SSH target is a selector too: a profile-bound box must be honoured."""
+    """The target is a selector too: a profile-bound box reaches the engine, and the builtin
+    one, which runs on this machine only, refuses it by name."""
+    from cairn.core.dataflow.engine import EngineError
     from operator_dataflow.engines import resolve_engine
-    from operator_dataflow.engines_ssh import BuiltinSshEngine
 
     monkeypatch.setattr(bs, "_ambient_backends",
                         lambda: {"dataflow_engine": "builtin", "dataflow_target": "databox"})
     monkeypatch.delenv("OBS_DATAFLOW_ENGINE", raising=False)
     monkeypatch.delenv("OBS_DATAFLOW_TARGET", raising=False)
 
-    eng = resolve_engine(None, kind="data")
-    assert isinstance(eng, BuiltinSshEngine)
+    with pytest.raises(EngineError, match="databox"):
+        resolve_engine(None, kind="data")

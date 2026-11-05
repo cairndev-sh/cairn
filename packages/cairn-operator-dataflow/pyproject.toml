@@ -17,14 +17,6 @@ dependencies = []
 # [engine] = what a JOB MACHINE installs. The P1a runner itself is stdlib-only;
 # these arrive for the real stages (P1b: polars shards, duckdb global state).
 engine = ["polars>=1.0", "duckdb>=1.0", "pyarrow>=15"]
-# [ssh] = the rung-1 dispatch path: the builtin engine launches cairn-dataflow-run
-# on a box via the PROVEN cairn-operator-remote machinery (never re-implemented here).
-ssh = ["cairn-operator-remote[ssh]"]
-# The Metaflow engine is its own optional wheel, cairn-operator-dataflow-metaflow, offered by
-# cairndev[metaflow] (ADR-0134 D2, #2678).
-# The SkyPilot engine is its own optional wheel too, cairn-operator-dataflow-skypilot, offered by
-# cairndev[skypilot] (ADR-0134 D3a).
-
 [project.entry-points."cairn.operators"]
 "dataflow/run" = "operator_dataflow.operators.run:DataflowRunOp"
 "ml/run" = "operator_dataflow.operators.run_ml:MlRunOp"

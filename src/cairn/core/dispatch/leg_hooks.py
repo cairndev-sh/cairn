@@ -241,10 +241,12 @@ COST_ESTIMATE_KEY = "cost_estimate"
 NOT_PRICED = "not priced"
 #: A target spelled ``worker:<pool>`` is a pull-worker pool, not a connection.
 WORKER_TARGET_PREFIX = "worker:"
-#: The one engine whose target names a ``compute.ssh`` connection it dispatches to
-#: (ADR-0152): any other engine's ``<kind>_target`` means something else (a legacy
-#: Metaflow metadata root, a pool, a cluster) and is never priced.
-PRICED_ENGINE = "builtin"
+#: The engine that runs a leg on the engine's own machine (ADR-0155 D6).
+LOCAL_ENGINE = "builtin"
+#: The engines priced by connection or local rate. ``ssh`` is the one whose target names a
+#: ``compute.ssh`` connection it dispatches to (ADR-0152): any other engine's
+#: ``<kind>_target`` means something else (a metadata root, a pool, a cluster) and is never priced.
+PRICED_ENGINES = frozenset({LOCAL_ENGINE, "ssh"})
 #: ADR-0155 D6 — the connection name recorded for a leg priced on the engine's own
 #: machine. Not a registered connection: the rate is ``[profile.budget] local_hourly_usd``.
 LOCAL_CONNECTION = "local"
@@ -427,10 +429,10 @@ async def price_plan(plan: Any, *, store: Any = None,
         except Exception as e:  # noqa: BLE001 — a selection error is unknown, never "no target"
             raise LegPriceUnreadable(f"leg {s.id!r}: its engine and compute target cannot be read "
                                      f"({type(e).__name__}: {e})") from e
-        if not target and (engine != PRICED_ENGINE or not local_hourly_usd):
+        if not target and (engine != LOCAL_ENGINE or not local_hourly_usd):
             continue
-        if engine != PRICED_ENGINE:
-            # ADR-0152 — only the builtin engine dispatches to a connection; another
+        if engine not in PRICED_ENGINES:
+            # ADR-0152 — only the ssh engine dispatches to a connection; another
             # engine's target is not one, so it is neither priced nor looked up.
             legs.append({"step": s.id, "priced": False, "connection": target,
                          "basis": f"{NOT_PRICED} (engine {engine!r} does not dispatch to a connection)"})
@@ -770,7 +772,7 @@ class FlowLegHooks:
 
 
 __all__ = ["BUDGET_KEY", "COST_ESTIMATE_KEY", "LOCAL_CONNECTION", "budget_cap_usd", "deployment_budget",
-           "recorded_budget", "FlowLegHooks", "LegPriceUnreadable", "NOT_PRICED", "PRICED_ENGINE",
+           "recorded_budget", "FlowLegHooks", "LegPriceUnreadable", "NOT_PRICED", "LOCAL_ENGINE", "PRICED_ENGINES",
            "PRICED_TARGET_KIND", "engine_and_target_for_kind",
            "compute_target_for_kind", "estimate_evidence", "leg_price_kwargs", "price_flow_leg",
            "price_plan", "publish_pipeline_audit", "budget_cap_usd", "recorded_budget", "recorded_cost_estimate", "recorded_leg_price",

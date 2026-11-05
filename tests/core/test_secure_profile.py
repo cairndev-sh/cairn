@@ -22,21 +22,10 @@ def test_secure_profile_loads_and_extends_local_dev():
     assert p.bindings["redact.text"] == "redact/text"
     assert p.bindings["audit.sink"] == "audit/store"
     # …and the inherited local-dev substrate bindings survive the extend.
-    assert p.bindings["rag.search"] == "rag/search"
-    assert p.bindings["mcp.call"] == "mcp/call"
+    assert p.bindings["storage.put"] == "storage/put"
+    assert p.bindings["storage.get"] == "storage/get"
 
 
-def test_prod_infisical_profile_binds_secrets_and_inherits_secure():
-    """prod-infisical (#408) binds secrets.store→Infisical AND keeps secure's
-    redaction + audit via the extends chain (secure → local-dev)."""
-    from cairn.core.pack.profile import load_profile
-    p = load_profile(Path(PROD_INFISICAL))
-    assert p.bindings["secrets.store"] == "secrets/infisical"
-    # Inherited from secure…
-    assert p.bindings["redact.text"] == "redact/text"
-    assert p.bindings["audit.sink"] == "audit/store"
-    # …and from local-dev.
-    assert p.bindings["rag.search"] == "rag/search"
 
 
 @pytest.mark.asyncio

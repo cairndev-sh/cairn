@@ -114,12 +114,11 @@ def test_dataflow_pack_registers_its_engines():
     assert callable(factory)
 
 
-def test_builtin_factory_builds_local_and_ssh_engines():
-    """The `builtin` name covers two engines — local, or SSH when the
-    environment names a target box (#1050 slice 3)."""
+def test_builtin_factory_builds_the_local_engine_and_refuses_a_target():
+    """The `builtin` engine runs on this machine; a target box belongs to another engine."""
     pytest.importorskip("operator_dataflow")
     from operator_dataflow.engines import BuiltinLocalEngine, builtin_engine
 
     assert isinstance(builtin_engine(kind="data", target=""), BuiltinLocalEngine)
-    remote = builtin_engine(kind="data", target="box-1")
-    assert type(remote).__name__ == "BuiltinSshEngine"
+    with pytest.raises(EngineError, match="box-1"):
+        builtin_engine(kind="data", target="box-1")

@@ -45,12 +45,12 @@ def outside_the_public_set(path: Path) -> list[str]:
 
 def test_the_public_profile_set():
     """ADR-0134 D5: the platform's production chain, e2e and campaign profiles are the platform's."""
-    assert {p.stem for p in PROFILES} == {"local-dev", "sandbox", "secure", "prod-infisical"}
+    assert {p.stem for p in PROFILES} == {"local-dev", "sandbox", "secure"}
 
 
 def test_the_builtin_tier_is_read():
     ops, packs = _builtins()
-    assert {"redact/text", "audit/store", "secrets/infisical", "memory/search"} <= ops and packs
+    assert {"redact/text", "audit/store", "secrets/env", "storage/put"} <= ops and packs
 
 
 @pytest.mark.parametrize("path", PROFILES, ids=lambda p: p.stem)

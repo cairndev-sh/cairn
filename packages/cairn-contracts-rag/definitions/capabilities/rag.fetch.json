@@ -1,9 +1,0 @@
-{
-  "format": "cairn.capability/1",
-  "id": "rag.fetch",
-  "revision": "1.0.0",
-  "summary": "Return every chunk of a named RAG corpus whose payload source matches, bypassing the similarity ranker; failures surface as ok=false with an error.",
-  "input": "contract://rag.fetch.input/1.0.0",
-  "configuration": "contract://rag.fetch.configuration/1.0.0",
-  "output": "contract://rag.fetch.output/1.0.0"
-}

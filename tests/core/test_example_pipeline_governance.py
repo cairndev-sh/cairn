@@ -34,7 +34,7 @@ _PACK = _layout.REPO / "examples" / "hello-cairn"
 _PIPELINES = _PACK / "pipelines"
 _FLOWS = _PACK / "flows"
 _PROFILE = _PACK / "profiles" / "hello.toml"
-PIPELINES = ("profile-and-publish", "ask-the-docs", "nightly-ops", "tiny-finetune")
+PIPELINES = ("profile-and-publish", "tiny-finetune")
 # Stops at its budget before any gate, on its own series; test_hello_cairn.py proves the refusal.
 OVER_BUDGET = "over-budget"
 
@@ -106,7 +106,7 @@ def test_each_pipeline_stops_for_a_person(name):
     assert person_gates or operator_gates
 
 
-@pytest.mark.parametrize("name", ("profile-and-publish", "ask-the-docs", "nightly-ops"))
+@pytest.mark.parametrize("name", ("profile-and-publish",))
 def test_each_pipeline_is_runnable_on_the_public_core(name, example_loaded):
     from cairn.core.engine.pipeline_resolve import assert_runnable
 
@@ -210,9 +210,6 @@ def test_the_dataset_watch_starts_its_own_pipeline():
     assert rows and all(target == "pipeline:hello-cairn/profile-and-publish" for _, target in rows), rows
 
 
-def test_the_table_watch_is_declared_but_not_armed():
-    """A `table` watch needs the platform's governed import: core names it unarmed."""
-    assert not [r for r in _materialised_targets("nightly-ops") if "--watch--" in r[0]]
 
 
 @pytest.mark.parametrize("env, gated", [("hello-prod", True), ("sandbox", False),
@@ -247,7 +244,7 @@ def test_the_quickstart_profile_turns_the_audit_trail_on_and_the_default_stays_o
     assert "audit.sink" not in local_dev["profile"]["bindings"]
 
 
-@pytest.mark.parametrize("profile", ("hello.toml", "hello-infisical.toml"))
+@pytest.mark.parametrize("profile", ("hello.toml",))
 def test_the_example_profiles_pin_no_runtime(profile):
     """A profile's `durable_runtime` beats CAIRN_RUNTIME (cairn/core/settings.py runtime()),
     so a pin here would make `CAIRN_RUNTIME=dbos` a no-op for the example."""
@@ -260,86 +257,20 @@ def test_the_example_profiles_pin_no_runtime(profile):
 
 # ── ask-the-docs (agentic) ──────────────────────────────────────────────────
 
-def test_the_agentic_leg_is_the_packs_own_template():
-    assert _step("assistant", "ask-the-docs").template == "hello-cairn/assistant"
-    assert (_FLOWS / "assistant.md").is_file()
 
 
-def test_the_answer_is_checked_then_read_by_a_person():
-    length = _step("length", "ask-the-docs")
-    assert length.task == "monitor/threshold" and length.depends_on == ["assistant"]
-    assert length.inputs["value"] == "$steps.assistant.answer_stats.words"
-    review = _step("review", "ask-the-docs")
-    assert review.approvers and review.depends_on == ["length"]
-    assert "assistant.answer" in review.show
 
 
-def test_the_assistant_template_compiles_under_mock(example_loaded):
-    """Retrieval, re-rank, one model node, the MCP tool and memory compile into one graph;
-    the tool call names the example's own MCP server, which pack.toml declares."""
-    from cairn.core.engine.compiler import compile_template
-    from cairn.core.operator.runtime import mock_mode
-
-    with mock_mode(True):
-        compiled = compile_template(_FLOWS / "assistant.md")
-    assert compiled.flow_type == "state_machine"
-    children = compiled.spec.flow.root.children
-    assert [getattr(c, "id", None) or getattr(c, "ref", None) for c in children] == [
-        "search", "rerank", "answer", "measure", "remember"]
-    assert compiled.spec.flow.nodes["answer"].type == "prompt"
-    measure = children[3]
-    assert (measure.operator, measure.input["server"], measure.input["tool"]) == ("mcp/call", "hello-calc", "word_count")
-    manifest = tomllib.loads((_PACK / "pack.toml").read_text())
-    assert manifest["requires"]["mcp"]["servers"] == ["hello-calc"]
-    assert "hello-calc:word_count" in manifest["requires"]["mcp"]["tools"]
-    assert manifest["requires"]["rag"]["docs"]["corpus"] == "rag/docs"
-    # .txt, not .md: `cairn validate <pack>` reads every .md under the pack as an artifact
-    assert list((_PACK / "rag" / "docs").glob("*.txt"))
 
 
-def test_the_mcp_server_script_offers_the_declared_tools():
-    spec = importlib.util.spec_from_file_location("hello_calc_server", _PACK / "tools" / "calc_server.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    tools = {t.name for t in asyncio.run(mod.server.list_tools())}
-    assert tools == {"add", "word_count"}
-    assert mod.word_count("one two three") == {"words": 3, "chars": 13}
 
 
 # ── nightly-ops (flow + hooks) ──────────────────────────────────────────────
 
-def test_the_nightly_pipeline_runs_job_flow_proposal_audit_in_order():
-    assert _step("job", "nightly-ops").template == "hello-cairn/nightly-job"
-    assert _step("summarise", "nightly-ops").flow == "hello-cairn/summarise"
-    assert _step("summarise", "nightly-ops").depends_on == ["job"]
-    assert _step("propose", "nightly-ops").task == "monitor/propose"   # requires_approval: a person
-    assert _step("propose", "nightly-ops").depends_on == ["summarise"]
-    assert _step("audit", "nightly-ops").depends_on == ["propose"]
 
 
-def test_the_nightly_pipeline_declares_an_armed_cron_and_a_table_watch():
-    schedule, watch = parse_declared_triggers(_pipeline("nightly-ops").triggers)
-    assert isinstance(schedule, ScheduleTrigger) and schedule.enabled is True
-    assert schedule.cron == "30 2 * * *"
-    assert isinstance(watch, WatchTrigger) and watch.source.kind == "table"
-    assert watch.source.dsn_env == "HELLO_EVENTS_DSN" and watch.enabled is False
 
 
-def test_the_nightly_job_binds_secrets_by_capability_under_the_example_profile(example_loaded):
-    """The secret check names `contract://secrets.store/1.0.0`; the active profile picks
-    secrets/env (hello.toml) or secrets/infisical (hello-infisical.toml)."""
-    from cairn.core.engine.compiler import compile_template
-    from cairn.core.operator.runtime import mock_mode
-
-    with mock_mode(True):
-        compiled = compile_template(_FLOWS / "nightly-job.md")
-    secret, report = compiled.spec.flow.root.children
-    assert secret.capability == "contract://secrets.store/1.0.0"
-    assert report.operator == "remote/exec" and report.execution["compute_target"] == "$input.compute_target"
-    bindings = tomllib.loads(_PROFILE.read_text())["profile"]["bindings"]
-    assert bindings["secrets.store"] == "secrets/env"
-    infisical = tomllib.loads((_PACK / "profiles" / "hello-infisical.toml").read_text())["profile"]
-    assert infisical["extends"] == "hello.toml" and infisical["bindings"]["secrets.store"] == "secrets/infisical"
 
 
 def test_the_run_hook_entry_point_resolves_and_writes_receipts(tmp_path, monkeypatch):
@@ -375,10 +306,8 @@ def test_the_finetune_trains_after_the_data_gate_and_tags_after_the_loss_gate():
     assert _step("train", "tiny-finetune").flow == "hello-cairn/lora"
     assert _step("train", "tiny-finetune").depends_on == ["data-ok"]
     assert [s for s in _pipeline("tiny-finetune").steps if s.id == "eval"] == []   # #252: no leg scores training rows
-    assert _step("loss", "tiny-finetune").task == "monitor/threshold"
-    assert _step("loss", "tiny-finetune").depends_on == ["train"]
-    assert _step("loss", "tiny-finetune").inputs["value"] == "$steps.train.train_lora_eval_loss"
-    assert "steps.loss.crossed" in _step("loss-ok", "tiny-finetune").predicate
+    assert _step("loss-ok", "tiny-finetune").depends_on == ["train"]
+    assert "steps.train.findings.train_lora_eval_loss" in _step("loss-ok", "tiny-finetune").predicate
     assert _step("promote", "tiny-finetune").depends_on == ["loss-ok"]
     review = _step("review", "tiny-finetune")
     assert review.approvers and review.depends_on == ["promote"]
@@ -393,14 +322,6 @@ def test_profile_and_publish_emits_dataset_ready_when_it_publishes():
     assert all(s.emits is None for sid, s in plan.items() if sid != "publish")
 
 
-def test_ask_the_docs_starts_on_dataset_ready_paused():
-    """ADR-0131 D4 — the event profile-and-publish emits starts ask-the-docs, through a
-    paused `kind: event` row that starts ask-the-docs itself."""
-    from cairn.core.engine.triggers_grammar import EventTrigger
-
-    (decl,) = parse_declared_triggers(_pipeline("ask-the-docs").triggers)
-    assert isinstance(decl, EventTrigger) and decl.topic == "dataset.ready" and not decl.enabled
-    assert [t for _, t in _materialised_targets("ask-the-docs")] == ["pipeline:hello-cairn/ask-the-docs"]
 
 
 def test_the_finetune_legs_read_the_adapter_and_loss_the_train_flow_reports():

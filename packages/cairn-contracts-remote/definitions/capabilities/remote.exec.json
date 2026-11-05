@@ -1,9 +1,0 @@
-{
-  "format": "cairn.capability/1",
-  "id": "remote.exec",
-  "revision": "1.0.0",
-  "summary": "Run a command on an SSH box from the profile's compute.ssh connection, shipping files in and out; a remote job (submit/poll/cancel) that writes outside the control plane.",
-  "input": "contract://remote.exec.input/1.0.0",
-  "configuration": "contract://remote.exec.configuration/1.0.0",
-  "output": "contract://remote.exec.output/1.0.0"
-}

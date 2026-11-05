@@ -28,14 +28,11 @@ jobs:
         cache-dependency-glob: uv.lock
     - name: Locked install of the public set only
       run: uv sync --locked --extra dev --extra rag --extra rag-sqlite-vec --extra runtime-sqlite --extra runtime-temporal
-        --extra telemetry --extra auth --extra metaflow --extra skypilot
+        --extra telemetry --extra auth
     - name: Lint (ruff, the `python` job's rule set)
       run: uvx ruff check .
     - name: Nothing private is installed
-      run: .venv/bin/python scripts/check_public_set.py --extras metaflow,skypilot
-    - name: The optional operator packs' own tests (ADR-0134 D1)
-      run: env -u OBS_STORAGE -u CAIRN_STORAGE .venv/bin/pytest -q --no-header -p no:cacheprovider -m "not dbos and not timing
-        and not e2e" --junitxml=/tmp/test-results/public-optional.xml packages/cairn-operator-dataflow-metaflow/tests packages/cairn-operator-dataflow-skypilot/tests
+      run: .venv/bin/python scripts/check_public_set.py
     - name: The public core's tests/core files (tests/core is exactly the public set here)
       run: env -u OBS_STORAGE -u CAIRN_STORAGE .venv/bin/pytest -q --no-header -p no:cacheprovider -m "not dbos and not timing
         and not e2e" --junitxml=/tmp/test-results/public.xml tests/core

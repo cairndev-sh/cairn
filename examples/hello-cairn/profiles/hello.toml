@@ -6,41 +6,23 @@
 # Self-contained on purpose (no `extends`): a relative `extends` resolves against
 # this file, and the core's profiles live at a different path in a checkout, the
 # public tree and an installed wheel. It carries local-dev.toml's bindings for the
-# builtin operators (memory, storage, rag, mcp). Not carried: local-dev's `eval.delta`
-# binding (a platform operator) and its `llm_gateway` / `embedder` backend entries; the
-# example reads the model and the embedder from the engine's environment instead
-# (OPENAI_API_KEY or OPENAI_BASE_URL, RAG_EMBED_PROVIDER). Plus what only it needs:
+# builtin operators (storage). Not carried: local-dev's `eval.delta`
+# binding (a platform operator) and its `llm_gateway` / `embedder` backend entries. Plus
+# what only it needs:
 #
-#   * `secrets.store` — nightly-ops' secret check is a capability node
-#     (`capability: contract://secrets.store/1.0.0`), and a capability with no
-#     binding refuses to compile; local-dev.toml binds none, so `cairn pack check
-#     examples/hello-cairn` needs this profile. secrets/env reads the engine's
-#     environment; profiles/hello-infisical.toml binds Infisical.
+#   * `secrets.store` — secrets/env reads the engine's environment; local-dev.toml binds none.
 #   * `audit.sink` — the quickstart's audit trail: every governed step and each decision a person makes
 #     lands in the hash-chained log at CAIRN_AUDIT_LOG (default ./audit.jsonl), next to the
 #     row the pipeline's own `audit` leg writes. local-dev.toml leaves it unbound (ADR-0028).
-#   * the `hello-calc` MCP server, which pack.toml declares under [requires.mcp].
-#     This entry is what `cairn setup --check`'s composition check and the strict tool
-#     allow-list read. The MCP client itself takes the server's command from the
-#     engine's environment, CAIRN_MCP_SERVERS (see the README), not from here.
 
 [profile]
 visibility = "public"
 
 [profile.bindings]
-"memory.search"  = "memory/search"   # cairn-operator-memory-local
-"memory.write"   = "memory/write"    # cairn-operator-memory-local
 "storage.put"    = "storage/put"     # cairn-operator-artifact-local
 "storage.get"    = "storage/get"     # cairn-operator-artifact-local
-"rag.search"     = "rag/search"      # cairn-operator-rag-local
-"rag.fetch"      = "rag/fetch"       # cairn-operator-rag-local
-"mcp.call"       = "mcp/call"        # cairn-operator-mcp
 "secrets.store"  = "secrets/env"     # cairn-operator-secrets-env
 "audit.sink"     = "audit/store"     # cairn-operator-audit-store
-
-[profile.mcp_servers.hello-calc]
-transport = "stdio"
-command   = ["python", "examples/hello-cairn/tools/calc_server.py"]
 
 # No `durable_runtime`: a profile pin beats CAIRN_RUNTIME (cairn/core/settings.py
 # runtime()), so the runtime stays the engine's choice: in-process by default,

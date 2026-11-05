@@ -1,9 +1,0 @@
-{
-  "format": "cairn.capability/1",
-  "id": "memory.search",
-  "revision": "1.0.0",
-  "summary": "Embed a text query and return the top_k records of a named memory store with their scores, optionally filtered by payload match. Read only; failures surface as ok=false with an error.",
-  "input": "contract://memory.search.input/1.0.0",
-  "configuration": "contract://memory.search.configuration/1.0.0",
-  "output": "contract://memory.search.output/1.0.0"
-}

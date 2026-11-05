@@ -35,17 +35,3 @@ cairn_engine = ">=0.1.0"
 # here would be a composition conflict on every deployment. The pipeline's
 # task legs are checked against the operator registry at plan time instead
 # (`cairn run --dry-run` names the operator class each leg resolves to).
-
-# The corpus ask-the-docs retrieves from. Indexed by the engine, not by a leg:
-# with CAIRN_RAG_AUTOINDEX=1 the server indexes every declared corpus at boot into
-# the collection rag/search reads (cairn/services/rag/lifecycle.py).
-[requires.rag.docs]
-corpus = "rag/docs"
-access = "vector_search"
-
-# The MCP server ask-the-docs' assistant template calls (tools/calc_server.py).
-# The profile names it under [profile.mcp_servers]; `cairn setup --check` reports a
-# profile that does not.
-[requires.mcp]
-servers = ["hello-calc"]
-tools   = ["hello-calc:word_count", "hello-calc:add"]

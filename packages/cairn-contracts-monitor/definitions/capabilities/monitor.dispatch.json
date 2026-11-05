@@ -1,9 +1,0 @@
-{
-  "format": "cairn.capability/1",
-  "id": "monitor.dispatch",
-  "revision": "1.0.0",
-  "summary": "Launch the run a human approved (a pipeline or a template ref); a proposal that was not approved launches nothing. The launched run keeps its own governance.",
-  "input": "contract://monitor.dispatch.input/1.0.0",
-  "configuration": "contract://monitor.dispatch.configuration/1.0.0",
-  "output": "contract://monitor.dispatch.output/1.0.0"
-}

@@ -24,7 +24,7 @@ REPO = Path(__file__).resolve().parents[1]
 #: The directory holding the ``cairn`` package.
 ENGINE_PARENT = REPO / "src"
 #: Operator pack directories by tier, as globs under the repository root (one or a tuple).
-OPERATOR_PACK_GLOBS = {"optional": ("packages/cairn-operator-dataflow-metaflow", "packages/cairn-operator-dataflow-skypilot",), "builtins": "packages/cairn-operator-*"}
+OPERATOR_PACK_GLOBS = {"optional": (), "builtins": "packages/cairn-operator-*"}
 #: What an operator pack's directory name carries before the pack's own name.
 PACK_DIR_PREFIX = "cairn-operator-"
 #: The domain packs (the platform's); None where the tree has none.
