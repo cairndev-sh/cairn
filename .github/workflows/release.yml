@@ -27,10 +27,35 @@ jobs:
         ls dist/*.whl | sed 's|dist/||; s|-.*||' | LC_ALL=C sort > /tmp/wheels.txt
         printf '%s\n' cairn_client cairn_operator_dataflow_metaflow cairn_operator_dataflow_skypilot cairn_pack_hello cairndev | LC_ALL=C sort > /tmp/want.txt
         diff /tmp/want.txt /tmp/wheels.txt
-    - name: GitHub Release with wheel artifacts
+    - name: CycloneDX SBOMs from the tagged lock files (ADR-0121 D6, #295)
+      # cairn-<v>: every workspace package with every extra, every platform, from uv.lock
+      # (uv emits no licences). cairn-engine-<v>: the engine image's closure on linux/x86_64
+      # with licences, read from a venv synced --frozen with the image's extras (the union of
+      # Dockerfile.engine's --extra flags, so the two cannot drift). cairn-docs-site-<v>: the
+      # docs site's runtime npm closure. An SBOM with no components fails the release.
+      run: |
+        set -euo pipefail
+        VERSION="${GITHUB_REF_NAME#v}"
+        mkdir -p sbom
+        uv export --frozen --no-dev --all-packages --all-extras --format cyclonedx1.5 \
+          --preview-features sbom-export -o "sbom/cairn-${VERSION}.cdx.json" > /dev/null
+        EXTRAS=$(grep -v '^[[:space:]]*#' Dockerfile.engine | grep -o -- '--extra [a-z0-9-]*' | sort -u)
+        # shellcheck disable=SC2086 # word-split on purpose: one "--extra name" pair per line
+        UV_PROJECT_ENVIRONMENT=/tmp/sbom-venv uv sync --frozen --no-dev --no-editable --all-packages $EXTRAS
+        uvx --from cyclonedx-bom==7.6.0 cyclonedx-py environment --spec-version 1.5 --output-format JSON \
+          --pyproject pyproject.toml --mc-type application -o "sbom/cairn-engine-${VERSION}.cdx.json" /tmp/sbom-venv
+        (cd docs/site && npm sbom --sbom-format cyclonedx --package-lock-only --omit dev) \
+          > "sbom/cairn-docs-site-${VERSION}.cdx.json"
+        for f in sbom/*.cdx.json; do
+          jq -e '.bomFormat == "CycloneDX" and (.components | length > 0)' "$f" > /dev/null
+          echo "$f: $(jq '.components | length' "$f") components" | tee -a "$GITHUB_STEP_SUMMARY"
+        done
+    - name: GitHub Release with wheel artifacts and SBOMs
       uses: softprops/action-gh-release@v3
       with:
-        files: dist/*
+        files: |
+          dist/*
+          sbom/*.cdx.json
         generate_release_notes: true
     - name: Publish to PyPI (the account token while PYPI_API_TOKEN exists, then trusted publishing)
       # Explicit files in order (ADR-0137 D6): the engine first, so it lands before any rate limit;
@@ -88,16 +113,6 @@ jobs:
         labels: ${{ steps.meta.outputs.labels }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
-    - uses: astral-sh/setup-uv@v7
-    - name: CycloneDX SBOM of the engine's Python closure
-      run: mkdir -p dist/sbom && uv export --frozen --no-dev --all-packages --extra runtime-temporal --extra runtime-dbos
-        --extra runtime-sqlite --extra storage-postgres --extra runtime-postgres --extra telemetry --extra auth --extra oauth
-        --extra rag --extra pii --extra kernel --extra ssh --extra infisical --format cyclonedx1.5 --preview-features sbom-export
-        -o dist/sbom/engine.cdx.json > /dev/null
-    - uses: actions/upload-artifact@v7
-      with:
-        name: engine-sbom-${{ github.sha }}
-        path: dist/sbom/engine.cdx.json
     - name: Report the pinnable reference
       run: |
         echo "### engine image" >> "$GITHUB_STEP_SUMMARY"
