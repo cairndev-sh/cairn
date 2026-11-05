@@ -1,0 +1,65 @@
+# Line coverage of the public tests, published to GitHub Pages with a README badge (#329).
+# It doesn't gate anything: there is no threshold, and it isn't a required check. It runs the
+# tests a second time under coverage, so it runs on pushes to main and not on every pull request.
+# What it counts: tests/core, tests/cli and tests/deploy in one process. Servers started by
+# tests/e2e, and subprocesses, aren't counted, so the figure is a floor.
+name: coverage
+'on':
+  push:
+    branches:
+    - main
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+    - .github/workflows/coverage.yml
+    - scripts/coverage_badge.py
+permissions:
+  contents: read
+concurrency:
+  group: coverage-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      OPENAI_API_KEY: sk-ci-dummy
+      UV_PYTHON: '3.13'
+    steps:
+    - uses: actions/checkout@v6
+    - uses: astral-sh/setup-uv@v7
+      with:
+        version: 0.11.9
+        enable-cache: true
+        cache-dependency-glob: uv.lock
+    - name: Locked install of the public set, the same as the public job
+      run: uv sync --locked --extra dev --extra rag --extra rag-sqlite-vec --extra runtime-sqlite --extra runtime-temporal
+        --extra telemetry --extra auth --extra metaflow --extra skypilot
+    - name: coverage.py, for this job only
+      run: uv pip install --python .venv/bin/python coverage==7.6.10
+    - name: The public tests under coverage
+      run: env -u OBS_STORAGE -u CAIRN_STORAGE .venv/bin/python -m coverage run --branch --source=src/cairn,packages -m pytest
+        -q --no-header -p no:cacheprovider -m "not dbos and not timing and not e2e" tests/core tests/cli tests/deploy
+    - name: The report and the badge
+      run: |
+        .venv/bin/python -m coverage report --skip-covered --sort=cover | tail -25
+        .venv/bin/python -m coverage html -d site --title "Test coverage of cairn"
+        .venv/bin/python -m coverage json -o coverage.json
+        .venv/bin/python scripts/coverage_badge.py coverage.json site/badge.json
+        cat site/badge.json
+    - uses: actions/upload-pages-artifact@v3
+      with:
+        path: site
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: measure
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+    - id: deployment
+      uses: actions/deploy-pages@v4
