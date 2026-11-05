@@ -36,8 +36,8 @@ Concretely it is:
 - one **domain pack**, `examples/hello-cairn` (`cairn-pack-hello`, the `hello` extra);
 - the user docs, `docs/site`.
 
-**Outside this repository:** first-party public extensions, each released on its own, are in
-[cairn-extensions](https://github.com/cairndev-sh/cairn-extensions). The web console, the
+**Outside this repository:** first-party extensions, each released on its own as a separate
+wheel. The web console, the
 other domain packs, the official operator packs, `cairn-ask` (the NL copilot) and `cairn-sdk`
 (authoring projection) are part of cairn-platform. Where this tree of documents names one of
 them, it is describing how the engine is used, not a path you can open here.
@@ -159,7 +159,7 @@ exceptions). The dotted edge is the one documented bidirectional coupling.
 | Pack | Where | Notes |
 |---|---|---|
 | `hello-cairn` | `examples/hello-cairn`, the `cairn-pack-hello` wheel | four pipelines: `profile-and-publish`, `ask-the-docs`, `tiny-finetune`, `nightly-ops` |
-| `finetune`, `dataset-prep` | [cairn-extensions](https://github.com/cairndev-sh/cairn-extensions), the `cairn-pack-finetune` and `cairn-pack-dataset-prep` wheels | public, released on their own |
+| `finetune`, `dataset-prep` | outside this repository, the `cairn-pack-finetune` and `cairn-pack-dataset-prep` wheels | released on their own |
 | other domain packs | outside this repository, part of cairn-platform | discovered the same way, through the `cairn.packs` entry point |
 
 ## 7. Engine vs Pack vs Operator vs Runtime

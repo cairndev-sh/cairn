@@ -95,9 +95,8 @@ in those cells, budget-cap overshoot
 ## What's open source and what isn't?
 
 The `cairndev` package (the engine, the `cairn` command, the API server, the client
-and the [builtin operator packs](/reference/operators/)) is Apache 2.0, and so are
-the packs and operators in
-[cairn-extensions](https://github.com/cairndev-sh/cairn-extensions). The
+and the [builtin operator packs](/reference/operators/)) is Apache 2.0. Packs and
+operators released as separate wheels each state their own licence. The
 [web console and the operator packs for GPU providers and managed training](/#what-cairn-does-not-replace)
 are part of cairn-platform, a separate product whose source isn't public.
 

@@ -85,4 +85,3 @@ open-source packages, unless a page says otherwise.
 - [Quickstart](/quickstart/): install cairn, launch a pipeline and approve a gate.
 - [Pipelines, legs and steps](/concepts/pipelines/): the model in more detail.
 - [Install and deploy](/install/): run cairn for your team.
-- [Live demo](https://demo.cairndev.sh): try cairn without installing anything (a shared sandbox, so don't enter real credentials).
