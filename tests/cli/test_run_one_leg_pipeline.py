@@ -48,7 +48,7 @@ from cairn.core.storage.pipeline_store import InMemoryPipelineStore
 FLOW = "scratch-dev/echo"
 FLOW_INPUTS = {"indicator": "203.0.113.7"}
 #: A declared pipeline every install has: the example pack's.
-PIPELINE = "hello-cairn/profile-and-publish"
+PIPELINE = "hello-cairn/check-and-publish"
 
 # Mounted on a LOCAL Typer app (not `cairn.cli.main`, which calls `load_env()` at
 # import and repopulates the storage keys conftest neutralizes — #1199). The

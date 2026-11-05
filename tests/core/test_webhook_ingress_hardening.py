@@ -452,7 +452,7 @@ def test_hello_cairn_webhook_declaration_still_validates():
     import yaml
 
     root = Path(__file__).resolve().parents[2]
-    doc = yaml.safe_load((root / "examples/hello-cairn/pipelines/profile-and-publish.yaml")
+    doc = yaml.safe_load((root / "examples/hello-cairn/pipelines/check-and-publish.yaml")
                          .read_text(encoding="utf-8"))
     hooks = [d for d in parse_declared_triggers(doc["triggers"]) if d.kind == "webhook"]
     assert [h.path for h in hooks] == ["/triggers/hello-sample"]

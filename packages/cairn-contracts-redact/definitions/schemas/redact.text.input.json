@@ -1,8 +1,0 @@
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "contract://redact.text.input/1.0.0",
-  "properties": {"text": {"description": "Text to scan and redact.", "title": "Text", "type": "string"}},
-  "required": ["text"],
-  "title": "RedactTextInput",
-  "type": "object"
-}

@@ -26,7 +26,7 @@ pipelines.
 
 ## 2. Get the example's profile
 
-The `profile-and-publish` pipeline checks a JSONL file whose rows have a
+The `check-and-publish` pipeline checks a JSONL file whose rows have a
 `text` and a `label` field. The example ships a sample, which `--preset sample` picks
 below. Get its deployment profile, which turns the audit trail on:
 
@@ -39,7 +39,7 @@ export CAIRN_PROFILE=$PWD/hello.toml
 ## 3. See what will happen before anything runs
 
 ```bash
-cairn run --dry-run hello-cairn/profile-and-publish -e sandbox --preset sample
+cairn run --dry-run hello-cairn/check-and-publish -e sandbox --preset sample
 ```
 
 `--dry-run` resolves everything a launch would, and runs nothing. For each leg
@@ -70,7 +70,7 @@ next commands need no flags; `cairn setup --stop` stops the engine. `hello.toml`
 ## 5. Launch the pipeline
 
 ```bash
-cairn run hello-cairn/profile-and-publish \
+cairn run hello-cairn/check-and-publish \
   --preset sample --environment sandbox
 ```
 

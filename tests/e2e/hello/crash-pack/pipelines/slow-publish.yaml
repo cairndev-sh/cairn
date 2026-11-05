@@ -1,4 +1,4 @@
-# pipelines/slow-publish.yaml — profile-and-publish with a slow flow leg (test_crash.py).
+# pipelines/slow-publish.yaml — check-and-publish with a slow flow leg (test_crash.py).
 #
 #   profile → data gate → slow (flow, ~12 s) → stage → person gate ⏸ → publish
 #

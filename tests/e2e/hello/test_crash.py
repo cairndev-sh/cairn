@@ -3,7 +3,7 @@
 Each cell SIGKILLs the real server — at the person gate, or in the middle of a flow leg —
 starts it again on the same store, and asserts what the records say afterwards, per
 runtime. The pipeline is the harness's own ``hello-crash/slow-publish`` (``crash-pack/``):
-profile-and-publish with a ``noop.slow`` flow leg long enough to die inside.
+check-and-publish with a ``noop.slow`` flow leg long enough to die inside.
 
 What a restart does to an in-process leg (``pipeline_bridge._adopt_in_flight``):
 

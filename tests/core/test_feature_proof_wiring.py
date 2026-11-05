@@ -3,7 +3,7 @@
 `hooks` was NOT PROVED with the CI install: the run-hook listener is an entry point of
 the cairn-pack-hello wheel, which only the `hello` extra installs, and it was checked on
 nightly-ops, which CI cannot run (no proof sshd). It is now checked on
-profile-and-publish, which every cell runs, and `public-e2e` installs the extra."""
+check-and-publish, which every cell runs, and `public-e2e` installs the extra."""
 from __future__ import annotations
 
 import inspect
@@ -25,5 +25,5 @@ def test_public_e2e_installs_the_hello_wheel():
 
 
 def test_hooks_are_proved_on_a_pipeline_every_cell_runs():
-    assert _receipts.FEATURES["hooks"][1] == "profile-and-publish"
+    assert _receipts.FEATURES["hooks"][1] == "check-and-publish"
     assert "_hooks_receipt(ctx)" in inspect.getsource(test_matrix.check_profile_and_publish)

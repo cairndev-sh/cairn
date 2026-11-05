@@ -8,12 +8,15 @@ All notable changes to this project are documented here. The format follows [Kee
 - `cairn-operator-train-local` trains on one CUDA GPU when one is available: `train/lora`, `train/eval-loss` and the `train.lora` stage take `device` and `precision` (both `auto` by default), with bf16 from compute capability 8.0 and fp16 below it (a T4), and the unchanged fp32 CPU run on a machine without CUDA; a Mac stays on the CPU unless `device: mps` is asked for. A named device that is unavailable, or `fp16`/`bf16` off CUDA, is refused. The stage's stats report `device`, `precision` and `peak_gpu_mem_gb`. `cairn-contracts-train` 1.1.0 adds revision 1.1.0 of `train.finetune` and `train.eval_loss` beside 1.0.0, which is unchanged: new files and rows whose input schemas gain the two fields, and nothing else. The two operations declare only 1.1.0. The `hello-cairn` `tiny-finetune` pipeline takes `device` and `precision` inputs. In a checkout, reinstall `cairndev` after pulling (`uv sync --reinstall-package cairndev`): the contract files are copied into the installed package, and a launch is refused with "no such capability revision is installed" until they are. (ADR-0167)
 
 ### Removed
-- Slimmed down the core: these operator packs and contracts are no longer part of `cairndev`: `dataflow-metaflow`, `dataflow-skypilot`, `remote`, `monitor-threshold`, `rag-local`, `rag-rerank`, `memory-local`, `secrets-infisical`, `mcp`, and the `remote`, `rag`, `memory`, `mcp`, `monitor` contracts. The `metaflow`, `skypilot`, `infisical`, `rerank-cross-encoder` and `rerank-cohere` extras are gone with them.
-- The example pack's `ask-the-docs` and `nightly-ops` pipelines, and the `prod-infisical` profile.
+- Slimmed down the core. `cairndev` now carries only `train/lora`, `train/eval-loss`, `dataflow/run`, `ml/run` and `artifact/promote`, with the `train`, `dataflow` and `artifact` contracts.
+- These operator packs are no longer part of `cairndev`: `dataflow-metaflow`, `dataflow-skypilot`, `remote`, `monitor-threshold`, `rag-local`, `rag-rerank`, `memory-local`, `secrets-infisical`, `mcp`, `artifact-local`, `audit-store`, `data-profile`, `redact-regex`, `secrets-env`. Neither are the `remote`, `rag`, `memory`, `mcp`, `monitor`, `storage`, `audit`, `data`, `redact` and `secrets` contracts.
+- The `metaflow`, `skypilot`, `infisical`, `rerank-cross-encoder` and `rerank-cohere` extras.
+- The example pack's `ask-the-docs` and `nightly-ops` pipelines, and the `prod-infisical` and `secure` profiles.
 
 ### Changed
+- The example pipeline `profile-and-publish` is now `check-and-publish`: a flow, a person gate and a promotion. With no audit or redaction operator installed, audit events are dropped and LLM calls are not redacted.
+- `tiny-finetune` no longer profiles its data or writes a model card. Its `loss-ok` gate reads the training leg's eval loss directly.
 - The `builtin` dataflow engine runs on the engine's own machine only and refuses a target. An environment that set `dataflow_target` or `ml_target` under `builtin` must change. A leg on an engine named `ssh` is priced by its connection.
-- `tiny-finetune`'s `loss-ok` gate reads the training leg's eval loss directly.
 
 ## [0.5.0] - 2026-11-03
 

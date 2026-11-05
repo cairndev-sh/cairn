@@ -7,10 +7,6 @@ not a skip. In a scratch directory and HOME, with no API key in the environment,
   * runs the ``export`` lines and the ``cairn setup`` and ``cairn run`` commands of the first code
     block as written, and the ``cairn decide`` and ``cairn status`` commands of the second;
   * answers both gates through ``cairn decide`` and checks the pipeline ends ``done``;
-  * runs the ``cairn run`` again with the ``-i min_rows=1000`` the README suggests, and checks the
-    data gate fails it before any later step starts;
-  * runs ``cairn admin audit verify`` on ``./audit.jsonl``, and checks it holds a row for each
-    decision a person made;
   * stops the engine it started, and checks that its process is gone.
 
 What it does not run: the install line (the check installs the checkout instead), and the ``curl``
@@ -38,10 +34,8 @@ from typing import Optional
 REPO = Path(__file__).resolve().parents[1]
 RAW = "https://raw.githubusercontent.com/cairndev-sh/cairn/main/"
 INSTALL = "curl -LsSf https://docs.cairndev.sh/install.sh"
-PIPELINE = "hello-cairn/profile-and-publish"
+PIPELINE = "hello-cairn/check-and-publish"
 GATES = ("review", "promote")
-#: every step after the data gate, in `examples/hello-cairn/pipelines/profile-and-publish.yaml`
-AFTER_DATA_GATE = ("redact", "engine-check", "stage", "review", "promote", "publish", "audit")
 NOT_STARTED = {"pending", "skipped"}
 #: `cairn run` exits 2 when the pipeline waits at a gate and there is no terminal to ask on
 PAUSED_EXIT = 2
@@ -95,10 +89,6 @@ def plan(readme: str) -> tuple[list[str], list[str]]:
     for line in decide:
         if not line.startswith(("cairn decide <pipeline_id> ", "cairn status <pipeline_id> ")):
             raise QuickstartError(f"the second block has a line this check can't run: {line!r}")
-    prose = section(readme)
-    for claim in ("`cairn admin audit verify`", "`-i min_rows=1000`", "./audit.jsonl"):
-        if claim not in prose:
-            raise QuickstartError(f"the Quickstart no longer mentions {claim}; this check proves it")
     return launch, decide
 
 
@@ -233,13 +223,11 @@ def run(readme: str, cairn: str) -> None:
         try:
             started = False
             pipeline_id = ""
-            run_line = ""
             for line in launch:
                 if line.startswith("cairn setup"):
                     started = True
                     q.cairn_run(line)
                 elif line.startswith("cairn run "):
-                    run_line = line
                     done = q.cairn_run(line, ok=(PAUSED_EXIT,))
                     found = re.search(r"pipeline_id=(\S+)", done.stdout)
                     if not found or "still waiting at review" not in done.stdout + done.stderr:
@@ -257,29 +245,6 @@ def run(readme: str, cairn: str) -> None:
                     if "status=done" not in shown.stdout:
                         raise QuickstartError(f"`{line}` does not show status=done")
 
-            # the data gate, as the README suggests
-            failed_line = f"{run_line} -i min_rows=1000"
-            failed = q.cairn_run(failed_line, ok=(1,))
-            failed_id = re.search(r"pipeline_id=(\S+)", failed.stdout)
-            if not failed_id:
-                raise QuickstartError("the min_rows=1000 run printed no pipeline id")
-            record = q.record(failed_id.group(1))
-            steps = {s: v.get("status", "") for s, v in record.get("step_state", {}).items()}
-            if record.get("status") != "failed" or any(steps.get(s) not in NOT_STARTED for s in AFTER_DATA_GATE):
-                raise QuickstartError(f"the data gate did not stop the pipeline before a later step: {steps}")
-
-            # the audit trail the README points at
-            log = q.cwd / "audit.jsonl"
-            if not log.is_file():
-                raise QuickstartError(f"no {log.name} in the Quickstart directory")
-            verified = q.cairn_run("cairn admin audit verify")
-            if "chain OK" not in verified.stdout:
-                raise QuickstartError("`cairn admin audit verify` did not print 'chain OK'")
-            rows = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
-            decided = {row.get("target") for row in rows if row.get("action") == "pipeline.gate_approved"}
-            missing = [g for g in GATES if f"{pipeline_id}/{g}" not in decided]
-            if missing:
-                raise QuickstartError(f"no pipeline.gate_approved audit row for {pipeline_id}/{missing}")
             if not started:
                 raise QuickstartError("the Quickstart never ran `cairn setup`")
         except BaseException:

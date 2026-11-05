@@ -32,8 +32,6 @@ visibility = "internal"
 #
 # Production profiles override these with richer backends shipped as
 # separate operator packs (cairn-operator-pgvector, cairn-operator-s3, etc.).
-"storage.put"    = "storage/put"     # cairn-operator-artifact-local
-"storage.get"    = "storage/get"     # cairn-operator-artifact-local
 # No `eval.delta` here (ADR-0134 D5): every binding in a shipped profile resolves against
 # the public builtins, and `eval/delta` is the platform's eval operator. The platform binds it
 # in its own profiles.

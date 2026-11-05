@@ -34,16 +34,16 @@ _PACK = _layout.REPO / "examples" / "hello-cairn"
 _PIPELINES = _PACK / "pipelines"
 _FLOWS = _PACK / "flows"
 _PROFILE = _PACK / "profiles" / "hello.toml"
-PIPELINES = ("profile-and-publish", "tiny-finetune")
+PIPELINES = ("check-and-publish", "tiny-finetune")
 # Stops at its budget before any gate, on its own series; test_hello_cairn.py proves the refusal.
 OVER_BUDGET = "over-budget"
 
 
-def _pipeline(name: str = "profile-and-publish"):
+def _pipeline(name: str = "check-and-publish"):
     return load_pipeline_def(_PIPELINES / f"{name}.yaml")
 
 
-def _step(name: str, pipeline: str = "profile-and-publish"):
+def _step(name: str, pipeline: str = "check-and-publish"):
     for s in _pipeline(pipeline).steps:
         if (s.id or s.gate) == name:
             return s
@@ -106,7 +106,7 @@ def test_each_pipeline_stops_for_a_person(name):
     assert person_gates or operator_gates
 
 
-@pytest.mark.parametrize("name", ("profile-and-publish",))
+@pytest.mark.parametrize("name", ("check-and-publish",))
 def test_each_pipeline_is_runnable_on_the_public_core(name, example_loaded):
     from cairn.core.engine.pipeline_resolve import assert_runnable
 
@@ -121,7 +121,7 @@ def test_tiny_finetune_is_runnable_on_the_public_core(example_loaded):
     assert_runnable(_pipeline("tiny-finetune"))
 
 
-# ── profile-and-publish (data) ──────────────────────────────────────────────
+# ── check-and-publish (data) ──────────────────────────────────────────────
 
 def test_the_flows_load_with_their_stages():
     assert [s.stage for s in _flow("engine-check").stages] == ["noop"]
@@ -204,10 +204,10 @@ def test_no_schedule_or_webhook_starts_anything_outside_the_example(name):
 
 
 def test_the_dataset_watch_starts_its_own_pipeline():
-    """ADR-0131 D3 — profile-and-publish's `dataset` watch arms a row that starts
-    profile-and-publish itself (core probes the dataset first), not a platform pipeline."""
-    rows = [r for r in _materialised_targets("profile-and-publish") if "--watch--" in r[0]]
-    assert rows and all(target == "pipeline:hello-cairn/profile-and-publish" for _, target in rows), rows
+    """ADR-0131 D3 — check-and-publish's `dataset` watch arms a row that starts
+    check-and-publish itself (core probes the dataset first), not a platform pipeline."""
+    rows = [r for r in _materialised_targets("check-and-publish") if "--watch--" in r[0]]
+    assert rows and all(target == "pipeline:hello-cairn/check-and-publish" for _, target in rows), rows
 
 
 

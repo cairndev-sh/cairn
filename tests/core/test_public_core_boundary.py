@@ -87,13 +87,12 @@ PRIVATE_OPERATOR_MODULES: frozenset[str] = frozenset({
 PRIVATE_REF_PREFIXES: frozenset[str] = frozenset({
     "blast-radius", "clickstack", "compress", "compute", "cost", "dataset", "dataset-readiness",
     "dataset_readiness", "eval", "git", "incident", "infer", "ingest", "lineage", "llm", "logs", "model",
-    "notify", "postmortem", "rag", "redteam", "report", "s3", "security-kb", "security-triage", "security_kb",
+    "notify", "postmortem", "redteam", "report", "s3", "security-kb", "security-triage", "security_kb",
     "security_triage", "serve", "serving", "traces", "training"})
 #: Official operators under a prefix a builtin shares (``data/profile`` is a builtin).
 #: `train/` is shared since the public train-local builtin (`train/lora`, `train/eval-loss`, ADR-0127 D4),
 #: so the platform training pack's `train/*` operators are named one by one.
 PRIVATE_SHARED_PREFIX_REFS: frozenset[str] = frozenset({
-    "data/expectations",
     "train/kaggle", "train/local", "train/modal", "train/proxy-trial", "train/runpod",
     "train/stage-dataset", "train/stub", "train/teardown", "train/vast"})
 
@@ -150,7 +149,7 @@ def test_operator_module_string_debt_only_shrinks():
     ('ENTRY = ["python", "-m", "operator_eval.run_entry"]\n', True),
     ('CODE = "\\n".join(["import os", "from operator_training.flow_stages import load"])\n', True),
     ('def f(x):\n    return f"from operator_dataflow.stages import {x}"\n', True),
-    ('EP = "operator_audit_store.operators:StoreOp"\n', True),
+    ('EP = "operator_train_local.operators:LoraOp"\n', True),
     ('HINT = "pip install cairn-operator-dataflow[engine]"\n', False),
     ('KEY = "operator_id"\n', False),
     ('DESC = "Empty = the pinned default (operator_dataflow.engines_ssh.DEFAULT_TRAIN_IMAGE)."\n', False),

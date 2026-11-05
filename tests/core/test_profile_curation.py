@@ -9,7 +9,7 @@ a profile matching /playground|sandbox/i and, finding none, fell back to
 `profiles[0]`, which sorted alphabetically to `campaign`.
 
 Since ADR-0134 D5 the engine ships only the profiles a public install can satisfy
-(`local-dev`, `sandbox`, `secure`); `prod` and the rest are the
+(`local-dev`, `sandbox`); `prod` and the rest are the
 platform's, and the platform's own tests pin what its merged directory offers.
 """
 from __future__ import annotations
@@ -56,7 +56,6 @@ def test_sandbox_sorts_before_the_private_environments_it_replaced():
 
 @pytest.mark.parametrize("name,why", [
     ("local-dev", "a base layer of the inheritance chain"),
-    ("secure", "a base layer of the inheritance chain"),
 ])
 def test_the_internal_environments_are_not_offered(name, why):
     p = _by_name()[name]
@@ -73,7 +72,7 @@ def test_the_api_still_lists_every_environment():
 
 
 @pytest.mark.parametrize("name", [
-    "sandbox", "local-dev", "secure",
+    "sandbox", "local-dev",
 ])
 def test_every_shipped_profile_still_loads(name):
     """`visibility` went into a CLOSED schema — every profile must still parse."""

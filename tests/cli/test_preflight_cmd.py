@@ -70,11 +70,11 @@ def test_not_found_verdict() -> None:
 def test_preflight_names_a_pipeline_and_points_at_pipeline_explain(example_pack, capsys) -> None:
     from cairn.cli.commands.run import _preflight_sync
 
-    for ref in ("hello-cairn/profile-and-publish", "pipeline:hello-cairn/profile-and-publish"):
+    for ref in ("hello-cairn/check-and-publish", "pipeline:hello-cairn/check-and-publish"):
         assert _preflight_sync(ref, None, check_connections=False) == 1
         out = capsys.readouterr().out
         assert f"{ref} is a pipeline — preflight checks agentic templates only" in out
-        assert "cairn run hello-cairn/profile-and-publish --dry-run" in out
+        assert "cairn run hello-cairn/check-and-publish --dry-run" in out
         assert "NOT FOUND" not in out
 
 

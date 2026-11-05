@@ -16,8 +16,8 @@ wheel alone carries the builtin operator packs and the core contracts.
    pre-fold snapshot (``tests/core/fixtures/contract_resolution_prefold.json``); the 24
    builtin ``cairn.operators`` entry points all come from ``cairndev``; ``cairn-dataflow-run``
    starts (with no spec it refuses by name); ``cairn run --dry-run
-   hello-cairn/profile-and-publish``.
-4. D7.4's run: ``hello-cairn/profile-and-publish`` runs IN PROCESS through the one launch
+   hello-cairn/check-and-publish``.
+4. D7.4's run: ``hello-cairn/check-and-publish`` runs IN PROCESS through the one launch
    door, the way ``cairn run`` drives it (a ``RunDispatcher`` over the engine's own
    ``Runner``, a ``PipelineBridge``, ``launch_pipeline``), on the sample file the
    ``cairn-pack-hello`` wheel installed: no server, no Docker, no network, no provider key,
@@ -56,10 +56,10 @@ WHEELS = {"cairndev", "cairn_client", "cairn_pack_hello"}
 BASE = ("cairndev", "cairn-client", "cairn-pack-hello")
 ENGINE = "cairndev"
 SNAPSHOT = ROOT / "tests" / "core" / "fixtures" / "contract_resolution_prefold.json"
-CORE_CONTRACTS = 8
-BUILTIN_OPERATORS = 11
+CORE_CONTRACTS = 3
+BUILTIN_OPERATORS = 5
 #: The pipeline D7.4 runs in process, and the gates in it that wait for a person.
-PIPELINE = "hello-cairn/profile-and-publish"
+PIPELINE = "hello-cairn/check-and-publish"
 PERSON_GATES = ("review", "promote")
 #: Inherited settings that would steer the venv or the engine away from a plain install.
 SCRUB = ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONPATH", "CAIRN_PACK_PATH", "CAIRN_STORAGE",

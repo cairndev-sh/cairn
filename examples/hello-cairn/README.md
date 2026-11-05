@@ -8,7 +8,7 @@ retrieval, a run hook, SSH, secrets, and an audit record.
 
 | Pipeline | Kind | What it does |
 |---|---|---|
-| `profile-and-publish` | data | Profile a dataset, stop unless the profile passes, redact the summary, run a flow, stage it, ask a person, tag it, publish it, audit it. |
+| `check-and-publish` | data | Profile a dataset, stop unless the profile passes, redact the summary, run a flow, stage it, ask a person, tag it, publish it, audit it. |
 | `ask-the-docs` | agentic | Retrieve from the pack's docs, ask a model, measure the answer with a tool on the pack's own MCP server, remember it, check its length, ask a person. |
 | `nightly-ops` | operations | Check a secret, run a report on an SSH box, carry it through a flow, propose the follow-up to a person, audit it. Nightly once enabled; a run hook writes receipts. |
 | `tiny-finetune` | ml | Profile training rows, LoRA fine-tune a small model on CPU, gate on the loss over the rows it held out, tag it, ask a person, write its card. |
@@ -48,7 +48,7 @@ pack declares. It pins no runtime, so `CAIRN_RUNTIME=dbos` selects DBOS.
 ### 2. See what will happen before anything runs
 
 ```bash
-cairn run --dry-run hello-cairn/profile-and-publish -e sandbox
+cairn run --dry-run hello-cairn/check-and-publish -e sandbox
 cairn pack check examples/hello-cairn          # with CAIRN_PROFILE set as in step 1
 ```
 
@@ -72,15 +72,15 @@ cairn setup --port 8471                      # sqlite engine, in-process runtime
 Any OpenAI-compatible endpoint works in place of a key: `OPENAI_BASE_URL`, or
 `LLM_GATEWAY=proxy` with `LLM_GATEWAY_URL`. The in-process `cairn run --mock` dev loop
 uses a deterministic model response; governed pipelines still use the configured provider.
-`CAIRN_BACKEND=mock` is the telemetry backend, not a model. `profile-and-publish` and
+`CAIRN_BACKEND=mock` is the telemetry backend, not a model. `check-and-publish` and
 `nightly-ops` call no model.
 
 ### 4. Run each pipeline
 
-**profile-and-publish**
+**check-and-publish**
 
 ```bash
-cairn run hello-cairn/profile-and-publish --environment sandbox
+cairn run hello-cairn/check-and-publish --environment sandbox
 cairn decide <pipeline_id> approve --step review        # the person gate
 cairn decide <pipeline_id> approve --step promote       # the operator's own gate
 ```
@@ -204,7 +204,7 @@ The engine arms every declared trigger when it starts: it installs each discover
 into the `default` workspace, and each trigger becomes a row that starts its own pipeline
 (ADR-0131, #2631). A trigger fires only when its declaration says `enabled: true`; to turn one
 on, set that in the pipeline file and restart the engine. Out of the box only nightly-ops' cron
-is on. profile-and-publish's dataset `watch` (`on_change: start`), weekly `schedule` and custom
+is on. check-and-publish's dataset `watch` (`on_change: start`), weekly `schedule` and custom
 `webhook` (`POST /triggers/hello-sample`) are `enabled: false`. Turned on, the watch makes each
 tick check whether `hello-sample` gained a registered version, and starts the pipeline only
 when it did. A version is registered by the `engine-check` leg, which records the checked file's content as a version of `hello-sample` (#2632): a changed sample is a new version, and the same sample adds none. With the watch on, a run that registers a new version is followed by one watch-started run on that same content; moving the registration to the job that lands the data is tracked separately. nightly-ops' `table` watch is declared but not armed: a `table` (or `s3`) watch
@@ -213,7 +213,7 @@ start a `hello-cairn` pipeline.
 
 ### Events
 
-`profile-and-publish`'s `publish` leg declares `emits: dataset.ready`: when it completes,
+`check-and-publish`'s `publish` leg declares `emits: dataset.ready`: when it completes,
 the bus carries that topic with the leg's output as the payload. A leg declared
 `trigger: on:dataset.ready` (in any pipeline) waits for it; `trigger:` also takes `manual`
 and `schedule:<cron>` (#2605). On the Postgres bus the event is durable and replayed to a
@@ -232,7 +232,7 @@ start door to its legs, names where governance fires, and lists the proof for ea
 
 ### Seeded demo data
 
-`cairn setup --seed` and `cairn admin demo` seed three records of profile-and-publish
+`cairn setup --seed` and `cairn admin demo` seed three records of check-and-publish
 (`cairn/core/demo_seed.py`). The seeder takes the steps from the loaded pipeline's plan, so
 each record carries every step in plan order (`redact`, `promote` and `audit` included):
 the published record has all of them done, the blocked one stops at `data-ok`, and the

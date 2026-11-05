@@ -8,7 +8,7 @@ through the published port, so Caddy is on the path too. Then, twice:
   * with ``CAIRN_JWT_SECRET`` and ``CAIRN_API_PASSWORD`` set, as ``docker-compose.yml`` documents, where
     a call with no token must be refused and a sign-in must work;
 
-it runs ``hello-cairn/profile-and-publish`` through both of its gates, and checks that the engine's
+it runs ``hello-cairn/check-and-publish`` through both of its gates, and checks that the engine's
 own ``cairn admin audit verify`` passes on the log and that the log holds that pipeline's decisions
 and its end. Exit 0 only if all of it held. It always takes the stack and its volumes down.
 
@@ -31,7 +31,7 @@ from typing import Any, Callable, Optional
 REPO = Path(__file__).resolve().parents[1]
 LIGHT = REPO / "deploy" / "light"
 SAMPLE = REPO / "examples" / "hello-cairn" / "data" / "sample.jsonl"
-PIPELINE = "hello-cairn/profile-and-publish"
+PIPELINE = "hello-cairn/check-and-publish"
 GATES = ("review", "promote")
 TERMINAL = {"done", "failed", "cancelled"}
 PROJECT = "cairn-compose-check"

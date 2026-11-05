@@ -70,7 +70,7 @@ The audit trail is part of the environment: it is on when the profile binds
 do the Docker Compose stack and the example's `hello.toml`, which the Quickstart
 uses; `sandbox` and `local-dev` do not. A pipeline
 can also write an audit row as a leg of its own, as the example's
-`profile-and-publish` does with `task: audit/store`. The log file is
+`check-and-publish` does with `task: audit/store`. The log file is
 `CAIRN_AUDIT_LOG` (`./audit.jsonl` when unset).
 
 ### What a pipeline run writes

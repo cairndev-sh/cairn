@@ -6,12 +6,12 @@ does exactly that on a COPY of the pack, starts a real ``cairn-server`` on it, a
 that the trigger started the declaring pipeline through the launch door, with the start
 source on the record:
 
-* ``trigger.webhook`` — ``POST /triggers/hello-sample`` starts profile-and-publish;
-* ``trigger.schedule`` — the Monday cron, set to every minute, starts profile-and-publish;
-* ``event.emit`` / ``event.on`` — profile-and-publish's ``publish`` leg emits
+* ``trigger.webhook`` — ``POST /triggers/hello-sample`` starts check-and-publish;
+* ``trigger.schedule`` — the Monday cron, set to every minute, starts check-and-publish;
+* ``event.emit`` / ``event.on`` — check-and-publish's ``publish`` leg emits
   ``dataset.ready`` and ask-the-docs' ``kind: event`` trigger starts ask-the-docs on it;
 * ``trigger.watch`` — a run's ``engine-check`` leg registers the sample as a version of
-  ``hello-sample`` (#2632), and the every-minute watch then starts profile-and-publish.
+  ``hello-sample`` (#2632), and the every-minute watch then starts check-and-publish.
 
 One cell (SQLite, in-process runtime and bus): what is proved here is the trigger path, not
 the store or bus behind it — those are the matrix's cells.
@@ -77,7 +77,7 @@ def _wait_started(api: Api, name: str, source: str, *, timeout: float, seen: fro
     raise AssertionError(f"no {name} pipeline started by {source!r} within {timeout:.0f}s; found {found}")
 
 
-PNP = "pipelines/profile-and-publish.yaml"
+PNP = "pipelines/check-and-publish.yaml"
 WEBHOOK_ON = (
     "    path: /triggers/hello-sample\n    enabled: false\n",
     "    path: /triggers/hello-sample\n    enabled: true\n",
@@ -96,8 +96,8 @@ def test_a_webhook_starts_its_pipeline(cell, server_factory, tmp_path) -> None:
     api = srv.api()
     r = api.c.post("/triggers/hello-sample", json={"note": "feature proof"})
     assert r.status_code < 400, (r.status_code, r.text[:300])
-    rec = _wait_started(api, "profile-and-publish", "webhook", timeout=60)
-    record("trigger.webhook", cell.id, "profile-and-publish",
+    rec = _wait_started(api, "check-and-publish", "webhook", timeout=60)
+    record("trigger.webhook", cell.id, "check-and-publish",
            f"POST /triggers/hello-sample → pipeline {rec['pipeline_id']} (trigger.source='webhook')")
 
 
@@ -106,10 +106,10 @@ def test_a_schedule_fires_its_pipeline(cell, server_factory, tmp_path) -> None:
     pack = _pack_with(tmp_path, {PNP: [SCHEDULE_EVERY_MINUTE]})
     srv = server_factory(cell, "schedule", pack_path=pack)
     api = srv.api()
-    rec = _wait_started(api, "profile-and-publish", "schedule", timeout=150)
+    rec = _wait_started(api, "check-and-publish", "schedule", timeout=150)
     cron = (rec.get("trigger") or {}).get("cron")
     assert cron == "* * * * *", rec.get("trigger")
-    record("trigger.schedule", cell.id, "profile-and-publish",
+    record("trigger.schedule", cell.id, "check-and-publish",
            f"cron {cron!r} fired pipeline {rec['pipeline_id']} (trigger.source='schedule')")
 
 
@@ -119,13 +119,13 @@ def test_a_published_event_starts_ask_the_docs(cell, server_factory, tmp_path) -
     srv = server_factory(cell, "event", pack_path=pack)
     api = srv.api()
     before = frozenset(p["pipeline_id"] for p in _pipelines(api, "ask-the-docs"))
-    pid = api.start(f"{ARMED}/profile-and-publish")
+    pid = api.start(f"{ARMED}/check-and-publish")
     for gate in ("review", "promote"):
         api.wait_step(pid, gate, "awaiting_approval", timeout=180)
         api.approve(pid, gate, approver="proof", rationale="feature proof")
     done = api.wait_terminal(pid, timeout=300)
     assert done["status"] == "done", done.get("trigger")
-    record("event.emit", cell.id, "profile-and-publish",
+    record("event.emit", cell.id, "check-and-publish",
            f"pipeline {pid}: the `publish` leg (emits: dataset.ready) completed")
     rec = _wait_started(api, "ask-the-docs", "event", timeout=60, seen=before)
     trig = rec.get("trigger") or {}
@@ -143,22 +143,22 @@ WATCH_EVERY_MINUTE = (
 
 @pytest.mark.parametrize("cell", [CELL])
 def test_a_dataset_watch_starts_its_pipeline_on_a_new_version(cell, server_factory, tmp_path) -> None:
-    """The watch on `hello-sample` (every minute here) starts profile-and-publish only once
+    """The watch on `hello-sample` (every minute here) starts check-and-publish only once
     the dataset gained a version: a manual run's `engine-check` leg registers the sample
     (#2632), and the next tick sees the change (ADR-0131 D3)."""
     pack = _pack_with(tmp_path, {PNP: [WATCH_EVERY_MINUTE]})
     srv = server_factory(cell, "watch", pack_path=pack)
     api = srv.api()
-    pid = api.start(f"{ARMED}/profile-and-publish")
+    pid = api.start(f"{ARMED}/check-and-publish")
     api.wait(pid, lambda r: r["step_state"].get("engine-check", {}).get("status") == "done",
              timeout=180, what="engine-check done (the sample registered)")
-    rec = _wait_started(api, "profile-and-publish", "watch", timeout=150, seen=frozenset({pid}))
+    rec = _wait_started(api, "check-and-publish", "watch", timeout=150, seen=frozenset({pid}))
     # the watch's own run registers the SAME content: no new version, so no further start
     # (#2632 review) — two more ticks, still only one watch-started run
     time.sleep(130)
-    watch_runs = [p["pipeline_id"] for p in _pipelines(api, "profile-and-publish")
+    watch_runs = [p["pipeline_id"] for p in _pipelines(api, "check-and-publish")
                   if (api.pipeline(p["pipeline_id"]).get("trigger") or {}).get("source") == "watch"]
     assert watch_runs == [rec["pipeline_id"]], watch_runs
-    record("trigger.watch", cell.id, "profile-and-publish",
+    record("trigger.watch", cell.id, "check-and-publish",
            f"hello-sample gained a version in {pid}; the watch started pipeline {rec['pipeline_id']} "
            f"(trigger.source='watch')")
