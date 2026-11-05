@@ -9,7 +9,7 @@ what each one does on its way through the engine; the shared spine is
 
 | Pipeline | Kind | Legs, in order | Proves |
 |---|---|---|---|
-| `profile-and-publish` | data | `data/profile` → data gate `data-ok` → `redact/text` → flow `engine-check` → `storage/put` (stage) → person gate `review` → `artifact/promote` → `storage/put` (publish, `emits: dataset.ready`) → `audit/store` | data gate, person gate, builtin dataflow engine, redaction, artifact store + promote, audit, budget, `watch`/`schedule`/`webhook` triggers, `emits` |
+| `check-and-publish` | data | `data/profile` → data gate `data-ok` → `redact/text` → flow `engine-check` → `storage/put` (stage) → person gate `review` → `artifact/promote` → `storage/put` (publish, `emits: dataset.ready`) → `audit/store` | data gate, person gate, builtin dataflow engine, redaction, artifact store + promote, audit, budget, `watch`/`schedule`/`webhook` triggers, `emits` |
 | `ask-the-docs` | agentic | template `assistant` (RAG search → rerank → model call → MCP tool → memory write) → `monitor/threshold` → person gate `review` | LLM through `build_chat_model`, MCP, RAG + vector store, memory, monitor, `kind: event` trigger on `dataset.ready` |
 | `tiny-finetune` | ml | `data/profile` → data gate → flow `lora` (`train/lora` stage) → `train/eval-loss` → `monitor/threshold` → data gate `loss-ok` → `artifact/promote` → person gate → `storage/put` (model card) | ml flow kind, a real LoRA fine-tune (`train.finetune`), the `[train]` extra |
 | `nightly-ops` | flow + hooks | template `nightly-job` (secret check → SSH report) → flow `summarise` → `monitor/propose` → `audit/store` | cron `schedule` (armed when enabled), `secrets.store` on env or Infisical, `remote/exec` over SSH, run hooks (`hooks.py`), monitor propose |
@@ -20,7 +20,7 @@ what each one does on its way through the engine; the shared spine is
 - Declared triggers, materialised into the existing schedule/trigger stores (ADR-0131),
   paused unless declared `enabled: true`, each starting the declaring pipeline through the
   same door:
-  - `profile-and-publish`: a `dataset` watch (`on_change: start`), a weekly `schedule`, a
+  - `check-and-publish`: a `dataset` watch (`on_change: start`), a weekly `schedule`, a
     `webhook` at `POST /triggers/hello-sample`. The watch's fire first probes the registered
     dataset (`dispatch/scheduler.py:52 fire_scheduled_workflow`, the reserved `$watch` input
     `CORE_WATCH_KEY`, `:85`) and starts the pipeline only when a new version exists.
@@ -49,7 +49,7 @@ flowchart TD
 ```
 
 ## Where each pipeline leaves the spine
-- **profile-and-publish.** `data-ok` is a data gate (a predicate on `profile`'s output, no
+- **check-and-publish.** `data-ok` is a data gate (a predicate on `profile`'s output, no
   person). `review` is a person gate placed by the pipeline. The pack policy
   (`policies/require-review-on-publish.yaml`) is consulted by `enforce_gate` on every
   operator call: in the `hello-prod` environment only, each `storage/put` pauses as
@@ -100,5 +100,5 @@ flowchart TD
   torch, so they skip there with that reason.
 - The Infisical variant of nightly-ops needs a machine identity made by hand in the
   Infisical UI; without one the env-secrets variant runs and the Infisical row is NOT PROVED.
-- Seeded demo records (`cairn setup --seed`) still write profile-and-publish's earlier step
+- Seeded demo records (`cairn setup --seed`) still write check-and-publish's earlier step
   list (#2608).

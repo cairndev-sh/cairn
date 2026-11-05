@@ -1,9 +1,0 @@
-{
-  "format": "cairn.capability/1",
-  "id": "data.profile",
-  "revision": "1.0.0",
-  "summary": "Resolve a workflow's semantic data roles against inline rows or a source and return a pass, degrade or block verdict with per-role coverage. Reads only.",
-  "input": "contract://data.profile.input/1.0.0",
-  "configuration": "contract://data.profile.configuration/1.0.0",
-  "output": "contract://data.profile.output/1.0.0"
-}

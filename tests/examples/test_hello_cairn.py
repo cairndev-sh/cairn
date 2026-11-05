@@ -46,7 +46,7 @@ from tests.core.test_trigger_server_dispatch import FakeRunner
 
 REPO = Path(__file__).resolve().parents[2]
 PACK_DIR = REPO / "examples" / "hello-cairn"
-PIPELINE = "hello-cairn/profile-and-publish"
+PIPELINE = "hello-cairn/check-and-publish"
 OVER_BUDGET = "hello-cairn/over-budget"
 
 
@@ -101,7 +101,7 @@ def test_every_pipeline_and_flow_parses_and_plans(hello_pack):
 
 
 def test_the_pipeline_declares_what_the_example_is_for(hello_pack):
-    d = parse_pipeline_def((PACK_DIR / "pipelines" / "profile-and-publish.yaml").read_text(),
+    d = parse_pipeline_def((PACK_DIR / "pipelines" / "check-and-publish.yaml").read_text(),
                            pack="hello-cairn")
     steps = {s.name: s for s in d.steps}
     assert d.governance["budget"] == {"usd": 1}
@@ -329,8 +329,8 @@ async def test_the_same_pipeline_runs_once_its_cap_covers_the_estimate(hello_pac
 def test_the_sample_preset_is_in_the_wheel_and_names_a_file_in_the_pack():
     pyproject = (PACK_DIR / "pyproject.toml").read_text()
     assert '"presets" = "cairn_pack_hello/presets"' in pyproject and '"data" = "cairn_pack_hello/data"' in pyproject
-    preset = yaml.safe_load((PACK_DIR / "presets" / "profile-and-publish.yaml").read_text())
-    assert preset["pipeline"] == "hello-cairn/profile-and-publish"
+    preset = yaml.safe_load((PACK_DIR / "presets" / "check-and-publish.yaml").read_text())
+    assert preset["pipeline"] == "hello-cairn/check-and-publish"
     sample = next(p for p in preset["presets"] if p["name"] == "sample")
     assert (PACK_DIR / sample["inputs"]["path"].removeprefix("$pack/")).is_file()
 

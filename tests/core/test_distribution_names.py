@@ -74,8 +74,8 @@ def test_the_image_variable_is_cairn_image():
 #: ADR-0121 D3 (#2429): the operator packs ship as ``cairn-operator-<name>``; import names
 #: (``operator_<name>``), operator refs and entry-point names do not change.
 _OPERATOR_PYPROJECTS = sorted(p / "pyproject.toml" for p in _layout.operator_packs())
-#: The public tree has the 7 builtins.
-_OPERATOR_PACKS = 7
+#: The public tree has the 2 builtins.
+_OPERATOR_PACKS = 2
 
 
 def test_every_operator_pack_distribution_is_cairn_operator_and_matches_its_directory():

@@ -20,25 +20,25 @@ from pathlib import Path
 #: key → (what it is, the hello-cairn pipeline whose row proves it). The test that proves a
 #: row is ``test_pipeline[<cell>-<pipeline>]``, except the crash rows (:data:`CRASH_TESTS`).
 FEATURES: dict[str, tuple[str, str]] = {
-    "pipeline.data": ("a data pipeline from the CLI/API", "profile-and-publish"),
+    "pipeline.data": ("a data pipeline from the CLI/API", "check-and-publish"),
     "pipeline.agentic": ("an agentic (template) pipeline", "ask-the-docs"),
     "pipeline.ml": ("an ml pipeline", "tiny-finetune"),
     "pipeline.flow": ("a flow-kind pipeline", "nightly-ops"),
-    "gate.data": ("a data gate (predicate on a leg's output)", "profile-and-publish"),
-    "gate.person": ("a person gate, decided through the API/CLI", "profile-and-publish"),
-    "gate.operator": ("an operator-declared gate (requires_approval) decided on the leg's one Run", "profile-and-publish"),
-    "flow.builtin-engine": ("a flow leg on the builtin dataflow engine", "profile-and-publish"),
-    "artifact.store": ("an artifact written by storage/put (artifact.store)", "profile-and-publish"),
-    "artifact.promote": ("artifact/promote moves a governed tag to the flow leg's artifact", "profile-and-publish"),
-    "audit": ("audit rows in the hash-chained sink (audit/store leg)", "profile-and-publish"),
-    "budget": ("a declared budget on the record", "profile-and-publish"),
-    "redaction": ("the redact.text stage", "profile-and-publish"),
-    "trigger.schedule": ("a cron schedule trigger (enabled) starting its pipeline", "profile-and-publish"),
-    "trigger.watch": ("a dataset watch starting its pipeline on a new version", "profile-and-publish"),
-    "trigger.webhook": ("a declared webhook starting its pipeline", "profile-and-publish"),
-    "event.emit": ("a leg's `emits:` published on the bus", "profile-and-publish"),
+    "gate.data": ("a data gate (predicate on a leg's output)", "check-and-publish"),
+    "gate.person": ("a person gate, decided through the API/CLI", "check-and-publish"),
+    "gate.operator": ("an operator-declared gate (requires_approval) decided on the leg's one Run", "check-and-publish"),
+    "flow.builtin-engine": ("a flow leg on the builtin dataflow engine", "check-and-publish"),
+    "artifact.store": ("an artifact written by storage/put (artifact.store)", "check-and-publish"),
+    "artifact.promote": ("artifact/promote moves a governed tag to the flow leg's artifact", "check-and-publish"),
+    "audit": ("audit rows in the hash-chained sink (audit/store leg)", "check-and-publish"),
+    "budget": ("a declared budget on the record", "check-and-publish"),
+    "redaction": ("the redact.text stage", "check-and-publish"),
+    "trigger.schedule": ("a cron schedule trigger (enabled) starting its pipeline", "check-and-publish"),
+    "trigger.watch": ("a dataset watch starting its pipeline on a new version", "check-and-publish"),
+    "trigger.webhook": ("a declared webhook starting its pipeline", "check-and-publish"),
+    "event.emit": ("a leg's `emits:` published on the bus", "check-and-publish"),
     "event.on": ("a `kind: event` trigger starting a pipeline on that topic", "ask-the-docs"),
-    "hooks": ("a cairn.run_hooks listener's receipts", "profile-and-publish"),
+    "hooks": ("a cairn.run_hooks listener's receipts", "check-and-publish"),
     "llm": ("a model call through core's build_chat_model (the keyless stub model, #2607)", "ask-the-docs"),
     "mcp": ("mcp/call against a stdio server", "ask-the-docs"),
     "rag": ("rag index + query on a vector store", "ask-the-docs"),
@@ -49,8 +49,8 @@ FEATURES: dict[str, tuple[str, str]] = {
     "secrets.infisical": ("secrets.store bound to secrets/infisical (nightly-ops on Infisical)", "nightly-ops"),
     "ssh": ("remote/exec over SSH on a compute.ssh connection", "nightly-ops"),
     "worker.pull": ("cairn admin worker --pull --once serving a leg", "tiny-finetune"),
-    "storage.postgres": ("every store on Postgres", "profile-and-publish"),
-    "bus.postgres": ("the Postgres bus", "profile-and-publish"),
+    "storage.postgres": ("every store on Postgres", "check-and-publish"),
+    "bus.postgres": ("the Postgres bus", "check-and-publish"),
     "runtime.dbos": ("the DBOS runtime running a template leg", "ask-the-docs"),
     "crash.gate": ("a server killed at a gate; restart; the gate is decided after", "crash-pack"),
     "crash.mid-leg": ("a server killed mid-leg; restart; the ADR-0125 outcome", "crash-pack"),
@@ -162,7 +162,7 @@ def _cases_for(key: str, pipeline: str, cases: list[dict]) -> list[dict]:
 
 
 def _cell_of(case_id: str) -> str:
-    """``…[sqlite-dbos-inprocess-profile-and-publish]`` → ``sqlite-dbos-inprocess``."""
+    """``…[sqlite-dbos-inprocess-check-and-publish]`` → ``sqlite-dbos-inprocess``."""
     inner = case_id.rsplit("[", 1)[-1].rstrip("]")
     return "-".join(inner.split("-")[:3])
 

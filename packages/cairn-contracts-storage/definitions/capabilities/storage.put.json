@@ -1,9 +1,0 @@
-{
-  "format": "cairn.capability/1",
-  "id": "storage.put",
-  "revision": "1.0.0",
-  "summary": "Write a payload (text or bytes) under (store, key) in the deployment's artifact store and return its URI, key, sha256 and size; content-addressed when no key is given. Failures surface as ok=false with an error, not as an exception.",
-  "input": "contract://storage.put.input/1.0.0",
-  "configuration": "contract://storage.put.configuration/1.0.0",
-  "output": "contract://storage.put.output/1.0.0"
-}

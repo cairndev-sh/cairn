@@ -3,22 +3,21 @@
 #
 # The one pack the public core ships so a fresh install has something governed
 # to run. It needs the engine and the builtin operator packs, and nothing from the
-# platform: four pipelines, one per kind of work (data, agentic, ml, operations), and
+# platform: two pipelines, one per kind of work (data, ml), and
 # `over-budget`, which a budget refuses before its engine starts.
 #
 # A domain pack is DATA plus glue, never operators (ADR-0127 D2): this manifest,
 # `pipelines/*.yaml` (the runnable surface), `flows/` (the components the
-# pipelines' flow and template legs name), `rag/docs` (a corpus), `data/`,
-# `policies/`, `profiles/`, the one-line `__init__.py`, a run-hook listener
-# (`hooks.py`, declared through the `cairn.run_hooks` entry point in pyproject.toml)
-# and a stdio MCP tool server (`tools/calc_server.py`). Neither piece of glue
-# registers an operation. Assets are found by convention (`pipelines/`, `flows/`,
+# pipelines' flow legs name), `data/`,
+# `policies/`, `profiles/`, the one-line `__init__.py`, and a run-hook listener
+# (`hooks.py`, declared through the `cairn.run_hooks` entry point in pyproject.toml).
+# The glue registers no operation. Assets are found by convention (`pipelines/`, `flows/`,
 # `rag/`, `data/`, `policies/`), so there is no `[assets]` block.
 
 [pack]
 name        = "hello-cairn"
 version     = "0.2.9"
-description = "Example pack: check a dataset, ask its docs, fine-tune a small model and run a nightly job, each behind gates a person or the data answers."
+description = "Example pack: approve a dataset, and fine-tune a small model."
 tags = [
     "domain:example",
     "data:jsonl",
@@ -31,7 +30,7 @@ trust_level = "builtin"
 cairn_engine = ">=0.1.0"
 
 # No `[requires] capabilities`: that table is satisfied by other DOMAIN packs'
-# `[provides]`, not by operator packs, so naming `data.profile` / `storage.put`
+# `[provides]`, not by operator packs, so naming a capability
 # here would be a composition conflict on every deployment. The pipeline's
 # task legs are checked against the operator registry at plan time instead
 # (`cairn run --dry-run` names the operator class each leg resolves to).

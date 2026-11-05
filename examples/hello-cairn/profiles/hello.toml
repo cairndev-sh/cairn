@@ -5,24 +5,10 @@
 #
 # Self-contained on purpose (no `extends`): a relative `extends` resolves against
 # this file, and the core's profiles live at a different path in a checkout, the
-# public tree and an installed wheel. It carries local-dev.toml's bindings for the
-# builtin operators (storage). Not carried: local-dev's `eval.delta`
-# binding (a platform operator) and its `llm_gateway` / `embedder` backend entries. Plus
-# what only it needs:
-#
-#   * `secrets.store` — secrets/env reads the engine's environment; local-dev.toml binds none.
-#   * `audit.sink` — the quickstart's audit trail: every governed step and each decision a person makes
-#     lands in the hash-chained log at CAIRN_AUDIT_LOG (default ./audit.jsonl), next to the
-#     row the pipeline's own `audit` leg writes. local-dev.toml leaves it unbound (ADR-0028).
+# public tree and an installed wheel.
 
 [profile]
 visibility = "public"
-
-[profile.bindings]
-"storage.put"    = "storage/put"     # cairn-operator-artifact-local
-"storage.get"    = "storage/get"     # cairn-operator-artifact-local
-"secrets.store"  = "secrets/env"     # cairn-operator-secrets-env
-"audit.sink"     = "audit/store"     # cairn-operator-audit-store
 
 # No `durable_runtime`: a profile pin beats CAIRN_RUNTIME (cairn/core/settings.py
 # runtime()), so the runtime stays the engine's choice: in-process by default,

@@ -67,7 +67,7 @@ These names were removed in 0.5.0, and typing one says what's here:
 | `cairn run <skill> --skill` | Submits a skill to the server. `--wait` blocks until it is done, `--service` names the service. |
 | `cairn pack show <ref>` | A pipeline's inputs, legs, gates and wiring. `--plan` shows the execution plan instead; with `--plan`, `--preset <name>` and `-i key=value` first list each input's value and the layer it comes from (`← preset 'name'`). |
 
-A **ref** is `<pack>/<name>`, for example `hello-cairn/profile-and-publish`.
+A **ref** is `<pack>/<name>`, for example `hello-cairn/check-and-publish`.
 When a flow has the same name as a pipeline, `show` and `run` both
 resolve the bare name to the declared pipeline (ADR-0106 D1).
 The explicit spelling `pipeline:<pack>/<name>` works too.

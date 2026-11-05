@@ -30,7 +30,7 @@ predicate is evaluated. If it is true the gate passes at once, recorded with
 the verdict `data`, and nobody is asked. If it is false the pipeline stops:
 the gate fails closed (`gate_blocked`), and the legs after it never start.
 
-From the example pack's `profile-and-publish` pipeline, which checks a dataset
+From the example pack's `check-and-publish` pipeline, which checks a dataset
 before anything else touches it:
 
 ```yaml
@@ -153,7 +153,7 @@ call (by `action_types`, `risks` or `environments`) says `require_hitl`. Every
 operator call passes this check, whichever pipeline it runs in.
 
 In the example, `artifact/promote` moves a governed tag, and it asks on every
-call. That is why `profile-and-publish` stops a second time, at `promote`,
+call. That is why `check-and-publish` stops a second time, at `promote`,
 after the `review` gate. The example's policy does the same for every
 `storage/put` in the `hello-prod` environment:
 

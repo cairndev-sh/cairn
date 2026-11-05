@@ -33,7 +33,7 @@ the nodes of an agentic flow.
 
 ## An example
 
-The example pack's `hello-cairn/profile-and-publish` pipeline checks a
+The example pack's `hello-cairn/check-and-publish` pipeline checks a
 dataset, stops if the check fails, and publishes a summary only after a person
 approves:
 
@@ -47,7 +47,7 @@ flowchart LR
   review --> publish["promote · publish · audit"]
 ```
 
-Abridged from `examples/hello-cairn/pipelines/profile-and-publish.yaml`:
+Abridged from `examples/hello-cairn/pipelines/check-and-publish.yaml`:
 
 ```yaml
 steps:

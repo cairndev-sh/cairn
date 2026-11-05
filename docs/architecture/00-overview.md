@@ -158,7 +158,7 @@ exceptions). The dotted edge is the one documented bidirectional coupling.
 
 | Pack | Where | Notes |
 |---|---|---|
-| `hello-cairn` | `examples/hello-cairn`, the `cairn-pack-hello` wheel | four pipelines: `profile-and-publish`, `ask-the-docs`, `tiny-finetune`, `nightly-ops` |
+| `hello-cairn` | `examples/hello-cairn`, the `cairn-pack-hello` wheel | four pipelines: `check-and-publish`, `ask-the-docs`, `tiny-finetune`, `nightly-ops` |
 | `finetune`, `dataset-prep` | outside this repository, the `cairn-pack-finetune` and `cairn-pack-dataset-prep` wheels | released on their own |
 | other domain packs | outside this repository, part of cairn-platform | discovered the same way, through the `cairn.packs` entry point |
 
@@ -181,7 +181,7 @@ exceptions). The dotted edge is the one documented bidirectional coupling.
 5. `src/cairn/core/operator/runtime.py:888 invoke_operator` — the operator chokepoint.
 6. `src/cairn/core/approval/enforce.py` — the approval gate.
 7. `src/cairn/core/pack/loader.py` and `src/cairn/core/operator/loader.py` — discovery.
-8. One pack end to end: `examples/hello-cairn/pipelines/profile-and-publish.yaml`,
+8. One pack end to end: `examples/hello-cairn/pipelines/check-and-publish.yaml`,
    `examples/hello-cairn/flows/engine-check.yaml`, `packages/cairn-operator-data-profile/`.
 
 Then the golden paths: [pipeline](../golden-paths/pipeline.md) ·

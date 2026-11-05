@@ -34,7 +34,7 @@ uv sync --extra dev --extra rag --extra rag-sqlite-vec \
 uv run cairn setup --seed
 
 # 3. Drive it (step 2 signed you in). It asks at each gate: answer a to approve.
-uv run cairn run hello-cairn/profile-and-publish --environment sandbox \
+uv run cairn run hello-cairn/check-and-publish --environment sandbox \
     -i path=$PWD/examples/hello-cairn/data/sample.jsonl
 ```
 

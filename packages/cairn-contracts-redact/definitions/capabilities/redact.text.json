@@ -1,9 +1,0 @@
-{
-  "format": "cairn.capability/1",
-  "id": "redact.text",
-  "revision": "1.0.0",
-  "summary": "Scan text for PII and secrets and return it with each detected span replaced by a placeholder, whether anything was redacted, the span count and the distinct detector kinds hit. Pure; the kinds vocabulary is the provider's.",
-  "input": "contract://redact.text.input/1.0.0",
-  "configuration": "contract://redact.text.configuration/1.0.0",
-  "output": "contract://redact.text.output/1.0.0"
-}

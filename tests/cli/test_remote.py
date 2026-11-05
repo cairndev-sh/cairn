@@ -380,7 +380,7 @@ def test_pipelines_lists_name_and_step_progress(monkeypatch):
     store = ps.InMemoryPipelineStore()
     monkeypatch.setattr(ps, "_default_store", store)
     rec = ps.PipelineRecord(
-        pipeline_name="profile-and-publish", status="running",
+        pipeline_name="check-and-publish", status="running",
         step_state={"profile": ps.StepState(status="done"),
                     "data-ok": ps.StepState(status="done"),
                     "review": ps.StepState(status="awaiting_approval"),
@@ -391,4 +391,4 @@ def test_pipelines_lists_name_and_step_progress(monkeypatch):
     assert res.exit_code == 0, res.output
     line = next(ln for ln in res.output.splitlines() if rec.pipeline_id in ln)
     assert "2/4 steps" in line, line
-    assert line.rstrip().endswith("profile-and-publish  waiting: review"), line
+    assert line.rstrip().endswith("check-and-publish  waiting: review"), line

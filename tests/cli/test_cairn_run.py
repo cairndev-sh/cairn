@@ -21,7 +21,7 @@ from cairn.cli.commands import status as status_cli
 from cairn.cli.main import app
 
 cli = CliRunner()
-PIPELINE = "hello-cairn/profile-and-publish"
+PIPELINE = "hello-cairn/check-and-publish"
 GATE = {"status": "awaiting_approval", "run_id": None}
 DONE = {"status": "done", "run_id": "run-1", "approver": None}
 
