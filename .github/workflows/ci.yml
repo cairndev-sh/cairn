@@ -44,7 +44,7 @@ jobs:
         .venv/bin/cairn --help > /dev/null
         CAIRN_PACK_PATH=examples/hello-cairn .venv/bin/cairn pack ls --pipelines | tee /tmp/pipelines.txt
         grep -q "hello-cairn" /tmp/pipelines.txt
-        CAIRN_PACK_PATH=examples/hello-cairn .venv/bin/cairn run --dry-run hello-cairn/profile-and-publish > /dev/null
+        CAIRN_PACK_PATH=examples/hello-cairn .venv/bin/cairn run --dry-run hello-cairn/check-and-publish > /dev/null
     - name: The published measurements run on the public core (benchmark/README.md)
       run: env -u OBS_STORAGE -u CAIRN_STORAGE .venv/bin/python benchmark/quickstart_path.py --out /tmp/test-results/benchmark
     - name: The audit log catches what it says it catches, and no more (benchmark/README.md)

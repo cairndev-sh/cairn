@@ -418,8 +418,8 @@ def test_pack_check_refuses_a_path_option_without_paths(run, argv: list[str]) ->
 
 def test_pack_ls_lists_pipelines_and_flows(run) -> None:
     pipelines = json.loads(run("pack", "ls", "--pipelines", "--json").stdout)
-    assert any(r["ref"] == "hello-cairn/profile-and-publish" for r in pipelines)
-    assert "hello-cairn/profile-and-publish" in run("pack", "ls", "--pipelines").stdout
+    assert any(r["ref"] == "hello-cairn/check-and-publish" for r in pipelines)
+    assert "hello-cairn/check-and-publish" in run("pack", "ls", "--pipelines").stdout
     flows = json.loads(run("pack", "ls", "--flows", "--json").stdout)
     assert any(r["ref"].startswith("hello-cairn/") for r in flows)
     assert "hello-cairn/" in run("pack", "ls", "--flows").stdout
@@ -438,10 +438,10 @@ def test_pack_ls_without_a_view_is_the_old_listing(run) -> None:
 
 
 def test_pack_show_has_one_door_for_each_view(run) -> None:
-    ref = "hello-cairn/profile-and-publish"
+    ref = "hello-cairn/check-and-publish"
     assert ref in run("pack", "show", ref).stdout
     assert run("pack", "show", ref, "--plan").exit_code == 0
-    assert json.loads(run("pack", "show", ref, "--json").stdout)["name"] == "profile-and-publish"
+    assert json.loads(run("pack", "show", ref, "--json").stdout)["name"] == "check-and-publish"
     assert json.loads(run("pack", "show", ref, "--plan", "--json").stdout)["steps"]
     flow = next(r["ref"] for r in json.loads(run("pack", "ls", "--flows", "--json").stdout) if r["kind"] != "agentic")
     res = run("pack", "show", flow, "--split", "--json")
@@ -454,7 +454,7 @@ def test_pack_show_has_one_door_for_each_view(run) -> None:
     ["--split", "-i", "a=b"], ["--graph", "--preset", "p"],
 ])
 def test_pack_show_refuses_what_does_not_combine(run, argv: list[str]) -> None:
-    assert run("pack", "show", "hello-cairn/profile-and-publish", *argv).exit_code == 2
+    assert run("pack", "show", "hello-cairn/check-and-publish", *argv).exit_code == 2
 
 
 @pytest.mark.parametrize("argv", [

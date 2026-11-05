@@ -183,21 +183,16 @@ async def seed_demo_workspace(
 #: The example pack's pipeline. Not a dependency: the pack is found through the
 #: pack registry (an installed ``cairn-pack-hello`` or ``CAIRN_PACK_PATH``), and
 #: when it is absent the provider skips it.
-HELLO_PIPELINE = "hello-cairn/profile-and-publish"
+HELLO_PIPELINE = "hello-cairn/check-and-publish"
 
-#: The example's three stories. Demo data: the outputs are what the shipped
-#: ``data/sample.jsonl`` profiles to; nothing is executed. A story names only
+#: The example's two stories. Demo data: nothing is executed. A story names only
 #: where it stops (``stop``: step id and its status); every step before it in
 #: the LOADED plan is ``done`` and every step after it ``pending``
 #: (:func:`_story_steps`), so the seeded records follow the shipped pipeline
 #: as it gains steps (#2608). ``stop: None`` runs the whole plan.
-_HELLO_PROFILE = {"ok": True, "verdict": "pass", "record_count": 20, "detected_format": "jsonl",
-                  "note": "20 records; roles text, label resolved"}
 _HELLO_STORIES: tuple[dict[str, Any], ...] = (
     {"key": "published", "ago_h": 50, "status": "done", "inputs": {}, "stop": None,
-     "approver": "alice", "rationale": "Profile passed and the staged summary reads right."},
-    {"key": "blocked", "ago_h": 26, "status": "failed", "inputs": {"min_rows": 1000},
-     "stop": ("data-ok", "skipped")},
+     "approver": "alice", "rationale": "The checked dataset reads right."},
     {"key": "waiting", "ago_h": 2, "status": "paused", "inputs": {},
      "stop": ("review", "awaiting_approval")},
 )
@@ -236,19 +231,9 @@ def _hello_def() -> Any:
 
 
 def _hello_output(step_id: str) -> dict[str, Any]:
-    if step_id == "profile":
-        return dict(_HELLO_PROFILE)
-    if step_id == "redact":  # the sample's summary holds nothing the recognisers match
-        return {"ok": True, "text": _HELLO_PROFILE["note"], "redacted": False, "span_count": 0, "kinds": []}
-    if step_id in ("stage", "publish"):
-        store = "hello-staging" if step_id == "stage" else "hello-published"
-        return {"ok": True, "key": "summary", "uri": f"file://~/.cairn/artifacts/{store}/summary",
-                "size_bytes": len(_HELLO_PROFILE["note"])}
     if step_id == "promote":
         return {"tag": "hello-sample@published", "artifact_id": _hello_id("", "hello-sample", n=40),
                 "previous_artifact_id": "", "promoted": True}
-    if step_id == "audit":
-        return {"ok": True, "hash": _hello_id("", "audit", "hello.dataset.published", n=40)}
     return {}  # engine-check: one noop stage, no output
 
 

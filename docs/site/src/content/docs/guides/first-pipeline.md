@@ -3,7 +3,7 @@ title: Run your first pipeline
 description: Find a pipeline, see what it will do before it spends, launch it from the CLI or the HTTP API, follow it, answer its gates and read its outputs.
 ---
 
-This guide runs the example pack's `hello-cairn/profile-and-publish`
+This guide runs the example pack's `hello-cairn/check-and-publish`
 pipeline: it checks a JSONL file, stops if the check fails, and publishes a
 summary after a person approves. The same steps work for any pipeline in the
 [catalog](/reference/catalog/) or in your own pack.
@@ -22,7 +22,7 @@ $ cairn pack ls --pipelines
   hello-cairn/ask-the-docs  3 legs (gate,task,template)  sha256:4d1cf10680a88e38
   hello-cairn/nightly-ops  4 legs (flow,task,template)  sha256:63601bd0b441add9
   hello-cairn/over-budget  1 legs (flow)  sha256:6564ee0f0d22af39
-  hello-cairn/profile-and-publish  9 legs (flow,gate,task)  sha256:52dccf2087b839f5
+  hello-cairn/check-and-publish  9 legs (flow,gate,task)  sha256:52dccf2087b839f5
   hello-cairn/tiny-finetune  9 legs (flow,gate,task)  sha256:1c4102fa7e4528d0
 ```
 
@@ -32,8 +32,8 @@ and each input and where its value comes from. It runs nothing and spends
 nothing:
 
 ```text
-$ cairn run --dry-run hello-cairn/profile-and-publish -e sandbox
-pipeline:hello-cairn/profile-and-publish  —  Profile a small JSONL dataset, stop unless the profile passes, …
+$ cairn run --dry-run hello-cairn/check-and-publish -e sandbox
+pipeline:hello-cairn/check-and-publish  —  Profile a small JSONL dataset, stop unless the profile passes, …
   environment: sandbox    runtime=inprocess  storage=…  bus=in-process
   governance:  {'budget': {'usd': 1}, 'series': 'hello', 'approvers': 'data-owners'}
 
@@ -57,14 +57,14 @@ repository.
 **Against an engine.** Once `cairn setup` has signed you in, launch:
 
 ```bash
-cairn run hello-cairn/profile-and-publish --preset sample --environment sandbox
+cairn run hello-cairn/check-and-publish --preset sample --environment sandbox
 ```
 
 `--preset <name>` starts from a set of inputs, here the one the example ships, which
 points at its own sample rows. Each `-i key=value` sets one input on top of it, and
 `--save-preset <name>` saves this launch's inputs for next time.
 
-**Over the HTTP API.** `POST /start` with `{"ref": "hello-cairn/profile-and-publish", "inputs": {…}}`
+**Over the HTTP API.** `POST /start` with `{"ref": "hello-cairn/check-and-publish", "inputs": {…}}`
 goes through the same launch door.
 
 **With no engine running.** `cairn run <ref> -e sandbox -i key=value` starts a local

@@ -51,7 +51,7 @@ def test_pipelines_are_listed_before_the_flows_they_are_made_of(example_pack):
     assert "pipelines (what you run):" in out
     assert "flows (components" in out
     assert out.index("pipelines (what you run):") < out.index("flows (components")
-    assert "hello-cairn/profile-and-publish" in out      # the pipeline it ships
+    assert "hello-cairn/check-and-publish" in out      # the pipeline it ships
     assert "hello-cairn/engine-check" in out             # the flow it is made of
 
 
@@ -74,10 +74,10 @@ def test_the_json_shape_leads_with_pipelines_too(example_pack):
     (pack,) = payload
     keys = list(pack)
     assert keys.index("pipelines") < keys.index("flows")
-    assert {p["name"] for p in pack["pipelines"]} >= {"profile-and-publish"}
+    assert {p["name"] for p in pack["pipelines"]} >= {"check-and-publish"}
     assert any(f["kind"] == "data" for f in pack["flows"])
     legs = {p["name"]: p["legs"] for p in pack["pipelines"]}
-    assert legs["profile-and-publish"] >= 1
+    assert legs["check-and-publish"] >= 1
 
 
 def test_a_code_only_pack_says_so_instead_of_rendering_an_empty_heading(dev_packs, scratch_pack):

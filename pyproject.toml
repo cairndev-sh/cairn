@@ -130,14 +130,8 @@ hello-cairn = "cairn.core.demo_seed:seed_hello_cairn"
 # copy. tests/core/test_folded_engine_wheel.py holds the two equal.
 [project.entry-points."cairn.operators"]
 "artifact/promote" = "operator_dataflow.operators.promote:ArtifactPromoteOp"
-"audit/store" = "operator_audit_store.operators.audit_store:AuditStoreOp"
-"data/profile" = "operator_data_profile.operators.profile:DataProfileOp"
 "dataflow/run" = "operator_dataflow.operators.run:DataflowRunOp"
 "ml/run" = "operator_dataflow.operators.run_ml:MlRunOp"
-"redact/text" = "operator_redact_regex.operators.redact_text:RedactTextOp"
-"secrets/env" = "operator_secrets_env.operators.env:EnvSecretStoreOp"
-"storage/get" = "operator_artifact_local.operators.get:GetOp"
-"storage/put" = "operator_artifact_local.operators.put:PutOp"
 "train/eval-loss" = "operator_train_local.operators.eval_loss:EvalLossOp"
 "train/lora" = "operator_train_local.operators.lora:TrainLoraOp"
 
@@ -356,12 +350,7 @@ build-backend = "hatchling.build"
 # at the top of the wheel exactly as its own wheel placed it.
 packages = [
     "src/cairn",
-    "packages/cairn-operator-artifact-local/src/operator_artifact_local",
-    "packages/cairn-operator-audit-store/src/operator_audit_store",
-    "packages/cairn-operator-data-profile/src/operator_data_profile",
     "packages/cairn-operator-dataflow/src/operator_dataflow",
-    "packages/cairn-operator-redact-regex/src/operator_redact_regex",
-    "packages/cairn-operator-secrets-env/src/operator_secrets_env",
     "packages/cairn-operator-train-local/src/operator_train_local",
 ]
 exclude = ["CLAUDE.md", "AGENTS.md"]
@@ -373,20 +362,10 @@ exclude = ["CLAUDE.md", "AGENTS.md"]
 # code and pack.toml from packages/): after editing a contract, `uv sync --reinstall-package
 # cairndev`.
 [tool.hatch.build.targets.wheel.force-include]
-"packages/cairn-operator-artifact-local/pack.toml" = "operator_artifact_local/pack.toml"
-"packages/cairn-operator-audit-store/pack.toml" = "operator_audit_store/pack.toml"
-"packages/cairn-operator-data-profile/pack.toml" = "operator_data_profile/pack.toml"
 "packages/cairn-operator-dataflow/pack.toml" = "operator_dataflow/pack.toml"
-"packages/cairn-operator-redact-regex/pack.toml" = "operator_redact_regex/pack.toml"
-"packages/cairn-operator-secrets-env/pack.toml" = "operator_secrets_env/pack.toml"
 "packages/cairn-operator-train-local/pack.toml" = "operator_train_local/pack.toml"
 "packages/cairn-contracts-artifact/definitions" = "cairn_contracts/cairn-contracts-artifact"
-"packages/cairn-contracts-audit/definitions" = "cairn_contracts/cairn-contracts-audit"
-"packages/cairn-contracts-data/definitions" = "cairn_contracts/cairn-contracts-data"
 "packages/cairn-contracts-dataflow/definitions" = "cairn_contracts/cairn-contracts-dataflow"
-"packages/cairn-contracts-redact/definitions" = "cairn_contracts/cairn-contracts-redact"
-"packages/cairn-contracts-secrets/definitions" = "cairn_contracts/cairn-contracts-secrets"
-"packages/cairn-contracts-storage/definitions" = "cairn_contracts/cairn-contracts-storage"
 "packages/cairn-contracts-train/definitions" = "cairn_contracts/cairn-contracts-train"
 
 [tool.hatch.build.targets.sdist]
@@ -406,7 +385,7 @@ asyncio_mode = "auto"
 # `pytest`, so a pack tests dir missing from this list is never run (#2410).
 # Not listed: builtins/rag_parse/tests — operator-rag-parse is not a workspace
 # member, so CI cannot import it (keep/retire decision: #2413).
-testpaths = ["tests", "packages/cairn-operator-rag-local/tests", "packages/cairn-operator-rag-rerank/tests", "packages/cairn-operator-monitor-threshold/tests", "packages/cairn-operator-secrets-infisical/tests", "packages/cairn-operator-data-profile/tests", "packages/cairn-operator-dataflow/tests", "packages/cairn-operator-remote/tests", "packages/cairn-operator-train-local/tests", "packages/cairn-operator-dataflow-metaflow/tests", "packages/cairn-operator-dataflow-skypilot/tests"]
+testpaths = ["tests", "packages/cairn-operator-dataflow/tests", "packages/cairn-operator-train-local/tests"]
 # Project root on sys.path so tests can resolve repo-relative paths and the
 # archived legacy/ tree if a legacy test ever needs it. Active cairn.* code
 # imports neither src.* nor legacy.* (the provider layer migrated into

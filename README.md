@@ -186,38 +186,28 @@ cairndev 0.5.0, `uv.lock` `b71bfd534f0d`, Linux x86_64 with 4 CPUs and Python 3.
 
 ## Quickstart
 
-Run a governed pipeline on your machine: it checks a dataset, stops at a gate for
-you, and writes a hash-chained audit trail. No API key, no spend, about ten minutes.
+Run a pipeline on your machine: it versions a dataset through a flow and stops at a gate
+for you. No API key, no spend, about ten minutes.
 
 ```bash
 curl -LsSf https://docs.cairndev.sh/install.sh | CAIRN_EXTRAS=hello sh   # or: pip install 'cairndev[hello]'
 mkdir cairn-quickstart && cd cairn-quickstart
 curl -LsSfO https://raw.githubusercontent.com/cairndev-sh/cairn/main/examples/hello-cairn/profiles/hello.toml
-export CAIRN_PROFILE=$PWD/hello.toml                        # the example's profile: audit trail on
+export CAIRN_PROFILE=$PWD/hello.toml                        # the example's profile
 
 cairn setup --port 8471                                     # local engine on SQLite, signed in as dev
-cairn run hello-cairn/profile-and-publish --preset sample --environment sandbox
+cairn run hello-cairn/check-and-publish --preset sample --environment sandbox
 ```
 
-The pipeline profiles the file, passes its **data gate** (the profile must pass and
-count at least 10 rows), redacts and versions the file, and stops at `review`, a
+The pipeline runs the file through a flow, which versions it, and stops at `review`, a
 **person gate**:
 
 ```text
   paused
-    profile            done                 run=run-task-data--profile-1f9a14
-    data-ok            done                 run=None
-    redact             done                 run=run-task-redact--text-85ecfb
     engine-check       done                 run=run-flow-hello-cairn--engine-check-55b570
-    stage              done                 run=run-task-storage--put-1295cd
     review             awaiting_approval    run=None
     promote            pending              run=None
-    publish            pending              run=None
-    audit              pending              run=None
   gate review  (approvers: data-owners)
-    profile.verdict       pass
-    profile.record_count  20
-    …
 → approve   cairn decide pl_3f5b6ec6a25d414d approve --step review --approver you
 → findings  cairn status pl_3f5b6ec6a25d414d --results
 → watch     cairn status pl_3f5b6ec6a25d414d --follow
@@ -240,17 +230,10 @@ pipeline pl_3f5b6ec6a25d414d  status=done
   promote  [done] run=run-task-artifact--promote-3b4d2f
     artifact_id           sha256:d2c09d27b2874cee
     tag                   hello-sample@published
-  audit  [done] run=run-task-audit--store-39b32a
-    hash  af362a96212cf0d5298dfe71e81b5109d08a0219f3079387550e753f2fa25466
 ```
 
 `cairn status <pipeline_id> --json` prints the whole record as JSON: the plan, the
-inputs, and every step's state and decision. The audit trail is in `./audit.jsonl`:
-rows for the launch, each step, each decision a person made, with the signed-in user
-(`pipeline.gate_approved`), and the row the pipeline's own `audit` step writes. Each
-row is chained to the one before it by its hash, and `cairn admin audit verify` checks the
-file. Try `-i min_rows=1000` to watch the data gate stop the pipeline before any later
-step starts. The full walkthrough is the [Quickstart](https://docs.cairndev.sh/quickstart/).
+inputs, and every step's state and decision. The full walkthrough is the [Quickstart](https://docs.cairndev.sh/quickstart/).
 
 To watch a budget refuse a run, with no key and no spend, start a pipeline whose estimate
 is above its cap:
@@ -278,7 +261,7 @@ From source:
 ```bash
 git clone https://github.com/cairndev-sh/cairn && cd cairn
 uv sync --extra dev
-CAIRN_PACK_PATH=examples/hello-cairn uv run cairn run --dry-run hello-cairn/profile-and-publish
+CAIRN_PACK_PATH=examples/hello-cairn uv run cairn run --dry-run hello-cairn/check-and-publish
 ```
 
 The engine ships as the `cairndev` distribution (import name `cairn`), carrying the

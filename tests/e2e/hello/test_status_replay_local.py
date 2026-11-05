@@ -72,7 +72,7 @@ def test_a_local_run_reads_back_with_no_environment_variable_and_nothing_runs(tm
             time.sleep(0.2)
         signed_in = _cairn(home, "setup", "--server", url, "-u", "dev", "--password", "dev")
         assert signed_in.returncode == 0, signed_in.stderr
-        launched = _cairn(home, "run", "hello-cairn/profile-and-publish", "-i", f"path={sample}",
+        launched = _cairn(home, "run", "hello-cairn/check-and-publish", "-i", f"path={sample}",
                           "--environment", "sandbox", "--detach")
         assert launched.returncode == 0, launched.stderr
         pipeline_id = launched.stdout.split("pipeline_id=", 1)[1].split()[0]

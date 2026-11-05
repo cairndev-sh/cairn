@@ -1,6 +1,6 @@
 # hello-crash — the crash cells' pack (ADR-0127 D1, hello-cairn WP7; tests/e2e/hello/test_crash.py).
 #
-# A domain pack owned by the harness, never shipped: profile-and-publish with its flow leg
+# A domain pack owned by the harness, never shipped: check-and-publish with its flow leg
 # swapped for one that takes long enough to kill the server in the middle of it
 # (`noop.slow`, the builtin engine's conformance stage). The example pack stays the
 # example; this one exists so a crash cell has a leg to be mid-way through.

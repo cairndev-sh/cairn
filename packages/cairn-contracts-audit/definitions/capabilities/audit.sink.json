@@ -1,9 +1,0 @@
-{
-  "format": "cairn.capability/1",
-  "id": "audit.sink",
-  "revision": "1.0.0",
-  "summary": "Append one record to the tamper-evident, hash-chained audit log and return the chain hash of the appended row.",
-  "input": "contract://audit.sink.input/1.0.0",
-  "configuration": "contract://audit.sink.configuration/1.0.0",
-  "output": "contract://audit.sink.output/1.0.0"
-}

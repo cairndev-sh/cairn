@@ -215,7 +215,7 @@ def check_profile_and_publish(ctx: Ctx) -> None:
 def _hooks_receipt(ctx: Ctx) -> None:
     """The hello-receipts listener (a `cairn.run_hooks` entry point of the cairn-pack-hello
     wheel) writes a line for every settled leg on the engine, whatever the pipeline. It is
-    proved on profile-and-publish, which runs in every cell (CI included); nightly-ops
+    proved on check-and-publish, which runs in every cell (CI included); nightly-ops
     needs the proof sshd, which CI cannot run."""
     hooks = ctx.srv.home / ".cairn" / "hello-cairn" / "receipts.jsonl"
     from importlib.metadata import PackageNotFoundError, version  # noqa: PLC0415
@@ -345,7 +345,7 @@ def _nightly_prepare(srv: Server) -> None:
 
 
 ROWS: tuple[Row, ...] = (
-    Row("profile-and-publish", gates=("review", "promote"), check=check_profile_and_publish),
+    Row("check-and-publish", gates=("review", "promote"), check=check_profile_and_publish),
     Row("ask-the-docs", gates=("review",), check=check_ask_the_docs),
     Row("tiny-finetune", gates=("promote", "review"), check=check_tiny_finetune,
         needs=train_available, marks=(pytest.mark.train,),

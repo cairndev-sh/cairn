@@ -25,7 +25,7 @@ def _workflow(name: str) -> dict:
 def test_the_check_reads_the_commands_the_readme_tells_a_reader_to_type():
     launch, decide = cq.plan(README)
     assert "cairn setup --port 8471" in launch
-    assert any(c.startswith("cairn run hello-cairn/profile-and-publish ") and "--environment sandbox" in c
+    assert any(c.startswith("cairn run hello-cairn/check-and-publish ") and "--environment sandbox" in c
                for c in launch)
     assert decide == ["cairn decide <pipeline_id> approve --step review",
                       "cairn decide <pipeline_id> approve --step promote",

@@ -38,11 +38,11 @@ def _row(report: str, key: str) -> str:
 
 def test_a_feature_proved_in_one_cell_and_failed_in_another_is_failed(tmp_path):
     junit = _junit(tmp_path, [
-        ("test_pipeline[sqlite-inprocess-inprocess-profile-and-publish]", "passed", ""),
-        ("test_pipeline[postgres-inprocess-inprocess-profile-and-publish]", "failed", "boom: the audit row is missing"),
+        ("test_pipeline[sqlite-inprocess-inprocess-check-and-publish]", "passed", ""),
+        ("test_pipeline[postgres-inprocess-inprocess-check-and-publish]", "failed", "boom: the audit row is missing"),
     ])
     rec = _receipts(tmp_path, [{"feature": "pipeline.data", "cell": "sqlite-inprocess-inprocess", "evidence": "ok",
-                                "test": "test_pipeline[sqlite-inprocess-inprocess-profile-and-publish]"}])
+                                "test": "test_pipeline[sqlite-inprocess-inprocess-check-and-publish]"}])
     row = _row(build_report(junit, rec), "pipeline.data")
     assert "FAILED" in row and "postgres-inprocess-inprocess" in row and "audit row is missing" in row
     assert "PROVED" not in row.replace("NOT PROVED", "")
@@ -72,7 +72,7 @@ def test_a_cell_scoped_feature_ignores_cells_that_cannot_prove_it(tmp_path):
 
 
 def test_an_unproved_feature_names_why(tmp_path):
-    junit = _junit(tmp_path, [("test_pipeline[sqlite-inprocess-inprocess-profile-and-publish]", "passed", "")])
+    junit = _junit(tmp_path, [("test_pipeline[sqlite-inprocess-inprocess-check-and-publish]", "passed", "")])
     rec = _receipts(tmp_path, [{"feature": "event.emit", "cell": "sqlite-inprocess-inprocess",
                                 "evidence": "#2605: no emits", "proved": False}])
     report = build_report(junit, rec)
@@ -84,7 +84,7 @@ def test_a_receipt_from_a_case_that_failed_later_proves_nothing(tmp_path):
     """A cell can record `gate.person` and then fail a later assertion: that receipt must not
     prove the row, nor appear among its cells (PR #2656 review)."""
     junit = _junit(tmp_path, [
-        ("test_pipeline[sqlite-inprocess-inprocess-profile-and-publish]", "passed", ""),
+        ("test_pipeline[sqlite-inprocess-inprocess-check-and-publish]", "passed", ""),
         ("test_pipeline[sqlite-inprocess-inprocess-ask-the-docs]", "failed", "later assertion"),
     ])
     rec = _receipts(tmp_path, [{"feature": "gate.person", "cell": "sqlite-inprocess-inprocess",
@@ -98,6 +98,6 @@ def test_receipts_without_a_junit_prove_nothing(tmp_path):
     """The run died before pytest wrote junit (or it is from an earlier run): no row reads
     PROVED from receipts alone (PR #2656 review)."""
     rec = _receipts(tmp_path, [{"feature": "pipeline.data", "cell": "sqlite-inprocess-inprocess", "evidence": "ok",
-                                "test": "test_pipeline[sqlite-inprocess-inprocess-profile-and-publish]"}])
+                                "test": "test_pipeline[sqlite-inprocess-inprocess-check-and-publish]"}])
     row = _row(build_report(tmp_path / "missing.xml", rec), "pipeline.data")
     assert "NOT PROVED" in row

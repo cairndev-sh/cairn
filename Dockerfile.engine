@@ -309,7 +309,7 @@ print('[verify]', len(eps), 'operators, all from cairndev; no folded distributio
 RUN /app/.venv/bin/python -c "\
 from cairn.core.pack.contracts import resolve_contracts;\
 names = sorted(d.name for d in resolve_contracts());\
-want = {'cairn-contracts-dataflow', 'cairn-contracts-audit', 'cairn-contracts-artifact', 'cairn-contracts-storage', 'cairn-contracts-redact', 'cairn-contracts-secrets', 'cairn-contracts-data', 'cairn-contracts-train'};\
+want = {'cairn-contracts-dataflow', 'cairn-contracts-artifact', 'cairn-contracts-train'};\
 assert want <= set(names), f'contract distributions resolved: {names}';\
 print('[verify] contract distributions resolved:', names)"
 # #2102 — the two binaries SkyPilot shells out to. A red build here beats a

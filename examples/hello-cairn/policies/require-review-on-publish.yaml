@@ -1,6 +1,6 @@
 # policies/require-review-on-publish.yaml — a pack policy (hello-cairn WP6).
 #
-# In the `hello-prod` environment, every `storage/put` waits for a person before it
+# In the `hello-prod` environment, every `artifact/promote` waits for a person before it
 # writes. The approval plane consults the environment's policies on every operator
 # call (ADR-0034: operator, profile, policy and binding; strictness only), so the
 # write pauses as `awaiting_approval` even where the pipeline author put no gate.
@@ -8,24 +8,22 @@
 #
 # Scoped twice on purpose, because a pack policy is a proposal every environment
 # adopts unless its profile lists the ones it takes (`pack_policies = [...]`):
-#   * `action_types: [storage/put]` — the operator this governs, and only that one;
+#   * `action_types: [artifact/promote]` — the operator this governs, and only that one;
 #   * `environments: [hello-prod]` — an environment NAME. A policy scoped to the
 #     `production` TIER would also govern `sandbox` and every other named
 #     environment (an unknown name resolves to the production tier, fail-safe), so
 #     installing the example would gate every storage write in the deployment.
 #
-# Try it: launch profile-and-publish with `-e hello-prod` and `stage` stops for an
-# approval before it writes.
 name: hello-require-review-on-publish
-description: In the hello-prod environment, a storage write runs only after a person approves it.
+description: In the hello-prod environment, a tag moves only after a person approves it.
 
 applies_to:
   action_types:
-    - storage/put
+    - artifact/promote
   environments:
     - hello-prod
 
 rules:
   - effect: require_hitl
-    reason: "a write in hello-prod needs a person's approval (hello-cairn policy)"
+    reason: "a tag move in hello-prod needs a person's approval (hello-cairn policy)"
     approval_role: data-owners

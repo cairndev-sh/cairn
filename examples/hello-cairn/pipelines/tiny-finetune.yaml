@@ -1,7 +1,6 @@
 # pipelines/tiny-finetune.yaml — the ml pipeline (hello-cairn WP6, ADR-0127 D1/D4).
 #
-#   profile → data gate → train (ml flow) → loss gate
-#     → promote ⏸ → review ⏸ → card
+#   train (ml flow) → loss gate → promote ⏸ → review ⏸
 #
 # A real LoRA fine-tune of a small causal LM (on CPU, or a CUDA GPU when available), then the governance a model
 # needs before anyone uses it: the loss on rows the trainer held out (the last
@@ -20,7 +19,7 @@
 #     split, so on this data it would mostly re-score rows the adapter trained on.
 #   * `promote` points the `hello-adapter@candidate` tag at the adapter;
 #     artifact/promote declares `requires_approval`, so it waits for a person.
-#   * `review` is the person gate before the model card is written.
+#   * `review` is the person gate that closes the run.
 #
 # The training stack is the `[train]` extra of cairn-operator-train-local (torch,
 # transformers, peft, datasets). `device` and `precision` (both `auto`) train on a CUDA
@@ -47,13 +46,6 @@ inputs:
   precision: {type: str, default: "auto", description: "auto, fp32, fp16 or bf16. auto is fp16 or bf16 on CUDA (by GPU), fp32 elsewhere."}
   output_dir: {type: str, default: "", description: "Where to keep the adapter on the engine's box: a new directory for each run, because a later run writes over it. Empty keeps it in the engine's temp workdir, which the system can delete, so the promoted tag and the model card then name a path that may disappear."}
   target_loss: {type: float, default: 12.0, description: "The loss gate passes when the loss on the held-out rows (rows the adapter did not train on) is at or below this."}
-  expectation:
-    type: dict
-    description: "What the training rows must contain (data/profile roles)."
-    default:
-      kind: rows
-      roles:
-        - {name: text, required: true, aliases: [body, content]}
 
 governance:
   # A CPU fine-tune bills nothing, and every leg records cost_usd 0.0. The ceiling is
@@ -63,23 +55,10 @@ governance:
   approvers: ml-owners
 
 steps:
-  # ── look at the training data (read-only) ─────────────────────────────────
-  - id: profile
-    label: Profile the training rows
-    task: data/profile
-    with:
-      source: $input.dataset
-      expectation: $input.expectation
-
-  - gate: data-ok
-    depends_on: [profile]
-    predicate: steps.profile.verdict == 'pass' && steps.profile.record_count >= `8`
-
   # ── train (ml flow on the builtin ml engine) ──────────────────────────────
   - id: train
     label: Fine-tune with LoRA
     flow: lora
-    depends_on: [data-ok]
     timeout: 30m
     # A flow leg's stats are namespaced by stage (`train.lora.adapter_path`); the leg
     # declares its product so `$steps.train.adapter_path` is the adapter directory
@@ -123,17 +102,6 @@ steps:
       - train.train_lora_eval_loss   # the held-out loss the gate read
       - promote.tag
       - promote.uri
-
-  # ── the model card ────────────────────────────────────────────────────────
-  - id: card
-    label: Write the model card
-    task: storage/put
-    depends_on: [review]
-    with:
-      store: hello-models
-      key: tiny-finetune-card
-      content: $steps.promote.uri
-      content_type: text/plain
 
 outputs:
   adapter: train.adapter_path
