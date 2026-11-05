@@ -130,8 +130,8 @@ by side](https://www.promptfoo.dev/docs/intro/), [probes for failure modes with
 adversarial plugins](https://www.promptfoo.dev/docs/red-team/), and [can fail a CI
 build below a quality threshold](https://www.promptfoo.dev/docs/integrations/ci-cd/). For testing
 prompts, use promptfoo. The built-in operators don't cover it: `train/eval-loss`
-reads a held-out loss, and other evaluation operators are in
-[cairn-extensions](https://github.com/cairndev-sh/cairn-extensions) and cairn-platform.
+reads a held-out loss, and other evaluation operators are in separate wheels and
+cairn-platform.
 
 The simple way to use both is to keep them apart: promptfoo in CI on your prompts,
 cairn on the pipelines that ship models. To put promptfoo inside a pipeline, write
