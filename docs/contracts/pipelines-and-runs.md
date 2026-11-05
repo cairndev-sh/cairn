@@ -97,6 +97,19 @@ step with a key takes the run the fire created (`_claim_unrecorded_leg_runs`) or
 `default_pipeline_store()`, `pipeline_store.py:396-412`); runs and events in the run store
 (`build_storage()`); the record is the truth, the bus is the live signal.
 
+### Public Python names over a run (#297)
+Helpers that read a run's own record, for a surface such as a `cairn.routers` or `cairn.seeds`
+provider (`docs/compatibility.md` §What is public). Each earlier private spelling stays as an
+alias for the same function.
+
+| Name | What it is |
+|---|---|
+| `cairn.core.eval.scoring.run_template_ref(run)` | the workflow a run executed: `Run.template_ref`, with the legacy inference chain for rows written before it was recorded |
+| `cairn.core.run_progress.trace_from_events(events)` | the per-step trace derived from a run's `node` events (the `steps` of `GET /runs/{id}`'s `progress`) |
+| `cairn.core.run_progress.duration_ms(start, end)` | milliseconds between two ISO timestamps, or `None` |
+| `cairn.core.eval.actuation.proposal_markdown(suggestion)` | a suggestion rendered as reviewable Markdown (the issue or PR body the actuators write) |
+| `cairn.core.demo_seed.demo_inputs_for(ref)` | a workflow's first declared demo inputs, or `{}` |
+
 ## Contract resolution — CURRENT (#2240 C, ADR-0111 acceptance §4)
 `PipelinePlan.contract_resolution` (`bundle_pipeline.py:ContractResolution`, frozen) is the
 static contract closure the pipeline was admitted under: `format: cairn.resolution/1`, the

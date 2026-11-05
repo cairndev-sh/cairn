@@ -89,12 +89,12 @@ class SeedResult:
         return len(self.completed_runs) + len(self.paused_runs)
 
 
-def _demo_inputs_for(ref: str) -> dict[str, Any]:
+def demo_inputs_for(ref: str) -> dict[str, Any]:
     """The first declared demo's (resolved) inputs for a workflow, or ``{}``.
 
     Reuses the UIContract (§394) so a seeded run's inputs match exactly what
     the console's "Try with sample data" button would prefill — one source of
-    truth, no drift. Used by :mod:`cairn_platform.showcase_seed`."""
+    truth, no drift. Public (#297): a ``cairn.seeds`` provider seeds with it."""
     try:
         from cairn.core.ui_contract import build_ui_contract  # lazy: keep ask off the core import path
         contract = build_ui_contract(ref)
@@ -103,6 +103,9 @@ def _demo_inputs_for(ref: str) -> dict[str, Any]:
     except Exception:  # noqa: BLE001 — best-effort; a run with empty inputs still populates the views
         pass
     return {}
+
+
+_demo_inputs_for = demo_inputs_for  # the earlier private name; same function
 
 
 async def seed_demo_workspace(
