@@ -12,6 +12,10 @@ The router and loader contracts they exercised are still worth pinning, so the
 fixtures moved here. They are now what they always claimed to be — canonical
 *example* vendor adapters — and no first-party pack ships an ingress that
 bypasses its own pipeline.
+
+``_no_real_artifact_bucket`` (autouse, #64) pins artifact and other object-store
+settings to a local store for every test under ``tests/core``. Request
+``allow_artifact_bucket`` to opt out.
 """
 from __future__ import annotations
 
@@ -129,3 +133,75 @@ def vendor_trigger_specs(vendor_triggers_dir: Path) -> dict:
     from cairn.core.engine.triggers_spec import load_trigger_specs
 
     return {s.source: s for s in load_trigger_specs(vendor_triggers_dir)}
+
+
+# Object-store knobs that turn a unit test into a network upload. Both spellings:
+# ``getenv`` falls through to ``OBS_*`` when ``CAIRN_*`` is empty (ADR-0122).
+# Set, not deleted — ``load_dotenv(override=False)`` and a pydantic-settings env
+# file refill a missing key from ``.env``, and will not replace one that is set.
+_LOCAL_STORE_KEYS = ("CAIRN_ARTIFACT_STORE",)
+_BLANK_CLOUD_KEYS = (
+    "OBS_ARTIFACT_STORE",
+    "CAIRN_ARTIFACT_S3_BUCKET",
+    "CAIRN_ARTIFACT_S3_PREFIX",
+    "CAIRN_ARTIFACT_S3_REGION",
+    "CAIRN_ARTIFACT_S3_ENDPOINT",
+    "OBS_ARTIFACT_S3_BUCKET",
+    "OBS_ARTIFACT_S3_PREFIX",
+    "OBS_ARTIFACT_S3_REGION",
+    "OBS_ARTIFACT_S3_ENDPOINT",
+    "CAIRN_CHECKPOINT_BUCKET",
+    "CAIRN_CHECKPOINT_PREFIX",
+    "OBS_CHECKPOINT_BUCKET",
+    "OBS_CHECKPOINT_PREFIX",
+    "CAIRN_PLAYGROUND_S3_BUCKET",
+    "OBS_PLAYGROUND_S3_BUCKET",
+    "PLAYGROUND_ARTIFACT_S3_BUCKET",
+    "CAIRN_METAFLOW_DATASTORE",
+    "CAIRN_METAFLOW_DATASTORE_ROOT",
+    "OBS_METAFLOW_DATASTORE",
+    "OBS_METAFLOW_DATASTORE_ROOT",
+)
+
+
+@pytest.fixture
+def allow_artifact_bucket():
+    """Opt out of :func:`_no_real_artifact_bucket`.
+
+    The test then sees ambient artifact and cloud settings (shell and ``.env``)
+    and may build a real S3 client. Stub the upload itself — this fixture is
+    not permission to reach a network bucket.
+    """
+    return None
+
+
+@pytest.fixture(autouse=True)
+def _no_real_artifact_bucket(monkeypatch, request):
+    """``tests/core`` never touches a network bucket (#64).
+
+    Stage capture uploads whenever ``CAIRN_ARTIFACT_S3_BUCKET`` is set, and
+    artifact registration relays local bytes when ``CAIRN_ARTIFACT_STORE`` is
+    ``s3`` or ``s3://…``. A developer shell, or a ``.env`` copied into the
+    process by ``load_dotenv`` / pydantic-settings, must not turn
+    ``run_dataflow`` into that upload. The store is pinned to ``local`` and
+    every bucket key is set-but-empty so a later ``load_dotenv(override=False)``
+    cannot refill it. The S3 client seam raises if something still builds one.
+    """
+    if "allow_artifact_bucket" in request.fixturenames:
+        yield
+        return
+    for key in _LOCAL_STORE_KEYS:
+        monkeypatch.setenv(key, "local")
+    for key in _BLANK_CLOUD_KEYS:
+        monkeypatch.setenv(key, "")
+
+    def _refused(*_args, **_kwargs):
+        raise AssertionError(
+            f"{request.node.nodeid} built an S3 client. tests/core pins artifact "
+            "settings to a local store; request allow_artifact_bucket and stub "
+            "the upload to opt out (#64)")
+
+    import cairn.core.dataflow.capture as capture
+
+    monkeypatch.setattr(capture, "s3_client", _refused)
+    yield

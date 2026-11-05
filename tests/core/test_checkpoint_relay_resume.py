@@ -63,6 +63,36 @@ def _spec() -> DataflowSpec:
     ], budget=Budget())
 
 
+def test_a_dotenv_bucket_does_not_upload(tmp_path):
+    """#64 — a bucket in the shell or ``.env`` must not leave this process.
+
+    ``tests/core`` pins the artifact store to ``local`` and blanks the S3 keys
+    (set, not deleted) so ``load_dotenv(override=False)`` cannot refill them,
+    and the S3 client seam fails the test if capture or the relay builds one.
+    The stats keys below are what a real upload adds to the stage result.
+    """
+    from dotenv import load_dotenv
+
+    from cairn.core.dataflow import capture
+    from cairn.core.settings import getenv
+
+    (tmp_path / ".env").write_text(
+        "CAIRN_ARTIFACT_S3_BUCKET=contributor-bucket\n"
+        "CAIRN_ARTIFACT_S3_REGION=us-east-1\n"
+        "CAIRN_ARTIFACT_STORE=s3\n"
+        "OBS_ARTIFACT_S3_BUCKET=contributor-bucket\n",
+        encoding="utf-8",
+    )
+    load_dotenv(tmp_path / ".env", override=False)
+    assert getenv("CAIRN_ARTIFACT_S3_BUCKET", "").strip() == ""
+    assert getenv("CAIRN_ARTIFACT_STORE", "").strip() == "local"
+    assert capture.enabled() is False
+    res = run_dataflow(_spec(), tmp_path / "wd")
+    leaked = [k for k in res.stats
+              if k.split(".")[-1] in {"artifacts_index", "artifacts_bytes", "artifacts_count"}]
+    assert leaked == []
+
+
 def test_spec_key_mirrors_the_runner(tmp_path):
     """ONE identity: the selection key must equal what the runner stamps
     into every checkpoint manifest."""
