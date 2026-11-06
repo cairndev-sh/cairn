@@ -41,6 +41,7 @@ import socket
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from collections import deque
 from typing import Any, Awaitable, Callable, Mapping, Optional, Sequence
 
 from cairn.core.operator.job_store import DEFAULT_LEASE_S
@@ -109,8 +110,7 @@ Runner = Callable[[ClaimedJob], Awaitable[JobStatus]]
 #: spawn(argv) → (exit code, output tail). The Docker seam.
 SpawnFn = Callable[[Sequence[str]], Awaitable[tuple[int, str]]]
 
-
-# ─── running the job: docker, or in-process ──────────────────────────────
+# ─── running the job: docker, or in-process ────────────────────────────────────────────────
 
 
 def docker_run_argv(job: ClaimedJob, *, image: Optional[str] = None, gpus: bool = True,
@@ -129,10 +129,35 @@ def docker_run_argv(job: ClaimedJob, *, image: Optional[str] = None, gpus: bool 
 
 
 async def _spawn(argv: Sequence[str]) -> tuple[int, str]:
+    """Run a subprocess, streaming its combined output and keeping only a
+    bounded diagnostic tail in memory.
+
+    Large jobs no longer retain the full output. The returned string is at
+    most ``_ERROR_TAIL`` characters and ends with the most recent output.
+    """
     proc = await asyncio.create_subprocess_exec(
         *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
-    out, _ = await proc.communicate()
-    return int(proc.returncode or 0), (out or b"").decode("utf-8", "replace")
+    # Keep a rolling buffer of recent chunks. Trim so the total stays
+    # comfortably above _ERROR_TAIL bytes to allow for UTF-8 boundaries.
+    chunks: deque[bytes] = deque()
+    total = 0
+    limit = _ERROR_TAIL * 2  # bytes; decode + final trim handles the rest
+    assert proc.stdout is not None
+    while True:
+        chunk = await proc.stdout.read(8192)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+        while total > limit and chunks:
+            old = chunks.popleft()
+            total -= len(old)
+    await proc.wait()
+    tail_bytes = b"".join(chunks)
+    decoded = tail_bytes.decode("utf-8", "replace")
+    if len(decoded) > _ERROR_TAIL:
+        decoded = decoded[-_ERROR_TAIL:]
+    return int(proc.returncode or 0), decoded
 
 
 def docker_runner(*, gpus: bool = True, spawn: Optional[SpawnFn] = None,
@@ -153,7 +178,7 @@ def docker_runner(*, gpus: bool = True, spawn: Optional[SpawnFn] = None,
         if code == 0:
             return JobStatus(state="succeeded", output={"image": target}, log_tail=tail)
         return JobStatus(state="failed", error=f"{target} exited {code}: {tail.strip()}",
-                         retriable=code in (125, 137), log_tail=tail)
+                         retryable=code in (125, 137), log_tail=tail)
 
     return run
 
@@ -191,7 +216,7 @@ def local_exec_runner(registry: Any = None) -> Runner:
     return run
 
 
-# ─── the worker ──────────────────────────────────────────────────────────
+# ─── the worker ───────────────────────────────────────────────────────────────────────────────────
 
 
 class PullWorker:
@@ -225,7 +250,6 @@ class PullWorker:
     async def _http(self) -> Any:
         if self._client is None:
             import httpx  # noqa: PLC0415 — optional at import time; the worker is the only caller
-
             self._client = httpx.AsyncClient(base_url=self.engine_url, timeout=60.0)
         return self._client
 
