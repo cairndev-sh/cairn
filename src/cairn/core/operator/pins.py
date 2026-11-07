@@ -21,9 +21,12 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 import httpx
 
@@ -41,11 +44,26 @@ _MANIFEST_ACCEPT = ", ".join(
 )
 
 
+_SHA256_FRAGMENT = re.compile(r"#sha256=([0-9a-fA-F]{64})$")
+
+
 def dataset_hash(ref: str) -> str:
-    """``sha256:`` content hash for a local file; ``sha256:`` of the ref
-    string for anything else (same semantics as ``lineage/record``)."""
+    """``sha256:`` content hash of a dataset ref.
+
+    - ``<ref>#sha256=<hex>`` (the launch door's pinned form) → that hash,
+      taken as stated without reading the data;
+    - a local path or ``file://`` URI → sha256 of the file's BYTES;
+    - a genuinely remote ref (``hf://``, ``s3://``…) → sha256 of the ref
+      STRING (same semantics as ``lineage/record``).
+    """
+    m = _SHA256_FRAGMENT.search(ref)
+    if m:
+        return f"sha256:{m.group(1).lower()}"
     try:
-        p = Path(ref)
+        local = ref
+        if ref.startswith("file:"):
+            local = url2pathname(urlparse(ref).path)
+        p = Path(local)
         if p.is_file():
             h = hashlib.sha256()
             with p.open("rb") as f:
